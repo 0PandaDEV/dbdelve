@@ -167,6 +167,11 @@ pub(crate) struct Session {
     /// list is wanted while a list is being built, which is a frame.
     pub(crate) history: Vec<String>,
     pub(crate) save_name: Entity<InputState>,
+    /// Where to jump to, never where we are: the label beside it is the only
+    /// claim about the current page, so this holds a typed page until Enter
+    /// spends it and empties it again. One field for the window, because only
+    /// the relation in front can be paged.
+    pub(crate) page_input: Entity<InputState>,
     pub(crate) naming: bool,
     pub(crate) pending_delete: Option<String>,
     /// The saved query `cmd+w` is asking about.
@@ -277,6 +282,20 @@ impl Session {
         )
         .detach();
 
+        let page_input = cx.new(|cx| InputState::new(window, cx).placeholder("Go to"));
+        // With the window, because arriving empties the field, and clearing an
+        // input is editing it.
+        cx.subscribe_in(
+            &page_input,
+            window,
+            |workspace, _, event: &InputEvent, window, cx| {
+                if matches!(event, InputEvent::PressEnter { .. }) {
+                    workspace.go_to_page(window, cx);
+                }
+            },
+        )
+        .detach();
+
         let saved_queries = store::saved_queries(&id);
         // A tab naming a query whose file has gone comes back as the unsaved
         // buffer it now is, rather than as a tab pointing at nothing.
@@ -328,6 +347,7 @@ impl Session {
             saved_queries,
             history: store::history(&id),
             save_name,
+            page_input,
             naming: false,
             pending_delete: None,
             pending_close: None,

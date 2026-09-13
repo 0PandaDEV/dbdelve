@@ -211,6 +211,41 @@ impl Workspace {
         );
     }
 
+    /// Jump to a typed page, for a relation deep enough that reaching page 20
+    /// by arrow is twenty clicks.
+    ///
+    /// Offsets stay multiples of the limit, the same invariant `turn_page`
+    /// keeps, so the label beside the field still reads the page back exactly.
+    /// Nothing here knows how long the relation is, so a page past its end is
+    /// allowed to come back empty rather than be guessed at -- the previous
+    /// arrow is the way back from one.
+    pub(crate) fn go_to_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.clear_notice();
+        let Some((id, input)) = self.profile().and_then(|profile| match profile.session.active {
+            Tab::Object(id) => Some((id, profile.session.page_input.clone())),
+            _ => None,
+        }) else {
+            return;
+        };
+        let typed = input.read(cx).value().trim().to_string();
+        if typed.is_empty() {
+            return;
+        }
+        let Some(page) = typed_page(&typed) else {
+            self.note(format!("{typed} is not a page number."), cx);
+            return;
+        };
+        input.update(cx, |state, cx| state.set_value("", window, cx));
+        self.requery_relation(
+            id,
+            move |_, _, limit, offset| {
+                *offset = page * *limit;
+                true
+            },
+            cx,
+        );
+    }
+
     /// A column header was clicked: put that column into the statement's
     /// `ORDER BY` and run it again.
     ///
@@ -742,5 +777,30 @@ impl Workspace {
             profile.session.apply_review = None;
         }
         cx.notify();
+    }
+}
+
+/// What a typed page names, counted from zero the way an offset is. Pages are
+/// counted from one where they are read and written, so a zero is as much a
+/// non-page as a word is.
+fn typed_page(typed: &str) -> Option<usize> {
+    match typed.parse::<usize>() {
+        Ok(page) if page > 0 => Some(page - 1),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::typed_page;
+
+    #[test]
+    fn a_typed_page_is_the_offset_it_names() {
+        assert_eq!(typed_page("1"), Some(0));
+        assert_eq!(typed_page("20"), Some(19));
+        assert_eq!(typed_page("0"), None);
+        assert_eq!(typed_page("-1"), None);
+        assert_eq!(typed_page("twenty"), None);
+        assert_eq!(typed_page(""), None);
     }
 }

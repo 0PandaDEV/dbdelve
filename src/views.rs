@@ -1428,6 +1428,10 @@ fn render_tab_strip(
                         // resets to the first -- so the page number is exact.
                         .child(format!("Page {}", offset / limit + 1)),
                 )
+                // Beside the label rather than replacing it: the label is
+                // state, this is a destination, and a field that were both
+                // would have to be kept in step with every arrow and chip.
+                .child(Input::new(&session.page_input).small().w(px(64.)))
                 .children(full_page.then(|| {
                     icon_button(
                         "next-page",
