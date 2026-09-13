@@ -513,7 +513,10 @@ impl Workspace {
             Some(QueryState::Failed(error)) => Some(error.message.clone()),
             _ => None,
         };
-        let running = matches!(profile.session.active_query(), Some(QueryState::Running));
+        let running = matches!(
+            profile.session.active_query(),
+            Some(QueryState::Running { .. })
+        );
         let lines: Vec<String> = review.sql.lines().map(str::to_string).collect();
         let cancel_workspace = cx.entity().downgrade();
         let run_workspace = cancel_workspace.clone();

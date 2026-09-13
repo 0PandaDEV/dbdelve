@@ -911,7 +911,13 @@ pub(crate) enum Refresh {
 
 pub(crate) enum QueryState {
     Idle,
-    Running,
+    /// `cancelling` says a cancel has been *sent* for this slot, and nothing
+    /// more: the statement is still in flight, so this is still `Running` to
+    /// everything that asks. It leaves the flag behind when it leaves the
+    /// variant, which is why nothing resets it.
+    Running {
+        cancelling: bool,
+    },
     Complete {
         rows: usize,
         bytes: usize,
@@ -1161,7 +1167,18 @@ mod tests {
     #[test]
     fn result_pane_expands_as_soon_as_a_query_starts() {
         assert!(!result_pane_is_expanded(&QueryState::Idle));
-        assert!(result_pane_is_expanded(&QueryState::Running));
+        assert!(result_pane_is_expanded(&QueryState::Running {
+            cancelling: false
+        }));
+    }
+
+    /// A cancel that has been sent has not stopped anything yet, so every
+    /// question asked of a running query has to keep its old answer.
+    #[test]
+    fn a_query_being_cancelled_is_still_running() {
+        let cancelling = QueryState::Running { cancelling: true };
+        assert!(result_pane_is_expanded(&cancelling));
+        assert!(matches!(cancelling, QueryState::Running { .. }));
     }
 
     #[test]

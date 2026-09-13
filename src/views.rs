@@ -624,15 +624,21 @@ fn render_results(
             .into_any_element()
     };
 
-    let cancel = |cx: &mut Context<Workspace>| {
+    let cancelling = matches!(query, QueryState::Running { cancelling: true });
+    let cancel = move |cx: &mut Context<Workspace>| {
         // A word rather than an icon: a square or a cross beside a status line
         // reads as "close this", and the quiet tone is what keeps it from
         // competing with rows that are still coming.
-        button("cancel-query", "Cancel", Tone::Quiet, Control::Compact, t).on_click(cx.listener(
-            |workspace, _, window, cx| {
+        //
+        // Once the request is out the label is the only acknowledgement the
+        // click gets, and the statement is still running, so the button goes
+        // inert rather than away.
+        let label = if cancelling { "Cancelling…" } else { "Cancel" };
+        button("cancel-query", label, Tone::Quiet, Control::Compact, t)
+            .disabled(cancelling)
+            .on_click(cx.listener(|workspace, _, window, cx| {
                 workspace.cancel_query(&CancelQuery, window, cx);
-            },
-        ))
+            }))
     };
     // A refresh keeps the rows it is replacing (`execute_and_then`'s
     // `keep_rows`), and a centred spinner over rows the user is still reading
@@ -654,7 +660,7 @@ fn render_results(
         // tab that is about to run rather than one waiting to be asked. It has
         // nothing to cancel yet, though, which is the whole difference here.
         QueryState::Idle if !has_rows => Some(centered(spinner())),
-        QueryState::Running if !has_rows => Some(centered(
+        QueryState::Running { .. } if !has_rows => Some(centered(
             div()
                 .flex()
                 .flex_col()
@@ -704,7 +710,7 @@ fn render_results(
             .flex()
             .flex_col()
             .min_h_0()
-            .children(matches!(query, QueryState::Running).then(|| {
+            .children(matches!(query, QueryState::Running { .. }).then(|| {
                 div()
                     .h(px(layout::TAB_HEIGHT))
                     .flex_shrink_0()

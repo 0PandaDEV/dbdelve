@@ -40,6 +40,14 @@ const CONNECT_TIMEOUT_SECONDS: u64 = 10;
 /// The port the server listens on when the profile does not say.
 const DEFAULT_PORT: u16 = 3306;
 
+/// Bounds the cancel connection's own handshake and its `KILL QUERY` round
+/// trip, neither of which `CONNECT_TIMEOUT_SECONDS` reaches -- that one only
+/// covers the TCP connect. A cancel that cannot be delivered in a few seconds
+/// is not going to be, and without this bound a wedged or maxed-out server
+/// hangs the background thread sending it forever, with nothing to show for
+/// it.
+const CANCEL_TIMEOUT_SECONDS: u64 = 5;
+
 /// The collation id MySQL uses for "no character set at all". A value in such a
 /// column is bytes, not text — but so is every number in the text protocol, so
 /// this is never the whole test on its own.
@@ -269,33 +277,23 @@ pub fn config_from_url(url: &str) -> Result<ServerConfig, String> {
     })
 }
 
-/// One socket to the server: the connection a profile keeps, and the throwaway
-/// one a cancel opens.
-fn connect(server: &ServerConfig) -> Result<Conn, DbError> {
-    let options = || {
-        let builder = OptsBuilder::new()
-            .ip_or_hostname(Some(server.host.clone()))
-            .tcp_port(server.port.unwrap_or(DEFAULT_PORT))
-            .db_name(Some(server.database.clone()))
-            .user(Some(server.user.clone()))
-            // Offered only when there is one. An empty password is not the
-            // same as no password, and IAM auth relies on the latter.
-            .pass((!server.password.is_empty()).then(|| server.password.clone()))
-            .tcp_connect_timeout(Some(Duration::from_secs(CONNECT_TIMEOUT_SECONDS)));
-        match server.statement_timeout {
-            0 => builder,
-            // Run once at connect as a session default, never spliced into the
-            // user's own submission — see `ServerConfig::statement_timeout` for
-            // what this does and does not bound. `max_execution_time` counts
-            // milliseconds, and a server too old to know the variable fails the
-            // connect here rather than the statement later.
-            seconds => builder.init(vec![format!(
-                "SET SESSION max_execution_time = {}",
-                u64::from(seconds) * 1_000
-            )]),
-        }
-    };
+/// The fields every connection needs, query or cancel alike.
+fn base_options(server: &ServerConfig) -> OptsBuilder {
+    OptsBuilder::new()
+        .ip_or_hostname(Some(server.host.clone()))
+        .tcp_port(server.port.unwrap_or(DEFAULT_PORT))
+        .db_name(Some(server.database.clone()))
+        .user(Some(server.user.clone()))
+        // Offered only when there is one. An empty password is not the
+        // same as no password, and IAM auth relies on the latter.
+        .pass((!server.password.is_empty()).then(|| server.password.clone()))
+        .tcp_connect_timeout(Some(Duration::from_secs(CONNECT_TIMEOUT_SECONDS)))
+}
 
+/// Open a connection built from `options`, falling back to plaintext exactly
+/// where `sslmode=prefer` allows it. Shared by the query connection and the
+/// cancel connection so the fallback behaviour cannot drift between them.
+fn open(server: &ServerConfig, options: impl Fn() -> OptsBuilder) -> Result<Conn, DbError> {
     match Conn::new(options().ssl_opts(ssl_options(server))) {
         Ok(connection) => Ok(connection),
         // `prefer` is the one rung where a weaker connection is reachable, and
@@ -307,6 +305,31 @@ fn connect(server: &ServerConfig) -> Result<Conn, DbError> {
         }
         Err(error) => Err(connect_error(&error, server)),
     }
+}
+
+/// The connection a profile keeps.
+fn connect(server: &ServerConfig) -> Result<Conn, DbError> {
+    open(server, || match server.statement_timeout {
+        0 => base_options(server),
+        // Run once at connect as a session default, never spliced into the
+        // user's own submission — see `ServerConfig::statement_timeout` for
+        // what this does and does not bound. `max_execution_time` counts
+        // milliseconds, and a server too old to know the variable fails the
+        // connect here rather than the statement later.
+        seconds => base_options(server).init(vec![format!(
+            "SET SESSION max_execution_time = {}",
+            u64::from(seconds) * 1_000
+        )]),
+    })
+}
+
+/// The throwaway connection a cancel opens: the same fields, but bounded end
+/// to end and with no init statement it has no use for.
+fn cancel_options(server: &ServerConfig) -> OptsBuilder {
+    let timeout = Some(Duration::from_secs(CANCEL_TIMEOUT_SECONDS));
+    base_options(server)
+        .read_timeout(timeout)
+        .write_timeout(timeout)
 }
 
 /// A live connection. Cloneable so a background task can take one without
@@ -348,11 +371,14 @@ impl Connection {
     /// session, so the user's transaction and temporary tables survive it.
     ///
     /// Opening a whole connection to send one statement is what a driver with
-    /// no cancel API costs; there is no cheaper channel to the server. Socket
-    /// timeouts are not the alternative they look like — they abandon the
-    /// client while the server keeps grinding.
+    /// no cancel API costs; there is no cheaper channel to the server. This one
+    /// carries its own read/write timeout, unlike the query connection: bounding
+    /// it abandons nothing, since the statement it failed to kill runs on
+    /// regardless of whether this socket is still open. Leaving it unbounded
+    /// only trades that for a background thread hung forever with no report.
     pub fn cancel(&self) -> Result<(), DbError> {
-        let mut connection = connect(&self.server)?;
+        let server = &self.server;
+        let mut connection = open(server, || cancel_options(server))?;
         connection
             .query_drop(format!("KILL QUERY {}", self.connection_id))
             .map_err(|error| DbError {
@@ -1050,6 +1076,23 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn the_cancel_connection_is_bounded_and_carries_no_init_statement() {
+        // The bug this guards: a cancel that reuses the query connection's
+        // options has no read/write timeout and runs an init statement it has
+        // no use for, so it can hang a thread forever instead of failing fast.
+        let server = ServerConfig {
+            statement_timeout: 5,
+            ..ServerConfig::default()
+        };
+        let opts: ::mysql::Opts = cancel_options(&server).into();
+
+        let timeout = Some(Duration::from_secs(CANCEL_TIMEOUT_SECONDS));
+        assert_eq!(opts.get_read_timeout(), timeout.as_ref());
+        assert_eq!(opts.get_write_timeout(), timeout.as_ref());
+        assert!(opts.get_init().is_empty());
     }
 
     #[test]

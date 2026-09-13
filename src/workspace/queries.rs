@@ -65,6 +65,12 @@ impl Workspace {
     /// for having been stopped — is what the surface shows, through the same
     /// completion every other run goes through.
     ///
+    /// What the slot does record is that the request went out, which is true
+    /// and is not a result. Without it the button stayed live and said
+    /// "Cancel", so a click looked like it had done nothing and the next one
+    /// sent the whole cancel again — on MySQL a fresh connection, auth and
+    /// `KILL QUERY` per click.
+    ///
     /// On the background executor because the Postgres path opens a socket and
     /// spins a current-thread tokio runtime inside `cancel_query` to do it.
     /// That is legal for exactly the reason connecting is (AGENTS.md, "Do not
@@ -75,6 +81,20 @@ impl Workspace {
         let Some(connection) = self.profile().and_then(Profile::connection) else {
             return;
         };
+        if let Some(profile) = self.profile_mut() {
+            let tab = profile.session.active;
+            // ponytail: per-slot UI truth about a request having been sent, not
+            // a claim that anything stopped. It bounds the repeat clicks to one
+            // cancel per run; a cancel that the server ignores has no answer
+            // here, and would need the driver to report one.
+            if let Some((QueryState::Running { cancelling }, _)) = profile.session.slot(tab) {
+                if *cancelling {
+                    return;
+                }
+                *cancelling = true;
+                cx.notify();
+            }
+        }
         let cancel_task = cx
             .background_executor()
             .spawn(async move { connection.cancel() });
@@ -565,7 +585,7 @@ impl Workspace {
         // Guarded here rather than in each caller: every path that runs SQL
         // routes through this one, and a caller that forgets would let two
         // results race into the grid with the older one landing last.
-        if matches!(state, QueryState::Running) {
+        if matches!(state, QueryState::Running { .. }) {
             return;
         }
 
@@ -577,7 +597,7 @@ impl Workspace {
             cx.notify();
             return;
         };
-        *state = QueryState::Running;
+        *state = QueryState::Running { cancelling: false };
 
         // Rows from the previous statement must not sit under the one now on
         // screen -- a reader cannot tell stale rows from fresh ones.
@@ -707,7 +727,7 @@ impl Workspace {
         let Some((state, _)) = profile.session.slot(tab) else {
             return;
         };
-        if matches!(state, QueryState::Running) {
+        if matches!(state, QueryState::Running { .. }) {
             *state = QueryState::Idle;
             cx.notify();
         }
