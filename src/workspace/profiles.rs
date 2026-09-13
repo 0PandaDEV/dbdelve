@@ -31,6 +31,7 @@ impl Workspace {
             theme: Some(theme(cx).name.to_string()),
             editor_font_size: Some(self.settings.editor_font_size),
             preview_rows: Some(self.settings.preview_rows),
+            custom_keybindings: Some(self.settings.custom_keybindings.clone()),
         };
         if let Err(message) = store::save_profiles(&profiles, active.as_deref(), &fonts, &settings)
         {

@@ -13,6 +13,8 @@ mod profiles;
 mod queries;
 mod tabs;
 
+use std::collections::HashMap;
+
 use crate::connection_form::{Origin, password_to_persist};
 use crate::session::{write_buffer, write_grids};
 use crate::sql::{appended_statement, remember_statement, update_batch};
@@ -25,6 +27,9 @@ use crate::*;
 pub(crate) struct Settings {
     pub(crate) editor_font_size: f32,
     pub(crate) preview_rows: usize,
+    /// Keybinding overrides, keyed by action id. Applied to the keymap on
+    /// the next launch -- see `src/keybindings.rs`.
+    pub(crate) custom_keybindings: HashMap<String, String>,
 }
 
 impl Default for Settings {
@@ -32,8 +37,19 @@ impl Default for Settings {
         Self {
             editor_font_size: EDITOR_FONT_SIZE_DEFAULT,
             preview_rows: PREVIEW_ROW_LIMIT,
+            custom_keybindings: HashMap::new(),
         }
     }
+}
+
+/// Which section of the Settings modal is in front. Transient like
+/// `sidebar_hidden` -- which tab was open is not a preference worth
+/// remembering across launches.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum SettingsTab {
+    #[default]
+    General,
+    Keybindings,
 }
 
 pub(crate) struct Workspace {
@@ -45,6 +61,13 @@ pub(crate) struct Workspace {
     /// Whether the settings modal is up. On the workspace rather than a
     /// session, because nothing it changes belongs to one connection.
     pub(crate) settings_open: bool,
+    /// Which tab the settings modal is showing. Not persisted -- see
+    /// [`SettingsTab`].
+    pub(crate) settings_tab: SettingsTab,
+    /// The action id currently listening for its next keystroke, if the
+    /// Keybindings tab has one mid-capture. Not persisted: a capture in
+    /// progress does not survive the modal closing, let alone a relaunch.
+    pub(crate) rebinding: Option<&'static str>,
     /// Whether the explorer column is folded away. Not persisted: a hidden
     /// sidebar is a thing done for the next minute, not a preference.
     pub(crate) sidebar_hidden: bool,
@@ -74,6 +97,8 @@ impl Workspace {
             form: None,
             switcher_open: false,
             settings_open: false,
+            settings_tab: SettingsTab::default(),
+            rebinding: None,
             sidebar_hidden: false,
             pending_removal: None,
             store_unreadable: false,
@@ -111,6 +136,8 @@ impl Workspace {
                     .preview_rows
                     .filter(|rows| explorer::ROW_LIMITS.contains(rows))
                     .unwrap_or(PREVIEW_ROW_LIMIT);
+                workspace.settings.custom_keybindings =
+                    stored_settings.custom_keybindings.clone().unwrap_or_default();
                 for stored in profiles {
                     workspace.restore_profile(stored, window, cx);
                 }
@@ -175,6 +202,36 @@ impl Workspace {
         if let Some(message) = load_failure {
             workspace.note(message, cx);
         }
+
+        // The settings modal owns the keyboard while it is up, and an
+        // interceptor is the only place that can give it to it: GPUI matches a
+        // keystroke against the keymap and dispatches the action *before* any
+        // element listener runs, so a capture handler on the modal would see
+        // `cmd+enter` only after it had already run the query underneath. It is
+        // also the only place early enough to read back a chord the app already
+        // has bound, which is most of what a rebind is for.
+        let this = cx.weak_entity();
+        cx.intercept_keystrokes(move |event, _, cx| {
+            let keystroke = event.keystroke.clone();
+            this.update(cx, |workspace, cx| {
+                if !workspace.settings_open || keybindings::is_modifier(&keystroke.key) {
+                    return;
+                }
+                match (workspace.rebinding, keystroke.key.as_str()) {
+                    // The one stroke the modal passes on: with nothing
+                    // mid-capture, escape is what closes it.
+                    (None, "escape") => return,
+                    (Some(_), "escape") => workspace.cancel_rebind(cx),
+                    // `unparse`, not `to_string` -- the latter is the glyphs a
+                    // menu draws, and nothing reads those back.
+                    (Some(id), _) => workspace.apply_rebind(id, keystroke.unparse(), cx),
+                    (None, _) => {}
+                }
+                cx.stop_propagation();
+            })
+            .ok();
+        })
+        .detach();
 
         // Buffers are otherwise written only when one is swapped for another,
         // so without this everything typed since the last swap dies with the
@@ -601,8 +658,8 @@ impl Render for Workspace {
                     // them and strand the readout in the middle of the bar.
                     //
                     // Each control appears only when it does something. A pair
-                    // of buttons that do nothing is a pair to read past, and
-                    // Apply has no keybinding on purpose -- see `apply_edits`.
+                    // of buttons that do nothing is a pair to read past --
+                    // see `apply_edits` for its `cmd+s` binding.
                     .child(
                         div()
                             .ml_auto()
@@ -667,10 +724,7 @@ impl Render for Workspace {
             .children(self.render_apply_review(cx))
             .children(self.render_close_confirmation(cx))
             .children(self.render_discard_confirmation(cx))
-            .children(
-                self.settings_open
-                    .then(|| views::render_settings(&self.settings, cx)),
-            )
+            .children(self.settings_open.then(|| views::render_settings(self, cx)))
             .children(self.render_palette(cx))
     }
 }

@@ -265,6 +265,11 @@ const HAIRLINE_LIGHT: f32 = 0.12;
 const FROST_ALPHA: f32 = 0.72;
 const PANEL_ALPHA: f32 = 0.14;
 const DATA_ALPHA: f32 = 0.14;
+/// A modal card's own transmission. Nowhere near the other three, and for the
+/// opposite reason: what is behind a modal is the app's own text, not the
+/// desktop. Enough to keep the card from reading as a slab cut out of the
+/// window, never enough to read a grid row through.
+const OVERLAY_ALPHA: f32 = 0.97;
 
 fn neutral(lightness: f32) -> Srgb {
     Oklch::new(lightness, NEUTRAL_CHROMA, NEUTRAL_HUE).to_srgb()
@@ -469,6 +474,14 @@ impl Theme {
     /// editor is not the same window.
     pub fn data_glass(self) -> Rgba {
         self.bg.alpha(self.tint(DATA_ALPHA))
+    }
+
+    /// A modal's card. The densest plane in the window by a long way — it
+    /// covers the work rather than sitting beside it, and what shows through
+    /// is that work, not the desktop — but not opaque: on a glass theme a
+    /// fully solid card is the one surface that stops being the same window.
+    pub fn overlay_glass(self) -> Rgba {
+        self.overlay.alpha(self.tint(OVERLAY_ALPHA))
     }
 
     /// An opaque theme has no desktop behind it to let through, so every tint
@@ -706,7 +719,11 @@ impl Theme {
             bg: neutral(0.275),
             panel: neutral(0.215),
             surface: neutral(0.130),
-            overlay: neutral(0.300),
+            // Below every plane it covers rather than above them: a modal is
+            // the one surface that is not part of the window's stack, and the
+            // way it says so here is by going darker than the chrome it
+            // floats over instead of lighter.
+            overlay: neutral(0.165),
 
             control: neutral(0.340),
 

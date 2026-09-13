@@ -629,9 +629,9 @@ impl Workspace {
     /// Turn the grid's pending edits into SQL and put it where the user can read
     /// it: the query tab's buffer, or a relation tab's modal.
     ///
-    /// Deliberately not on a keybinding. `cmd+enter` means "run the statement
-    /// under the cursor" and nothing else, and a mutation one fat finger away
-    /// from that is a write nobody asked for.
+    /// Binds to `cmd+s` -- a deliberate departure from `cmd+enter` ("run the
+    /// statement under the cursor"), which stays unrelated so neither
+    /// keystroke can be mistaken for the other.
     pub(crate) fn apply_edits(
         &mut self,
         _: &ApplyEdits,

@@ -325,7 +325,7 @@ impl Workspace {
                         // list grows downwards from a fixed line.
                         .mt(px(layout::TITLEBAR_HEIGHT * 2.))
                         .w(px(layout::PALETTE_WIDTH))
-                        .bg(t.overlay)
+                        .bg(t.overlay_glass())
                         .border_1()
                         .border_color(t.border_strong)
                         .rounded(px(layout::RADIUS_PANEL))
@@ -742,7 +742,7 @@ impl Workspace {
                 .left(px(layout::SPACE_SM))
                 .right(px(layout::SPACE_SM))
                 .p(px(layout::SPACE_XS))
-                .bg(t.overlay)
+                .bg(t.overlay_glass())
                 .border_1()
                 .border_color(t.border_strong)
                 .rounded(px(layout::RADIUS_PANEL))

@@ -4,6 +4,7 @@
 //! impl live in as many modules as it has concerns; they moved out whole.
 
 use super::*;
+use crate::keybindings;
 
 impl Workspace {
     pub(crate) fn fuzzy_open(
@@ -110,8 +111,61 @@ impl Workspace {
             return false;
         }
         self.settings_open = false;
+        self.rebinding = None;
         cx.notify();
         true
+    }
+
+    pub(crate) fn set_settings_tab(&mut self, tab: SettingsTab, cx: &mut Context<Self>) {
+        self.settings_tab = tab;
+        self.rebinding = None;
+        cx.notify();
+    }
+
+    /// Put a row into "press a key" mode. Only one at a time -- starting a
+    /// new capture always replaces whatever was mid-capture before it. The
+    /// keystroke itself arrives at the interceptor `Workspace::new` installs,
+    /// not here.
+    pub(crate) fn start_rebind(&mut self, id: &'static str, cx: &mut Context<Self>) {
+        self.rebinding = Some(id);
+        cx.notify();
+    }
+
+    pub(crate) fn cancel_rebind(&mut self, cx: &mut Context<Self>) {
+        if self.rebinding.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    /// The keystroke captured for `id`. Refuses on conflict rather than
+    /// stealing the chord from whoever already has it, per the Keybindings
+    /// tab's whole premise: `keybindings::conflict` is the single source of
+    /// truth both here and in the row that shows what's currently bound.
+    pub(crate) fn apply_rebind(&mut self, id: &'static str, chord: String, cx: &mut Context<Self>) {
+        self.rebinding = None;
+        let context = keybindings::REGISTRY
+            .iter()
+            .find(|spec| spec.id == id)
+            .and_then(|spec| spec.context);
+        if let Some(owner) = keybindings::conflict(&chord, context, id, &self.settings.custom_keybindings)
+        {
+            self.note(format!("\"{chord}\" is already bound to {owner}."), cx);
+            return;
+        }
+        self.settings.custom_keybindings.insert(id.to_string(), chord.clone());
+        self.remember_profiles(cx);
+        self.note(format!("Bound to {chord}. Restart Slate for it to take effect."), cx);
+        cx.notify();
+    }
+
+    /// Drop `id`'s override and fall back to its shipped default(s).
+    pub(crate) fn reset_keybinding(&mut self, id: &'static str, cx: &mut Context<Self>) {
+        if self.settings.custom_keybindings.remove(id).is_none() {
+            return;
+        }
+        self.remember_profiles(cx);
+        self.note("Reset to default. Restart Slate for it to take effect.".into(), cx);
+        cx.notify();
     }
 
     /// Every row runs through the method its button or keystroke already calls.

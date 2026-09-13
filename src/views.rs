@@ -34,6 +34,7 @@ use crate::{
     explorer::ROW_LIMITS,
     filter::{Conjunction, FilterRow, Operator},
     icons::icon,
+    keybindings,
     palette::Mode as PaletteMode,
     result_grid,
     result_grid::ResultGrid,
@@ -44,9 +45,9 @@ use crate::{
     theme::{FontSlot, Theme, fonts, layout, theme},
     ui::{
         Control, Tone, button, button_label, compact_count, dialog, group_thousands, icon_button,
-        key_hint, object_icon, row_icon, section_label,
+        key_hint, keycap_for, object_icon, row_icon, section_label,
     },
-    workspace::{EDITOR_FONT_SIZE_MAX, EDITOR_FONT_SIZE_MIN, editor_zoom_percent},
+    workspace::{EDITOR_FONT_SIZE_MAX, EDITOR_FONT_SIZE_MIN, SettingsTab, editor_zoom_percent},
 };
 
 pub fn render_main_content(
@@ -1567,7 +1568,61 @@ fn render_tab_strip(
 /// keystroke or the palette row calls, and each of those has already written
 /// the change to `profiles.toml` by the time this repaints — so Cancel would
 /// have to undo a file, and Done only takes the card away.
-pub fn render_settings(settings: &Settings, cx: &mut Context<Workspace>) -> AnyElement {
+pub fn render_settings(workspace: &Workspace, cx: &mut Context<Workspace>) -> AnyElement {
+    let t = *theme(cx);
+    let tab = workspace.settings_tab;
+    let tabs = div()
+        .flex()
+        .gap(px(layout::SPACE_XS))
+        .child(settings_chip(
+            "settings-tab-general",
+            "General",
+            tab == SettingsTab::General,
+            cx,
+            |workspace, _, cx| workspace.set_settings_tab(SettingsTab::General, cx),
+        ))
+        .child(settings_chip(
+            "settings-tab-keybindings",
+            "Keybindings",
+            tab == SettingsTab::Keybindings,
+            cx,
+            |workspace, _, cx| workspace.set_settings_tab(SettingsTab::Keybindings, cx),
+        ));
+
+    let body = match tab {
+        SettingsTab::General => render_general_settings(&workspace.settings, cx),
+        SettingsTab::Keybindings => render_keybindings_settings(workspace, cx),
+    };
+
+    div()
+        .id("settings-modal")
+        .absolute()
+        .inset_0()
+        // The modal takes the mouse as well as the keyboard: without this the
+        // card floats over a workspace whose buttons still click through.
+        .occlude()
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            dialog(t)
+                .child(section_label(t, "Settings"))
+                .child(tabs)
+                .child(body)
+                .child(div().flex().justify_end().child(
+                    button("settings-done", "Done", Tone::Primary, Control::Standard, t).on_click(
+                        cx.listener(|workspace, _: &ClickEvent, _, cx| {
+                            workspace.close_settings(cx);
+                        }),
+                    ),
+                )),
+        )
+        .into_any_element()
+}
+
+/// The Theme / Editor zoom / Fonts / Default limit sections -- unchanged from
+/// before the Keybindings tab existed, just no longer the whole modal.
+fn render_general_settings(settings: &Settings, cx: &mut Context<Workspace>) -> AnyElement {
     let t = *theme(cx);
     let families = fonts(cx).clone();
     let font_size = settings.editor_font_size;
@@ -1672,42 +1727,151 @@ pub fn render_settings(settings: &Settings, cx: &mut Context<Workspace>) -> AnyE
         .collect();
 
     div()
-        .absolute()
-        .inset_0()
+        .flex()
+        .flex_col()
+        .gap(px(layout::SPACE_MD))
+        .child(settings_section(
+            t,
+            "Theme",
+            div().flex().gap(px(layout::SPACE_XS)).children(themes),
+        ))
+        .child(settings_section(t, "Editor zoom", zoom))
+        .child(settings_section(
+            t,
+            "Fonts",
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(layout::SPACE_XS))
+                .children(font_rows),
+        ))
+        .child(settings_section(
+            t,
+            "Default limit",
+            div().flex().gap(px(layout::SPACE_XS)).children(limits),
+        ))
+        .into_any_element()
+}
+
+/// Every rebindable action, in registry order, with its current chord and
+/// the controls to change it.
+fn render_keybindings_settings(workspace: &Workspace, cx: &mut Context<Workspace>) -> AnyElement {
+    let overrides = &workspace.settings.custom_keybindings;
+    let rebinding = workspace.rebinding;
+    let rows: Vec<AnyElement> = keybindings::REGISTRY
+        .iter()
+        .map(|spec| render_keybinding_row(spec, overrides, rebinding, cx))
+        .collect();
+
+    div()
+        .id("keybindings-list")
+        .flex()
+        .flex_col()
+        .gap(px(layout::SPACE_XS))
+        .max_h(px(360.))
+        .overflow_y_scroll()
+        .children(rows)
+        .into_any_element()
+}
+
+/// What is bound to `spec` today, as the keycaps the rest of the app draws a
+/// shortcut with -- a chord is a chord whether the hint sits in a panel or in
+/// this list. Multi-stroke chords get a cap each, in order.
+fn chord_caps(
+    spec: &keybindings::KeybindingSpec,
+    overrides: &std::collections::HashMap<String, String>,
+    t: Theme,
+) -> AnyElement {
+    let chords = keybindings::chords_for(spec, overrides);
+    if chords.is_empty() {
+        return div()
+            .text_size(px(layout::TEXT_XS))
+            .text_color(t.text_faint)
+            .child("Unbound")
+            .into_any_element();
+    }
+    div()
         .flex()
         .items_center()
-        .justify_center()
-        .child(
-            dialog(t)
-                .child(section_label(t, "Settings"))
-                .child(settings_section(
-                    t,
-                    "Theme",
-                    div().flex().gap(px(layout::SPACE_XS)).children(themes),
-                ))
-                .child(settings_section(t, "Editor zoom", zoom))
-                .child(settings_section(
-                    t,
-                    "Fonts",
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(layout::SPACE_XS))
-                        .children(font_rows),
-                ))
-                .child(settings_section(
-                    t,
-                    "Default limit",
-                    div().flex().gap(px(layout::SPACE_XS)).children(limits),
-                ))
-                .child(div().flex().justify_end().child(
-                    button("settings-done", "Done", Tone::Primary, Control::Standard, t).on_click(
-                        cx.listener(|workspace, _: &ClickEvent, _, cx| {
-                            workspace.close_settings(cx);
-                        }),
-                    ),
-                )),
+        .gap(px(layout::SPACE_XS))
+        .children(
+            chords
+                .iter()
+                .flat_map(|chord| chord.split_whitespace())
+                .filter_map(keycap_for),
         )
+        .into_any_element()
+}
+
+/// One action: its label, its current chord, and either an Edit/Reset pair
+/// or -- while it is the row [`Workspace::rebinding`] names -- the prompt for
+/// the next keystroke. The keystroke itself is taken by the interceptor
+/// `Workspace::new` installs; nothing here listens for keys.
+fn render_keybinding_row(
+    spec: &'static keybindings::KeybindingSpec,
+    overrides: &std::collections::HashMap<String, String>,
+    rebinding: Option<&'static str>,
+    cx: &mut Context<Workspace>,
+) -> AnyElement {
+    let t = *theme(cx);
+    let id = spec.id;
+    let has_override = overrides.contains_key(id);
+
+    let trailing = if rebinding == Some(id) {
+        div()
+            .flex()
+            .items_center()
+            .gap(px(layout::SPACE_SM))
+            .text_size(px(layout::TEXT_XS))
+            .text_color(t.text_faint)
+            .child("Press any key… (Esc to cancel)")
+            .into_any_element()
+    } else {
+        div()
+            .flex()
+            .items_center()
+            .gap(px(layout::SPACE_SM))
+            .child(chord_caps(spec, overrides, t))
+            .child(
+                button(
+                    SharedString::from(format!("keybind-edit-{id}")),
+                    "Edit",
+                    Tone::Quiet,
+                    Control::Compact,
+                    t,
+                )
+                .on_click(cx.listener(move |workspace, _: &ClickEvent, _, cx| {
+                    workspace.start_rebind(id, cx);
+                })),
+            )
+            .children(has_override.then(|| {
+                button(
+                    SharedString::from(format!("keybind-reset-{id}")),
+                    "Reset",
+                    Tone::Quiet,
+                    Control::Compact,
+                    t,
+                )
+                .on_click(cx.listener(move |workspace, _: &ClickEvent, _, cx| {
+                    workspace.reset_keybinding(id, cx);
+                }))
+            }))
+            .into_any_element()
+    };
+
+    div()
+        .id(SharedString::from(format!("keybind-row-{id}")))
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap(px(layout::SPACE_MD))
+        .child(
+            div()
+                .text_size(px(layout::TEXT_SM))
+                .text_color(t.text)
+                .child(spec.label),
+        )
+        .child(trailing)
         .into_any_element()
 }
 

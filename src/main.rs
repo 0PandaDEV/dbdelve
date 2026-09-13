@@ -14,17 +14,18 @@ mod views;
 mod workspace;
 
 mod icons;
+mod keybindings;
 mod theme;
 mod tls;
 mod ui;
 
-use std::{borrow::Cow, collections::HashMap, path::PathBuf, rc::Rc, sync::Arc};
+use std::{borrow::Cow, path::PathBuf, rc::Rc, sync::Arc};
 
 use gpui::{
     AnyElement, App, AppContext, Application, ClickEvent, ClipboardItem, Context, Entity,
-    EntityInputHandler, FocusHandle, Focusable, FontWeight, InteractiveElement, IntoElement,
-    KeyBinding, Menu, MenuItem, ParentElement, Render, StatefulInteractiveElement, Styled,
-    TitlebarOptions, Window, WindowOptions, deferred, div, point, prelude::FluentBuilder, px,
+    EntityInputHandler, FocusHandle, Focusable, FontWeight, InteractiveElement, IntoElement, Menu,
+    MenuItem, ParentElement, Render, StatefulInteractiveElement, Styled, TitlebarOptions, Window,
+    WindowOptions, deferred, div, point, prelude::FluentBuilder, px,
 };
 use gpui_component::{
     Disableable, IndexPath, Root,
@@ -196,56 +197,19 @@ fn main() {
         let theme = Theme::default();
         theme.apply_to_components(cx);
         cx.set_global(theme);
-        cx.bind_keys([
-            KeyBinding::new("cmd-enter", RunQuery, None),
-            KeyBinding::new("cmd-s", SaveQuery, None),
-            KeyBinding::new("cmd-t", NewQuery, None),
-            KeyBinding::new("cmd-shift-n", NewConnection, None),
-            KeyBinding::new("cmd-w", CloseTab, None),
-            KeyBinding::new("ctrl-tab", NextTab, None),
-            KeyBinding::new("ctrl-shift-tab", PreviousTab, None),
-            KeyBinding::new("ctrl-`", NextProfile, None),
-            KeyBinding::new("ctrl-shift-`", PreviousProfile, None),
-            KeyBinding::new("escape", ShowEditor, None),
-            KeyBinding::new("cmd-shift-t", CycleTheme, None),
-            KeyBinding::new("cmd-,", OpenSettings, None),
-            KeyBinding::new("cmd-p", FuzzyOpen, None),
-            KeyBinding::new("cmd-shift-p", CommandPalette, None),
-            // A binding wins the keystroke at the deepest context it matches,
-            // and the palette's search field is deeper than the list that binds
-            // the arrows for itself -- a single-line input swallows them and
-            // passes nothing on. `Palette > Input` matches at the field itself,
-            // which is the only depth that takes them back, and it matches
-            // nowhere else, so every other input keeps its arrows.
-            KeyBinding::new("up", PalettePrevious, Some("Palette > Input")),
-            KeyBinding::new("down", PaletteNext, Some("Palette > Input")),
-            KeyBinding::new("cmd-+", ZoomEditorIn, None),
-            KeyBinding::new("cmd-=", ZoomEditorIn, None),
-            KeyBinding::new("cmd--", ZoomEditorOut, None),
-            KeyBinding::new("cmd-0", ResetEditorZoom, None),
-            // Scoped to the grid: `enter` everywhere else already belongs to
-            // whatever is focused. Applying the edits has no binding at all --
-            // `cmd+enter` runs the statement under the cursor and nothing else.
-            KeyBinding::new("enter", EditCell, Some("Table")),
-            // Scoped the same way, and for the same reason it has to be scoped
-            // at all: an open input is deeper in the dispatch path, so its own
-            // `cmd+c` wins there and the grid's copy never steals a text
-            // selection.
-            KeyBinding::new("cmd-c", CopyCell, Some("Table")),
-            // Scoped to the grid like the two above, but unlike them it has to
-            // keep working with a cell's input open, which is where the NULL
-            // affordance beside it dispatches the same action from. A `ctrl`
-            // stroke because a text field owns every `cmd` letter it is given.
-            KeyBinding::new("ctrl-shift-n", SetNull, Some("Table")),
-            // The input binds `tab` to indent and never asks its own
-            // completion popup first, so the popup would never see the
-            // keystroke. Scoped to the buffer, and registered after
-            // `gpui_component::init`, which is what makes it win there and
-            // nowhere else.
-            KeyBinding::new("tab", AcceptCompletion, Some("Editor > Input")),
-            KeyBinding::new("cmd-shift-s", ToggleSidebar, None),
-            KeyBinding::new("cmd-q", Quit, None),
-        ]);
+        // The keymap is built from `keybindings::REGISTRY` plus whatever
+        // overrides are on disk, so a chord shown here is a default rather
+        // than gospel -- see `src/keybindings.rs` for the full list and
+        // `Settings > Keybindings` for where a user changes one. Read once,
+        // here, rather than reused from `Workspace::new`'s own read of the
+        // same file: nothing here can wait for a window and an entity to
+        // exist first.
+        let overrides = store::load_profiles()
+            .ok()
+            .and_then(|(_, _, _, settings)| settings)
+            .and_then(|settings| settings.custom_keybindings)
+            .unwrap_or_default();
+        cx.bind_keys(keybindings::build_bindings(&overrides));
 
         // An application menu is what actually makes `cmd+q` quit: the menu bar
         // owns the keystroke at the AppKit level, so it fires whatever has

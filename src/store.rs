@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{self, Write};
 use std::os::unix::fs::PermissionsExt;
@@ -239,6 +239,11 @@ pub struct StoredSettings {
     pub editor_font_size: Option<f32>,
     #[serde(default)]
     pub preview_rows: Option<usize>,
+    /// Keybinding overrides, keyed by the action id in
+    /// `keybindings::REGISTRY`. Only the ones a user actually changed --
+    /// everything else stays on whatever the running build defaults to.
+    #[serde(default)]
+    pub custom_keybindings: Option<HashMap<String, String>>,
 }
 
 /// A decoded profile file: the profiles, the id of the one that was in front,
@@ -1130,6 +1135,10 @@ open_objects = []
                 theme: Some("Dark".into()),
                 editor_font_size: Some(18.0),
                 preview_rows: Some(500),
+                custom_keybindings: Some(HashMap::from([(
+                    "apply_edits".to_string(),
+                    "cmd-shift-s".to_string(),
+                )])),
             }),
             profiles: vec![
                 StoredProfile {

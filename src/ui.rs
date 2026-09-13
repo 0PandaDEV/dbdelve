@@ -127,7 +127,7 @@ pub(crate) fn dialog(t: Theme) -> gpui::Div {
         .flex()
         .flex_col()
         .gap(px(layout::SPACE_MD))
-        .bg(t.overlay)
+        .bg(t.overlay_glass())
         .border_1()
         .border_color(t.border_strong)
         .rounded(px(layout::RADIUS_PANEL))
@@ -272,6 +272,13 @@ pub(crate) fn section_label(t: Theme, label: &str) -> impl IntoElement {
 /// GPUI's binding syntax so the hint and the binding cannot drift apart.
 pub(crate) fn keycap(stroke: &'static str) -> Kbd {
     Kbd::new(Keystroke::parse(stroke).expect("keycap strokes are compile-time constants"))
+}
+
+/// The same keycap for a stroke only known at runtime -- a rebound chord read
+/// back off disk, which [`keycap`]'s constant cannot cover. One GPUI cannot
+/// parse draws nothing rather than a cap with garbage on it.
+pub(crate) fn keycap_for(stroke: &str) -> Option<Kbd> {
+    Keystroke::parse(stroke).ok().map(Kbd::new)
 }
 
 /// A shortcut hint and what it does, in the app face rather than the editor's

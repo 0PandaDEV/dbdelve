@@ -144,9 +144,9 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // A named query is written on every swap and on quit, so `cmd+s` on one
-        // is a confirmation rather than a decision. Only a buffer with nowhere
-        // to go has to ask for a name.
+        // A named query is written on every swap and on quit, so calling this
+        // on one is a confirmation rather than a decision. Only a buffer with
+        // nowhere to go has to ask for a name.
         if self.named() {
             match self.persist_buffer(cx) {
                 Ok(()) => self.note("Saved query.".into(), cx),
@@ -217,7 +217,8 @@ impl Workspace {
             return;
         };
         // The name the buffer is leaving behind, if it had one. Present only
-        // for a rename, since `cmd+s` on a named query never asks.
+        // for a rename, since saving a query that already has a name never
+        // asks.
         let previous = match tab {
             Tab::Query(id) => profile
                 .session
