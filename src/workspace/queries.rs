@@ -695,6 +695,16 @@ impl Workspace {
             return;
         };
         *state = QueryState::Running { cancelling: false };
+        // Whatever plan is on screen describes the last statement, not this one.
+        // Turning the pane back to the rows is what puts the spinner and Cancel
+        // in front of a run that is in flight -- and what stops a plain Run from
+        // landing rows behind a plan the user is still looking at. An `EXPLAIN`
+        // turns it back when its own answer arrives.
+        if let Tab::Query(query) = tab
+            && let Some(tab) = profile.session.query_tab_mut(query)
+        {
+            tab.showing_plan = false;
+        }
 
         // Rows from the previous statement must not sit under the one now on
         // screen -- a reader cannot tell stale rows from fresh ones. An
@@ -722,8 +732,7 @@ impl Workspace {
         // to say which statement produced it. An `EXPLAIN` produces no rows to
         // describe and belongs in nobody's history -- it is Slate's prefix over
         // the user's statement, and the statement itself is already there.
-        let statement =
-            (matches!(tab, Tab::Query(_)) && explain.is_none()).then(|| sql.clone());
+        let statement = (matches!(tab, Tab::Query(_)) && explain.is_none()).then(|| sql.clone());
         // What the plan pane says it is a plan of: the user's statement, without
         // the prefix Slate put in front of it.
         let explained = explain.map(|mode| {

@@ -25,21 +25,21 @@ use gpui_component::{
 use crate::{
     Settings, Workspace,
     actions::{
-        AddFilter, CancelQuery, NewQuery, NewRow, NextPage, PreviousPage, RemoveFilter,
-        ResetEditorZoom, RunQuery, SaveQuery, SetFilterColumn, SetFilterOperator, SetFilterRaw,
-        SetRowLimit, ToggleFilterJoin, ToggleNextJoin, ZoomEditorIn, ZoomEditorOut,
+        AddFilter, CancelQuery, ExplainQuery, NewQuery, NewRow, NextPage, PreviousPage,
+        RemoveFilter, ResetEditorZoom, RunQuery, SaveQuery, SetFilterColumn, SetFilterOperator,
+        SetFilterRaw, SetRowLimit, ToggleFilterJoin, ToggleNextJoin, ZoomEditorIn, ZoomEditorOut,
     },
     db,
-    db::{Engine, RoutineKind},
+    db::{Engine, ExplainMode, RoutineKind},
     explorer::ROW_LIMITS,
     filter::{Conjunction, FilterRow, Operator},
     icons::icon,
     keybindings,
-    palette::Mode as PaletteMode,
+    palette::{Command, Mode as PaletteMode},
     result_grid,
     result_grid::ResultGrid,
     session::{
-        CloseTarget, ObjectBody, ObjectTab, Profile, QueryState, StructureState, Tab,
+        CloseTarget, Explained, ObjectBody, ObjectTab, Profile, QueryState, StructureState, Tab,
         result_pane_is_expanded,
     },
     theme::{FontSlot, Theme, fonts, layout, theme},
@@ -137,7 +137,13 @@ fn render_query_surface(
     let Some(tab) = profile.session.active_query_tab() else {
         return div().into_any_element();
     };
-    let bottom = render_results(&tab.query, &tab.results, true, cx);
+    // The plan stands in for the rows rather than beside them: the pane is one
+    // answer about the buffer above it, and two scrolling regions in a split
+    // that is already a split leaves neither enough room to read.
+    let bottom = match tab.showing_plan.then_some(tab.plan.as_ref()).flatten() {
+        Some(explained) => render_plan(explained, cx),
+        None => render_results(&tab.query, &tab.results, true, cx),
+    };
     render_editor_surface(
         // Keyed by the buffer rather than the profile: two query tabs are two
         // splits, and sharing one id would carry the first one's drag position
@@ -152,6 +158,257 @@ fn render_query_surface(
         bottom,
         cx,
     )
+}
+
+/// How much of a node's label the plan pane will draw before it clips. The
+/// label is the operator and its target, and a long one is a long list of
+/// output columns that would push the numbers off the right edge.
+const PLAN_LABEL_LIMIT: usize = 160;
+
+/// A query plan, as a tree of what the server said it would do.
+///
+/// Read in two directions at once: down the indentation to see the shape of the
+/// plan, and across the bars to see where the time went. So the bar is the one
+/// thing aligned in a column of its own -- a reader looking for the slow node
+/// scans one edge rather than comparing numbers inside sentences.
+///
+/// Rows rather than the grid, because a plan is a tree and a tree in a grid is
+/// a column of pre-indented strings: sortable-looking, movable, resizable, and
+/// wrong in every one of those. `sql::clause_anchor` refuses to sort an
+/// explained statement for the same reason.
+fn render_plan(explained: &Explained, cx: &mut Context<Workspace>) -> AnyElement {
+    let t = *theme(cx);
+    let code = fonts(cx).editor.clone();
+    let Explained { plan, mode, sql } = explained;
+    // What every bar is a share of. A plan with no timings draws none, and the
+    // guard against zero is what keeps a 0ms plan from dividing by it.
+    let total = plan.total_ms.filter(|total| *total > 0.0);
+    // The slowest node earns the one warm colour in the pane. Scanning for it
+    // is the reason most people open a plan at all.
+    let slowest = total.and_then(|_| {
+        plan.nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(index, node)| node.self_ms.map(|ms| (index, ms)))
+            .filter(|(_, ms)| *ms > 0.0)
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(index, _)| index)
+    });
+
+    let metric = |label: &'static str, value: String, tone: gpui::Hsla| {
+        div()
+            .flex()
+            .gap(px(layout::SPACE_XS))
+            .child(div().text_color(t.text_faint).child(label))
+            .child(div().text_color(tone).child(value))
+    };
+
+    let rows = plan.nodes.iter().enumerate().map(|(index, node)| {
+        let hottest = slowest == Some(index);
+        let share = match (node.self_ms, total) {
+            (Some(ms), Some(total)) => (ms / total).clamp(0.0, 1.0),
+            _ => 0.0,
+        };
+
+        div()
+            .flex()
+            .items_start()
+            .gap(px(layout::SPACE_MD))
+            .px(px(layout::SPACE_SM))
+            .py(px(layout::SPACE_XS))
+            .rounded(px(layout::RADIUS_CONTROL))
+            .when(hottest, |row| row.bg(t.element_hover))
+            // The bar column is fixed and leads the row, so every bar starts at
+            // the same x and the longest one is found by looking down an edge
+            // rather than by reading.
+            .child(
+                div()
+                    .w(px(72.))
+                    .min_w(px(72.))
+                    .flex_shrink_0()
+                    .pt(px(4.))
+                    .child(
+                        div()
+                            .w_full()
+                            .h(px(6.))
+                            .rounded(px(3.))
+                            .bg(t.element_active)
+                            .child(
+                                div()
+                                    .h_full()
+                                    .rounded(px(3.))
+                                    .w(gpui::relative(share as f32))
+                                    .bg(match hottest {
+                                        true => t.danger,
+                                        false => t.accent,
+                                    }),
+                            ),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    // The tree's shape, paid for in indentation rather than in
+                    // drawn rules: a rule per level is a lot of ink for a depth
+                    // that is usually three.
+                    .pl(px(node.depth as f32 * 14.))
+                    .child(
+                        div()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(match hottest {
+                                true => t.danger,
+                                false => t.text,
+                            })
+                            .child(clip_label(&node.label)),
+                    )
+                    .children(node.detail.iter().map(|line| {
+                        div()
+                            .text_size(px(layout::TEXT_XS))
+                            .text_color(t.text_muted)
+                            .child(clip_label(line))
+                    }))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_wrap()
+                            .gap(px(layout::SPACE_MD))
+                            .text_size(px(layout::TEXT_XS))
+                            // The estimate and the measurement are deliberately
+                            // side by side and differently coloured: the gap
+                            // between what the planner expected and what it got
+                            // is the thing a plan is usually read to find.
+                            .children(node.actual.map(|actual| {
+                                metric(
+                                    "actual",
+                                    format!(
+                                        "{:.3} ms · {} rows · {} loops",
+                                        actual.total_ms,
+                                        round_count(actual.rows),
+                                        round_count(actual.loops)
+                                    ),
+                                    t.success.into(),
+                                )
+                            }))
+                            .children(node.estimated.map(|estimated| {
+                                metric(
+                                    "est",
+                                    format!(
+                                        "cost {:.2} · {} rows",
+                                        estimated.total_cost,
+                                        group_thousands(estimated.rows)
+                                    ),
+                                    t.syntax_number.into(),
+                                )
+                            }))
+                            .children(node.self_ms.filter(|_| total.is_some()).map(|ms| {
+                                metric("self", format!("{ms:.3} ms"), t.text_muted.into())
+                            })),
+                    ),
+            )
+    });
+
+    div()
+        .id("plan")
+        .size_full()
+        .min_h_0()
+        .flex()
+        .flex_col()
+        .font_family(code)
+        .text_size(px(layout::TEXT_SM))
+        // The header says what was asked and of what, because a plan read an
+        // hour later is otherwise a page of numbers about nothing in
+        // particular -- and because `Analyze` means the statement was run.
+        .child(
+            div()
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .gap(px(layout::SPACE_SM))
+                .px(px(layout::SPACE_LG))
+                .h(px(layout::TAB_HEIGHT))
+                .border_b_1()
+                .border_color(t.border)
+                .child(
+                    icon(icon::PLAN)
+                        .size(px(layout::ICON_SIZE))
+                        .text_color(t.text_faint),
+                )
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(mode.label()),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(t.text_muted)
+                        .child(one_line(sql)),
+                )
+                .children(plan.summary.iter().map(|(label, value)| {
+                    div()
+                        .flex_shrink_0()
+                        .flex()
+                        .gap(px(layout::SPACE_XS))
+                        .text_size(px(layout::TEXT_XS))
+                        .child(div().text_color(t.text_faint).child(label.clone()))
+                        .child(div().text_color(t.text).child(value.clone()))
+                })),
+        )
+        .child(
+            div()
+                .id("plan-nodes")
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .p(px(layout::SPACE_SM))
+                .flex()
+                .flex_col()
+                .gap(px(2.))
+                // A server that answered with nothing a plan could be read out
+                // of still said something, and its own words are better than
+                // Slate's guess at what it meant.
+                .when(plan.nodes.is_empty(), |body| {
+                    body.child(
+                        div()
+                            .p(px(layout::SPACE_MD))
+                            .text_color(t.text_muted)
+                            .child(plan.text.clone()),
+                    )
+                })
+                .children(rows),
+        )
+        .into_any_element()
+}
+
+/// A plan line, bounded. The server will happily print every output column of a
+/// wide projection onto one line, and a row that wide pushes the numbers beside
+/// it off the pane.
+fn clip_label(label: &str) -> String {
+    match label.char_indices().nth(PLAN_LABEL_LIMIT) {
+        Some((at, _)) => format!("{}…", &label[..at]),
+        None => label.to_string(),
+    }
+}
+
+/// A statement on one line, for the header strip that says what was explained.
+fn one_line(sql: &str) -> String {
+    clip_label(&sql.split_whitespace().collect::<Vec<_>>().join(" "))
+}
+
+/// A count the server reported as a fraction, because it averaged it over the
+/// loops. The fraction is real and is worth keeping when it is there.
+fn round_count(value: f64) -> String {
+    match value.fract() == 0.0 {
+        true => group_thousands(value as u64),
+        false => format!("{value:.2}"),
+    }
 }
 
 /// An opened object. A relation's generated `SELECT` is an ordinary buffer
@@ -633,7 +890,11 @@ fn render_results(
         // Once the request is out the label is the only acknowledgement the
         // click gets, and the statement is still running, so the button goes
         // inert rather than away.
-        let label = if cancelling { "Cancelling…" } else { "Cancel" };
+        let label = if cancelling {
+            "Cancelling…"
+        } else {
+            "Cancel"
+        };
         button("cancel-query", label, Tone::Quiet, Control::Compact, t)
             .disabled(cancelling)
             .on_click(cx.listener(|workspace, _, window, cx| {
@@ -896,10 +1157,15 @@ fn render_row_inspector(
 
 /// One segment of the Data | Structure pair. A quiet chip rather than a
 /// filled button: it selects a view of the same object, it does not act.
+/// One chip of a two-way toggle over the results pane. It carries the command
+/// it runs rather than deciding from its label, because there are two of these
+/// toggles now -- an object tab's data and structure, and a query tab's rows
+/// and plan -- and a label is not what tells them apart.
 fn preview_tab(
     label: &'static str,
     path: &'static str,
     selected: bool,
+    command: Command,
     cx: &mut Context<Workspace>,
 ) -> impl IntoElement {
     let t = *theme(cx);
@@ -926,8 +1192,8 @@ fn preview_tab(
                 .text_color(if selected { t.text } else { t.text_faint }),
         )
         .child(label)
-        .on_click(cx.listener(move |workspace, _: &ClickEvent, _, cx| {
-            workspace.show_structure(label == "Structure", cx);
+        .on_click(cx.listener(move |workspace, _: &ClickEvent, window, cx| {
+            workspace.run_command(command.clone(), window, cx);
         }))
 }
 
@@ -1076,6 +1342,7 @@ fn render_tab_strip(
     let session = &profile.session;
     let on_query_tab = matches!(session.active, Tab::Query(_));
     let runnable = session.editor(session.active).is_some();
+    let engine = profile.config.engine();
 
     let chip = |active: bool| {
         div()
@@ -1354,16 +1621,49 @@ fn render_tab_strip(
                 .flex_shrink_0()
                 .flex()
                 .gap(px(layout::SPACE_XS))
-                .child(preview_tab("Data", icon::TABLE, !showing_structure, cx))
+                .child(preview_tab(
+                    "Data",
+                    icon::TABLE,
+                    !showing_structure,
+                    Command::ShowStructure(false),
+                    cx,
+                ))
                 .child(preview_tab(
                     "Structure",
                     icon::STRUCTURE,
                     *showing_structure,
+                    Command::ShowStructure(true),
                     cx,
                 )),
         ),
         ObjectBody::Routine(_) => None,
     });
+
+    // Drawn only once there is a plan to turn to. Before that the pair would be
+    // a control with one working half, which is the same as no control at all.
+    let plan_toggle = session
+        .active_query_tab()
+        .filter(|tab| tab.plan.is_some())
+        .map(|tab| {
+            div()
+                .flex_shrink_0()
+                .flex()
+                .gap(px(layout::SPACE_XS))
+                .child(preview_tab(
+                    "Data",
+                    icon::TABLE,
+                    !tab.showing_plan,
+                    Command::ShowPlan(false),
+                    cx,
+                ))
+                .child(preview_tab(
+                    "Plan",
+                    icon::PLAN,
+                    tab.showing_plan,
+                    Command::ShowPlan(true),
+                    cx,
+                ))
+        });
 
     // What the preview asked the server for, and the only control over it.
     // Beside the Data | Structure pair because it belongs to the same view:
@@ -1514,6 +1814,7 @@ fn render_tab_strip(
                 ),
         )
         .children(structure_toggle)
+        .children(plan_toggle)
         .children(row_limit)
         .children(pager)
         .children(new_row)
@@ -1552,6 +1853,39 @@ fn render_tab_strip(
                         workspace.save_query(&SaveQuery, window, cx);
                     });
                 })
+        }))
+        // Beside Run, because it asks about the same statement Run would run.
+        // A menu rather than a button: the two modes differ by whether the
+        // statement is executed, and a single button would have to pick one of
+        // those on the user's behalf.
+        .children((runnable && !session.naming).then(|| {
+            icon_button(
+                "explain-query",
+                icon::PLAN,
+                Tone::Quiet,
+                Control::Compact,
+                t,
+            )
+            .tooltip_with_action(
+                "Explain",
+                &ExplainQuery {
+                    mode: ExplainMode::Plan,
+                },
+                None,
+            )
+            .dropdown_menu(move |menu, _, _| {
+                ExplainMode::ALL
+                    .into_iter()
+                    // A mode the engine does not have is not offered, the
+                    // same way a filter operator it cannot express is not.
+                    .filter(|mode| engine.explain_prefix(*mode).is_some())
+                    .fold(menu, |menu, mode| {
+                        menu.menu(
+                            format!("{} — {}", mode.label(), mode.caption()),
+                            Box::new(ExplainQuery { mode }),
+                        )
+                    })
+            })
         }))
         .children(runnable.then(|| {
             // Filled where its neighbours are ghosts: running the buffer is

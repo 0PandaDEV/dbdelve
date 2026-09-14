@@ -136,8 +136,10 @@ impl Workspace {
                     .preview_rows
                     .filter(|rows| explorer::ROW_LIMITS.contains(rows))
                     .unwrap_or(PREVIEW_ROW_LIMIT);
-                workspace.settings.custom_keybindings =
-                    stored_settings.custom_keybindings.clone().unwrap_or_default();
+                workspace.settings.custom_keybindings = stored_settings
+                    .custom_keybindings
+                    .clone()
+                    .unwrap_or_default();
                 for stored in profiles {
                     workspace.restore_profile(stored, window, cx);
                 }
@@ -520,6 +522,13 @@ impl Render for Workspace {
                     None => format!("{count} · {} · {elapsed:.1?}", human_bytes(*bytes as u64)),
                 })
             }
+            // The plan's own rows are not this tab's result and never reached
+            // the grid, so the count beside them still belongs to whatever ran
+            // last. What the run itself is worth saying is how long the server
+            // spent answering.
+            Some(QueryState::Explained { elapsed, mode }) => {
+                Some(format!("{} · {elapsed:.1?}", mode.label()))
+            }
             _ => None,
         };
         let notice = profile.session.notice.clone();
@@ -565,6 +574,7 @@ impl Render for Workspace {
             // and stops this one from taking it back.
             .track_focus(&self.focus)
             .on_action(cx.listener(Self::run_query))
+            .on_action(cx.listener(Self::explain_query))
             .on_action(cx.listener(Self::cancel_query))
             .on_action(cx.listener(Self::apply_edits))
             .on_action(cx.listener(Self::discard_edits))

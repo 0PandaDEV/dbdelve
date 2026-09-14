@@ -22,9 +22,8 @@ use icondata_core::IconData;
 /// The gpui-component widgets ask for their own paths — those are Lucide names
 /// too, so they resolve here as well. Add a row when something asks for one;
 /// an unlisted path simply draws nothing.
-const ICONS: [(&str, &IconData); 37] = [
+const ICONS: [(&str, &IconData); 36] = [
     ("icons/git-fork.svg", icondata_lu::LuGitFork),
-    ("icons/gauge.svg", icondata_lu::LuGauge),
     ("icons/chevron-down.svg", icondata_lu::LuChevronDown),
     ("icons/chevron-right.svg", icondata_lu::LuChevronRight),
     ("icons/chevron-left.svg", icondata_lu::LuChevronLeft),
@@ -100,8 +99,6 @@ pub mod icon {
     pub const RUN: &str = "icons/play.svg";
     /// A query plan: the branching the server said it would do.
     pub const PLAN: &str = "icons/git-fork.svg";
-    /// One node's share of the run, in the plan's timing bars.
-    pub const TIMING: &str = "icons/gauge.svg";
     pub const SCRATCH_QUERY: &str = "icons/square-pen.svg";
     pub const HISTORY: &str = "icons/history.svg";
     /// The connection form's "fill the fields from this URL" action: the URL
@@ -187,6 +184,7 @@ mod tests {
             icon::SAVE,
             icon::RENAME,
             icon::RUN,
+            icon::PLAN,
             icon::SCRATCH_QUERY,
             icon::FILL_DOWN,
             icon::FONT,

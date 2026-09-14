@@ -201,7 +201,12 @@ mod tests {
         let overrides = HashMap::new();
         // `enter` belongs to Edit Cell, but only inside "Table".
         assert_eq!(
-            conflict("enter", Some("Editor > Input"), "accept_completion", &overrides),
+            conflict(
+                "enter",
+                Some("Editor > Input"),
+                "accept_completion",
+                &overrides
+            ),
             None
         );
     }

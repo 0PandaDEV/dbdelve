@@ -147,14 +147,20 @@ impl Workspace {
             .iter()
             .find(|spec| spec.id == id)
             .and_then(|spec| spec.context);
-        if let Some(owner) = keybindings::conflict(&chord, context, id, &self.settings.custom_keybindings)
+        if let Some(owner) =
+            keybindings::conflict(&chord, context, id, &self.settings.custom_keybindings)
         {
             self.note(format!("\"{chord}\" is already bound to {owner}."), cx);
             return;
         }
-        self.settings.custom_keybindings.insert(id.to_string(), chord.clone());
+        self.settings
+            .custom_keybindings
+            .insert(id.to_string(), chord.clone());
         self.remember_profiles(cx);
-        self.note(format!("Bound to {chord}. Restart Slate for it to take effect."), cx);
+        self.note(
+            format!("Bound to {chord}. Restart Slate for it to take effect."),
+            cx,
+        );
         cx.notify();
     }
 
@@ -164,7 +170,10 @@ impl Workspace {
             return;
         }
         self.remember_profiles(cx);
-        self.note("Reset to default. Restart Slate for it to take effect.".into(), cx);
+        self.note(
+            "Reset to default. Restart Slate for it to take effect.".into(),
+            cx,
+        );
         cx.notify();
     }
 
@@ -182,9 +191,7 @@ impl Workspace {
             Command::OpenScratch => self.open_scratch_query(window, cx),
             Command::NewQuery => self.new_query(&NewQuery, window, cx),
             Command::RunQuery => self.run_query(&RunQuery, window, cx),
-            Command::ExplainQuery(mode) => {
-                self.explain_query(&ExplainQuery { mode }, window, cx)
-            }
+            Command::ExplainQuery(mode) => self.explain_query(&ExplainQuery { mode }, window, cx),
             Command::ShowPlan(showing) => self.show_plan(showing, cx),
             Command::SaveQuery => self.save_query(&SaveQuery, window, cx),
             Command::RenameQuery => self.rename_query(window, cx),

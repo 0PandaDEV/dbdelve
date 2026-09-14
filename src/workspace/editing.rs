@@ -221,10 +221,13 @@ impl Workspace {
     /// arrow is the way back from one.
     pub(crate) fn go_to_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.clear_notice();
-        let Some((id, input)) = self.profile().and_then(|profile| match profile.session.active {
-            Tab::Object(id) => Some((id, profile.session.page_input.clone())),
-            _ => None,
-        }) else {
+        let Some((id, input)) = self
+            .profile()
+            .and_then(|profile| match profile.session.active {
+                Tab::Object(id) => Some((id, profile.session.page_input.clone())),
+                _ => None,
+            })
+        else {
             return;
         };
         let typed = input.read(cx).value().trim().to_string();
