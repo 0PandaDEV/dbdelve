@@ -64,11 +64,12 @@ impl ExplainMode {
     }
 
     /// Said in front of the choice, because the cost of picking wrong is a
-    /// write the user did not mean to make.
+    /// write the user did not mean to make. What each one *does*, in the
+    /// server's own vocabulary -- not a sentence about it.
     pub fn caption(self) -> &'static str {
         match self {
-            Self::Plan => "Plans the statement without running it",
-            Self::Analyze => "Runs the statement and times it",
+            Self::Plan => "print query plan",
+            Self::Analyze => "run query and print query plan",
         }
     }
 }
