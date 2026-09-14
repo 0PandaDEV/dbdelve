@@ -152,6 +152,11 @@ fn parse_indented(text: String) -> Plan {
         if line.trim().is_empty() {
             continue;
         }
+        // A drawn plan carries the column's own name as its first line. Left in,
+        // it becomes the root and adopts the whole tree one level too deep.
+        if nodes.is_empty() && line.trim().eq_ignore_ascii_case("QUERY PLAN") {
+            continue;
+        }
         let (indent, body, opens_node) = strip_marker(line);
 
         if opens_node || nodes.is_empty() {

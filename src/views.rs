@@ -220,8 +220,10 @@ fn render_plan(explained: &Explained, cx: &mut Context<Workspace>) -> AnyElement
             .when(hottest, |row| row.bg(t.element_hover))
             // The bar column is fixed and leads the row, so every bar starts at
             // the same x and the longest one is found by looking down an edge
-            // rather than by reading.
-            .child(
+            // rather than by reading. It is drawn only where the plan carried
+            // timings at all -- SQLite reports none, and an empty track on every
+            // row of its plans is a column of nothing to read past.
+            .children(total.map(|_| {
                 div()
                     .w(px(72.))
                     .min_w(px(72.))
@@ -243,8 +245,8 @@ fn render_plan(explained: &Explained, cx: &mut Context<Workspace>) -> AnyElement
                                         false => t.accent,
                                     }),
                             ),
-                    ),
-            )
+                    )
+            }))
             .child(
                 div()
                     .flex_1()
