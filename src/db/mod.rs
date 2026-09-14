@@ -36,6 +36,43 @@ pub enum Engine {
     Sqlite,
 }
 
+/// How much the server should be asked to do to answer "how would you run
+/// this?".
+///
+/// The distinction is not a detail of presentation: `Plan` only plans, while
+/// `Analyze` *runs the statement* to report what it really cost. Explaining a
+/// `DELETE` under `Analyze` deletes. That is why the two are a choice the user
+/// makes in front of the button rather than a mode Slate picks for them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize)]
+pub enum ExplainMode {
+    /// Plan only. Never executes the statement.
+    #[default]
+    Plan,
+    /// Executes the statement and reports the timings and row counts it
+    /// actually saw.
+    Analyze,
+}
+
+impl ExplainMode {
+    pub const ALL: [Self; 2] = [Self::Plan, Self::Analyze];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Plan => "Explain",
+            Self::Analyze => "Explain Analyze",
+        }
+    }
+
+    /// Said in front of the choice, because the cost of picking wrong is a
+    /// write the user did not mean to make.
+    pub fn caption(self) -> &'static str {
+        match self {
+            Self::Plan => "Plans the statement without running it",
+            Self::Analyze => "Runs the statement and times it",
+        }
+    }
+}
+
 impl Engine {
     /// Presentation order, which is the order the form's chips appear in.
     pub const ALL: [Self; 3] = [Self::Postgres, Self::MySql, Self::Sqlite];
@@ -74,6 +111,28 @@ impl Engine {
     /// one that does not, and this is what the form asks before drawing them.
     pub fn is_server(self) -> bool {
         !matches!(self, Self::Sqlite)
+    }
+
+    /// What `mode` is spelled as here, or `None` where the engine has no such
+    /// mode. Returned as a prefix because that is the whole of the difference:
+    /// the statement it is put in front of is the user's, unchanged.
+    ///
+    /// SQLite has no `ExplainMode::Analyze`. Its bare `EXPLAIN` lists bytecode
+    /// rather than a plan, so the plan-only mode is `EXPLAIN QUERY PLAN`, and
+    /// there is no form that reports what a run actually cost. `None` is what
+    /// keeps the menu from offering a mode that would only produce an error.
+    ///
+    /// MySQL's `EXPLAIN ANALYZE` arrived in 8.0.18, and MariaDB spells it
+    /// `ANALYZE` with no `EXPLAIN`. Neither is detected: an older server
+    /// refuses the statement and says so, which is the error the user needs and
+    /// is hard rule 6's business rather than a version check's.
+    pub fn explain_prefix(self, mode: ExplainMode) -> Option<&'static str> {
+        match (self, mode) {
+            (Self::Postgres | Self::MySql, ExplainMode::Plan) => Some("EXPLAIN "),
+            (Self::Postgres | Self::MySql, ExplainMode::Analyze) => Some("EXPLAIN ANALYZE "),
+            (Self::Sqlite, ExplainMode::Plan) => Some("EXPLAIN QUERY PLAN "),
+            (Self::Sqlite, ExplainMode::Analyze) => None,
+        }
     }
 
     /// The word that opens a transaction around a generated multi-statement

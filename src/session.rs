@@ -21,8 +21,10 @@ use gpui_component::{
 use crate::{
     Workspace, completion,
     db::{
-        Catalog, Connection, ConnectionConfig, DbError, Engine, RelationKind, Routine, Structure,
+        Catalog, Connection, ConnectionConfig, DbError, Engine, ExplainMode, RelationKind, Routine,
+        Structure,
     },
+    explain::Plan,
     explorer::{ExplorerLeaf, ObjectKind},
     filter::{
         Conjunction, FilterBar, FilterRow, applied_filters, filter_bars, restored_filter,
@@ -577,6 +579,28 @@ pub(crate) struct QueryTab {
     /// attempt whether or not one was found, so a tab reached a second time
     /// cannot read the disk again and put stale rows over live ones.
     pub(crate) hydrated: bool,
+    /// The last plan this tab asked for, or `None` until it asks for one.
+    ///
+    /// Kept beside the grid rather than over it, so flipping to the plan and
+    /// back does not cost a re-run of either. A failed `EXPLAIN` is not here:
+    /// it is a `QueryState::Failed` like any other, shown where every other
+    /// statement's error is shown.
+    pub(crate) plan: Option<Explained>,
+    /// Which of the two the results pane is showing. Deliberately not derived
+    /// from `plan.is_some()`: a plan that has been read and flipped away from
+    /// is still worth keeping to flip back to.
+    pub(crate) showing_plan: bool,
+}
+
+/// A plan, and what it is a plan of.
+pub(crate) struct Explained {
+    pub(crate) plan: Plan,
+    pub(crate) mode: ExplainMode,
+    /// The statement that was explained. Held because it is not necessarily
+    /// what the buffer says any more -- the user is free to keep typing, and a
+    /// plan that silently re-labels itself against edited text would be
+    /// describing a statement nobody ran.
+    pub(crate) sql: String,
 }
 
 impl QueryTab {
@@ -616,6 +640,8 @@ impl QueryTab {
             open_query: stored.name.clone(),
             last_query: None,
             hydrated: false,
+            plan: None,
+            showing_plan: false,
         };
         (tab, notice)
     }
@@ -923,6 +949,15 @@ pub(crate) enum QueryState {
         bytes: usize,
         elapsed: std::time::Duration,
         rows_affected: Option<u64>,
+    },
+    /// An `EXPLAIN` came back. Its own variant rather than a `Complete` because
+    /// the rows it returned are not results and never reach the grid: the grid
+    /// still holds whatever the last real run put there, and a readout claiming
+    /// this many rows had just arrived would be describing the plan while
+    /// pointing at someone else's data.
+    Explained {
+        elapsed: std::time::Duration,
+        mode: ExplainMode,
     },
     Failed(DbError),
 }

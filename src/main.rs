@@ -2,6 +2,7 @@ mod actions;
 mod completion;
 mod connection_form;
 mod db;
+mod explain;
 mod explorer;
 mod export;
 mod filter;
@@ -37,7 +38,8 @@ use gpui_component::{
 
 use actions::{
     AcceptCompletion, AddFilter, ApplyEdits, CancelQuery, ClearFilter, CloseTab, CommandPalette,
-    CopyCell, CycleTheme, DeleteRow, DiscardEdits, EditCell, FollowForeignKey, FuzzyOpen,
+    CopyCell, CycleTheme, DeleteRow, DiscardEdits, EditCell, ExplainQuery, FollowForeignKey,
+    FuzzyOpen,
     NewConnection, NewQuery, NewRow, NextPage, NextProfile, NextTab, OpenSettings, PaletteNext,
     PalettePrevious, PreviousPage, PreviousProfile, PreviousTab, Quit, RemoveFilter,
     ResetEditorZoom, RunQuery, SaveQuery, SetFilterColumn, SetFilterOperator, SetFilterRaw,
@@ -47,7 +49,8 @@ use actions::{
 use completion::SchemaCompletions;
 use connection_form::{ConnectionForm, default_profile_name};
 use db::{
-    Catalog, Connection, ConnectionConfig, DbError, Engine, RelationKind, ServerConfig, SslMode,
+    Catalog, Connection, ConnectionConfig, DbError, Engine, ExplainMode, RelationKind,
+    ServerConfig, SslMode,
 };
 use explorer::{ExplorerTarget, ObjectKind, PREVIEW_ROW_LIMIT, tree as build_explorer_tree};
 use export::Format;
@@ -60,9 +63,10 @@ use icons::{Icons, icon};
 use palette::{Command, Mode as PaletteMode, Palette};
 use result_grid::ResultGrid;
 use session::{
-    ApplyReview, CatalogState, CloseTarget, Focus, InsertField, InsertForm, ObjectBody, ObjectTab,
-    OpenedObject, Profile, ProfileState, QueryState, QueryTab, Refresh, Session, StructureState,
-    Tab, close_target, insert_value, matching_tab, relation_kind, restored_state, show_snapshot,
+    ApplyReview, CatalogState, CloseTarget, Explained, Focus, InsertField, InsertForm, ObjectBody,
+    ObjectTab, OpenedObject, Profile, ProfileState, QueryState, QueryTab, Refresh, Session,
+    StructureState, Tab, close_target, insert_value, matching_tab, relation_kind, restored_state,
+    show_snapshot,
 };
 use sql::{Buffer, SortKey};
 use theme::{ConnectionColor, FontSlot, Fonts, Theme, fonts, layout, theme};

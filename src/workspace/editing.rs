@@ -720,6 +720,7 @@ impl Workspace {
             Tab::Query(id),
             Some(Refresh::Statement(select)),
             false,
+            None,
             cx,
         );
     }
@@ -739,7 +740,7 @@ impl Workspace {
         };
         // Without the refresh the grid would show the UPDATE's empty result set
         // and the user would watch their table vanish.
-        self.execute_and_then(sql, tab, Some(Refresh::Relation(id)), false, cx);
+        self.execute_and_then(sql, tab, Some(Refresh::Relation(id)), false, None, cx);
     }
 
     /// Put the batch away, leaving the edits pending: reading a statement and

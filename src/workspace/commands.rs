@@ -182,6 +182,10 @@ impl Workspace {
             Command::OpenScratch => self.open_scratch_query(window, cx),
             Command::NewQuery => self.new_query(&NewQuery, window, cx),
             Command::RunQuery => self.run_query(&RunQuery, window, cx),
+            Command::ExplainQuery(mode) => {
+                self.explain_query(&ExplainQuery { mode }, window, cx)
+            }
+            Command::ShowPlan(showing) => self.show_plan(showing, cx),
             Command::SaveQuery => self.save_query(&SaveQuery, window, cx),
             Command::RenameQuery => self.rename_query(window, cx),
             Command::QueryHistory => self.open_palette(PaletteMode::History, window, cx),

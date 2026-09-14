@@ -15,12 +15,16 @@ use std::collections::HashMap;
 
 use gpui::{KeyBinding, Keystroke};
 
-use crate::actions::{
-    AcceptCompletion, AddFilter, ApplyEdits, CancelQuery, ClearFilter, CloseTab, CommandPalette,
-    CopyCell, CycleTheme, DeleteRow, DiscardEdits, EditCell, FollowForeignKey, FuzzyOpen,
-    NewConnection, NewQuery, NewRow, NextPage, NextProfile, NextTab, OpenSettings, PaletteNext,
-    PalettePrevious, PreviousPage, PreviousProfile, PreviousTab, Quit, ResetEditorZoom, RunQuery,
-    SaveQuery, SetNull, ShowEditor, ToggleNextJoin, ToggleSidebar, ZoomEditorIn, ZoomEditorOut,
+use crate::{
+    actions::{
+        AcceptCompletion, AddFilter, ApplyEdits, CancelQuery, ClearFilter, CloseTab,
+        CommandPalette, CopyCell, CycleTheme, DeleteRow, DiscardEdits, EditCell, ExplainQuery,
+        FollowForeignKey, FuzzyOpen, NewConnection, NewQuery, NewRow, NextPage, NextProfile,
+        NextTab, OpenSettings, PaletteNext, PalettePrevious, PreviousPage, PreviousProfile,
+        PreviousTab, Quit, ResetEditorZoom, RunQuery, SaveQuery, SetNull, ShowEditor,
+        ToggleNextJoin, ToggleSidebar, ZoomEditorIn, ZoomEditorOut,
+    },
+    db::ExplainMode,
 };
 
 /// One entry in the registry.
@@ -55,8 +59,11 @@ pub(crate) fn is_parseable(chord: &str) -> bool {
             .all(|stroke| Keystroke::parse(stroke).is_ok())
 }
 
+// The action is matched as a token sequence rather than an `ident` so that one
+// carrying a field can be bound too: `expr` cannot be followed by the closing
+// paren of the row, and every action is spelled here as a literal value.
 macro_rules! registry {
-    ($(($id:literal, $label:literal, $context:expr, [$($default:literal),*], $action:ident)),* $(,)?) => {
+    ($(($id:literal, $label:literal, $context:expr, [$($default:literal),*], $($action:tt)+)),* $(,)?) => {
         pub(crate) const REGISTRY: &[KeybindingSpec] = &[
             $(
                 KeybindingSpec {
@@ -75,11 +82,11 @@ macro_rules! registry {
             $(
                 match overrides.get($id) {
                     Some(chord) if is_parseable(chord) => {
-                        bindings.push(KeyBinding::new(chord, $action, $context))
+                        bindings.push(KeyBinding::new(chord, $($action)+, $context))
                     }
                     _ => {
                         for default in [$($default),*] {
-                            bindings.push(KeyBinding::new(default, $action, $context));
+                            bindings.push(KeyBinding::new(default, $($action)+, $context));
                         }
                     }
                 }
@@ -91,6 +98,10 @@ macro_rules! registry {
 
 registry! {
     ("run_query", "Run Query", None, ["cmd-enter"], RunQuery),
+    // Only the planning mode gets a chord. The other one runs the statement,
+    // and a keystroke away from `cmd-enter` is too close to reach for by
+    // accident when reaching for it is a write.
+    ("explain_query", "Explain Query", None, ["cmd-shift-enter"], ExplainQuery { mode: ExplainMode::Plan }),
     ("apply_edits", "Apply Edits", None, ["cmd-s"], ApplyEdits),
     ("rename_query_tab", "Rename Query Tab", None, ["cmd-k s"], SaveQuery),
     ("new_query", "New Query Tab", None, ["cmd-t"], NewQuery),

@@ -654,6 +654,15 @@ fn clause_anchor<'tree>(tree: &'tree Tree, sql: &str) -> Option<tree_sitter::Nod
 
     let mut cursor = statement.walk();
     let children: Vec<_> = statement.named_children(&mut cursor).collect();
+    // The grammar hangs an `EXPLAIN`'s payload off the same statement node, so
+    // the `select` and `from` below belong to the explained query rather than to
+    // anything the result describes. Its rows are a plan -- one text column,
+    // whose order is the tree's shape -- so there is nothing to sort by, and a
+    // spliced `ORDER BY` would silently re-plan a different query than the one
+    // the user asked about.
+    if children.iter().any(|node| node.kind() == "keyword_explain") {
+        return None;
+    }
     // A `UNION` puts the whole query's `ORDER BY` after its last branch, so its
     // clauses hang under the set operation rather than the statement.
     if let Some(set_operation) = children.iter().find(|node| node.kind() == "set_operation") {
@@ -962,6 +971,29 @@ mod tests {
             "-- nothing here",
         ] {
             assert!(order_by(sql).is_none(), "{sql} should not be sortable");
+        }
+    }
+
+    #[test]
+    fn a_plan_is_not_a_result_to_sort() {
+        // The grammar flattens `EXPLAIN`'s payload into the statement, so the
+        // explained query's `select` and `from` sit exactly where a sortable
+        // statement's do. Left unguarded, a header click on the plan's one text
+        // column spliced an `ORDER BY` into the query being explained -- which
+        // both sorts nothing on screen and explains a different statement.
+        for sql in [
+            "EXPLAIN SELECT * FROM t",
+            "EXPLAIN ANALYZE SELECT * FROM t",
+            "explain analyze select id from accounts where x = 1",
+            // Already carrying a sort of its own, which is the case where a
+            // readout looks most convincingly like a sortable grid.
+            "EXPLAIN ANALYZE SELECT * FROM t ORDER BY a",
+        ] {
+            assert!(order_by(sql).is_none(), "{sql} reported a sort");
+            assert!(
+                with_order_by(sql, &[SortKey::new("a", true)]).is_none(),
+                "{sql} was spliced"
+            );
         }
     }
 

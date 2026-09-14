@@ -200,7 +200,7 @@ impl Workspace {
         let keep_rows = std::mem::take(stale);
         // A preview only re-queries when it is asked to, and this is the ask.
         *query = QueryState::Idle;
-        self.execute_and_then(sql, Tab::Object(id), None, keep_rows, cx);
+        self.execute_and_then(sql, Tab::Object(id), None, keep_rows, None, cx);
     }
 
     /// A header click on a relation tab: move that column through the sort and

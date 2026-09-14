@@ -21,7 +21,7 @@ use nucleo_matcher::{
 
 use crate::{
     Workspace,
-    db::{RelationKind, RoutineKind},
+    db::{ExplainMode, RelationKind, RoutineKind},
     explorer::{ExplorerTarget, ObjectKind},
     export::Format,
     icons::icon,
@@ -56,6 +56,12 @@ pub enum Command {
     OpenScratch,
     NewQuery,
     RunQuery,
+    /// Ask how the statement would run. Both modes are offered as their own
+    /// row: which one is which is the whole decision, and a palette that made
+    /// the user guess would be hiding the one that writes.
+    ExplainQuery(ExplainMode),
+    /// Flip the results pane between the rows and the plan.
+    ShowPlan(bool),
     SaveQuery,
     RenameQuery,
     /// Open the history list. The one command that puts the palette back up
@@ -394,6 +400,34 @@ fn command_items(workspace: &Workspace, profile: &Profile, cx: &App) -> Vec<Item
             icon::RUN,
             Command::RunQuery,
         ));
+        // Offered only in the modes this engine has: SQLite cannot report what
+        // a run actually cost, and a row that can only produce an error is a
+        // row to read past.
+        let engine = profile.config.engine();
+        items.extend(
+            ExplainMode::ALL
+                .into_iter()
+                .filter(|mode| engine.explain_prefix(*mode).is_some())
+                .map(|mode| {
+                    Item::command(
+                        mode.label(),
+                        match mode {
+                            ExplainMode::Plan => "⇧⌘↩",
+                            ExplainMode::Analyze => "",
+                        },
+                        icon::PLAN,
+                        Command::ExplainQuery(mode),
+                    )
+                }),
+        );
+        if let Some(tab) = session.active_query_tab()
+            && tab.plan.is_some()
+        {
+            items.push(match tab.showing_plan {
+                true => Item::command("Show data", "", icon::TABLE, Command::ShowPlan(false)),
+                false => Item::command("Show plan", "", icon::PLAN, Command::ShowPlan(true)),
+            });
+        }
         if session.open_query().is_some() {
             items.push(Item::command(
                 "Rename query",

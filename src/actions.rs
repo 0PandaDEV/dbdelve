@@ -7,7 +7,7 @@
 use gpui::{Action, actions};
 use serde::Deserialize;
 
-use crate::filter::Operator;
+use crate::{db::ExplainMode, filter::Operator};
 
 /// A header click. The column is the one in the grid; which statement it
 /// belongs to is whatever surface is in front, because that is the grid the
@@ -62,6 +62,15 @@ pub(crate) struct RemoveFilter {
 #[action(namespace = slate, no_json)]
 pub(crate) struct SetRowLimit {
     pub(crate) rows: usize,
+}
+
+/// Ask the server how it would run the statement under the cursor. The mode
+/// travels with the action because it is the user's choice at the menu, and the
+/// difference between the two is whether the statement is executed.
+#[derive(Clone, PartialEq, Eq, Deserialize, Action)]
+#[action(namespace = slate, no_json)]
+pub(crate) struct ExplainQuery {
+    pub(crate) mode: ExplainMode,
 }
 
 actions!(

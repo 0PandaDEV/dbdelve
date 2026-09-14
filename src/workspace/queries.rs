@@ -139,6 +139,95 @@ impl Workspace {
         self.execute_sql(sql, tab, cx);
     }
 
+    /// Ask the server how it would run the statement the user is pointing at.
+    ///
+    /// The same statement `run_query` would run — the selection if there is one,
+    /// otherwise the statement under the cursor — with the engine's `EXPLAIN`
+    /// in front of it. The prefix goes onto a copy and never into the buffer:
+    /// the buffer is the user's (hard rule 1), and a plan is a question about a
+    /// statement rather than a change to one.
+    pub(crate) fn explain_query(
+        &mut self,
+        action: &ExplainQuery,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.clear_notice();
+        let Some(profile) = self.profile() else {
+            return;
+        };
+        let tab = profile.session.active;
+        // An object tab's rows come from SQL Slate wrote, and its surface has no
+        // buffer to point at. Nobody has asked to explain a preview.
+        let Tab::Query(_) = tab else {
+            return;
+        };
+        let Some(editor) = profile.session.editor(tab) else {
+            return;
+        };
+        let engine = profile.config.engine();
+
+        let failure = |workspace: &mut Self, message: &str, cx: &mut Context<Self>| {
+            if let Some(profile) = workspace.profile_mut()
+                && let Some((state, _)) = profile.session.slot(tab)
+            {
+                *state = QueryState::Failed(DbError {
+                    message: message.into(),
+                    position: None,
+                });
+            }
+            cx.notify();
+        };
+
+        let Some(prefix) = engine.explain_prefix(action.mode) else {
+            // Reachable only if a menu offers a mode the engine does not have,
+            // which is what `explain_prefix` returning `None` is there to stop.
+            failure(
+                self,
+                &format!(
+                    "{} cannot {}.",
+                    engine.label(),
+                    action.mode.label().to_lowercase()
+                ),
+                cx,
+            );
+            return;
+        };
+        let Some(sql) = self.sql_to_run(&editor, window, cx) else {
+            failure(self, "There is no statement to explain.", cx);
+            return;
+        };
+
+        self.execute_and_then(
+            format!("{prefix}{sql}"),
+            tab,
+            None,
+            false,
+            Some(action.mode),
+            cx,
+        );
+    }
+
+    /// Flip the query tab's results pane between its rows and its plan.
+    pub(crate) fn show_plan(&mut self, showing: bool, cx: &mut Context<Self>) {
+        let Some(profile) = self.profile_mut() else {
+            return;
+        };
+        let Tab::Query(id) = profile.session.active else {
+            return;
+        };
+        let Some(tab) = profile.session.query_tab_mut(id) else {
+            return;
+        };
+        // Nothing to turn to. The toggle is not drawn in that case, so this is
+        // the palette's row and a stale keystroke rather than a button.
+        if showing && tab.plan.is_none() {
+            return;
+        }
+        tab.showing_plan = showing;
+        cx.notify();
+    }
+
     pub(crate) fn persist_buffer(&self, cx: &App) -> Result<(), String> {
         match self.profile() {
             Some(profile) => {
@@ -548,7 +637,7 @@ impl Workspace {
     /// through a profile's own editor or explorer, so the absence of one is not
     /// a state the user can be shown an error about.
     pub(crate) fn execute_sql(&mut self, sql: String, tab: Tab, cx: &mut Context<Self>) {
-        self.execute_and_then(sql, tab, None, false, cx);
+        self.execute_and_then(sql, tab, None, false, None, cx);
     }
 
     /// As `execute_sql`, with something to run once this statement has
@@ -558,6 +647,13 @@ impl Workspace {
     /// result lands, for the refresh of a tab whose rows came off disk. Every
     /// other run clears them first, because rows from the previous statement
     /// sitting under the one now running cannot be told from fresh ones.
+    ///
+    /// `explain` says this submission is an `EXPLAIN`, and diverts its result
+    /// away from the grid and into the tab's plan. It routes through here rather
+    /// than down a path of its own because everything around the result — the
+    /// single-flight guard, the generation check that drops a stale run, the
+    /// cancel handle, the connection — is the same for a plan as for rows, and a
+    /// second copy of it is a second place for those to go wrong.
     ///
     /// Chained inside the completion rather than called after it: `execute_sql`
     /// refuses to start while a query is running, so a second call made here
@@ -569,6 +665,7 @@ impl Workspace {
         tab: Tab,
         refresh: Option<Refresh>,
         keep_rows: bool,
+        explain: Option<ExplainMode>,
         cx: &mut Context<Self>,
     ) {
         // Read before the task, which outlives the borrow of `self`.
@@ -600,8 +697,11 @@ impl Workspace {
         *state = QueryState::Running { cancelling: false };
 
         // Rows from the previous statement must not sit under the one now on
-        // screen -- a reader cannot tell stale rows from fresh ones.
-        if !keep_rows {
+        // screen -- a reader cannot tell stale rows from fresh ones. An
+        // `EXPLAIN` never reaches the grid at all, so the rows already there are
+        // not the previous statement's: they are still this tab's own result,
+        // and are what the user flips back to.
+        if !keep_rows && explain.is_none() {
             results.update(cx, |table, cx| {
                 *table.delegate_mut() = ResultGrid::empty();
                 // The inspector reads whatever row is selected, and a row index
@@ -619,8 +719,17 @@ impl Workspace {
         let sortable = keys.is_some();
         let keys = keys.unwrap_or_default();
         // Kept only where it is read back: the query tab's grid has to be able
-        // to say which statement produced it.
-        let statement = matches!(tab, Tab::Query(_)).then(|| sql.clone());
+        // to say which statement produced it. An `EXPLAIN` produces no rows to
+        // describe and belongs in nobody's history -- it is Slate's prefix over
+        // the user's statement, and the statement itself is already there.
+        let statement =
+            (matches!(tab, Tab::Query(_)) && explain.is_none()).then(|| sql.clone());
+        // What the plan pane says it is a plan of: the user's statement, without
+        // the prefix Slate put in front of it.
+        let explained = explain.map(|mode| {
+            let prefix = engine.explain_prefix(mode).unwrap_or_default();
+            sql.strip_prefix(prefix).unwrap_or(&sql).to_string()
+        });
         // Recorded on the way out rather than on the way back: the history is
         // what the user ran, and a statement that failed is exactly the one
         // worth getting back. Only the buffer's — a relation's preview is SQL
@@ -641,7 +750,10 @@ impl Workspace {
             let result = query_task.await;
             workspace
                 .update(cx, |workspace, cx| {
-                    let (succeeded, produced_grid) = {
+                    // The plan is carried out of this block rather than stored
+                    // inside it: `slot` holds the session borrowed, and the tab
+                    // it belongs on has to be reached through the same session.
+                    let (succeeded, produced_grid, plan) = {
                         let Some(profile) = workspace.issued_to(&id, generation) else {
                             workspace.drop_stale_run(&id, tab, cx);
                             return;
@@ -651,6 +763,24 @@ impl Workspace {
                         };
 
                         match result {
+                            // An `EXPLAIN` describes a statement rather than
+                            // returning its rows, so nothing here reaches the
+                            // grid: it keeps whatever the last real run put in
+                            // it, which is what the Data tab flips back to.
+                            Ok(result) if explain.is_some() => {
+                                let mode = explain.unwrap_or_default();
+                                *state = QueryState::Explained {
+                                    elapsed: result.elapsed,
+                                    mode,
+                                };
+                                let columns: Vec<String> = result
+                                    .columns
+                                    .iter()
+                                    .map(|column| column.name.clone())
+                                    .collect();
+                                let plan = explain::parse(&columns, &result.rows);
+                                (true, false, Some(plan))
+                            }
                             Ok(result) => {
                                 *state = QueryState::Complete {
                                     rows: result.rows.len(),
@@ -665,11 +795,11 @@ impl Workspace {
                                         ResultGrid::new(result).with_sort(sort, sortable);
                                     table.refresh(cx);
                                 });
-                                (true, produced_grid)
+                                (true, produced_grid, None)
                             }
                             Err(error) => {
                                 *state = QueryState::Failed(error);
-                                (false, false)
+                                (false, false, None)
                             }
                         }
                     };
@@ -685,6 +815,21 @@ impl Workspace {
                             && let Some(tab) = profile.session.query_tab_mut(query)
                         {
                             tab.last_query = Some(statement);
+                        }
+                        // Shown as soon as it lands: asking for a plan is asking
+                        // to read one, so the pane turns to it rather than
+                        // leaving the answer behind a tab the user has to find.
+                        if let Some(plan) = plan
+                            && let Some(mode) = explain
+                            && let Tab::Query(query) = tab
+                            && let Some(tab) = profile.session.query_tab_mut(query)
+                        {
+                            tab.plan = Some(Explained {
+                                plan,
+                                mode,
+                                sql: explained.unwrap_or_default(),
+                            });
+                            tab.showing_plan = true;
                         }
                         // Nothing left to read once the batch it was showing has
                         // run.
