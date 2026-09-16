@@ -8,6 +8,7 @@ use security_framework::passwords::{self, PasswordOptions};
 use serde::{Deserialize, Serialize};
 
 use crate::db::{Cell, RelationKind};
+use crate::sql::{Destructive, Mode};
 
 const PROFILES_FILE: &str = "profiles.toml";
 const KEYCHAIN_SERVICE: &str = "Slate";
@@ -80,6 +81,16 @@ pub struct StoredProfile {
     /// exactly how it has always been drawn.
     #[serde(default)]
     pub color: Option<String>,
+    /// What this connection is allowed to do. Absent is a profile written
+    /// before modes existed, and reads back as Read-write -- which is what it
+    /// has always been connecting as.
+    #[serde(default)]
+    pub mode: Mode,
+    /// The destructive kinds whose confirmation this connection has silenced.
+    /// Per connection and per kind: silencing DROP on a scratch database says
+    /// nothing about whether you want to be asked on prod.
+    #[serde(default)]
+    pub confirmed: Vec<Destructive>,
     /// The name of the one query buffer a profile had, before a profile could
     /// have several. Read only: nothing writes it any more, and it is kept
     /// because every profile on disk today carries its open query here and
@@ -799,6 +810,71 @@ mod tests {
         names.iter().map(|name| (*name).to_string()).collect()
     }
 
+    /// The whole backward-compatibility story: a file written before modes
+    /// existed has neither key, and must load as Read-write with nothing
+    /// silenced.
+    #[test]
+    fn a_profile_without_a_mode_loads_as_read_write() {
+        with_home(|| {
+            let toml = r#"
+active = "local"
+
+[[profiles]]
+id = "local"
+name = "local"
+host = "localhost"
+database = "postgres"
+user = "shayan"
+"#;
+            let path = slate_directory().unwrap().join(PROFILES_FILE);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, toml).unwrap();
+
+            let (profiles, ..) = load_profiles().unwrap();
+            let profile = &profiles[0];
+            assert_eq!(profile.mode, Mode::ReadWrite);
+            assert!(profile.confirmed.is_empty());
+        });
+    }
+
+    #[test]
+    fn a_mode_and_its_silenced_kinds_survive_a_round_trip() {
+        with_home(|| {
+            let stored = StoredProfile {
+                id: "dev".into(),
+                name: "Dev".into(),
+                host: "127.0.0.1".into(),
+                port: Some(5432),
+                database: "slate_dev".into(),
+                user: "slate".into(),
+                sslmode: Some("verify-full".into()),
+                root_certificate: None,
+                engine: Some("postgres".into()),
+                path: None,
+                editor_font_size: None,
+                statement_timeout: Some(30),
+                next_query_id: Some(1),
+                color: None,
+                mode: Mode::Full,
+                confirmed: vec![Destructive::Drop, Destructive::Truncate],
+                open_query: None,
+                open_queries: Vec::new(),
+                open_objects: Vec::new(),
+            };
+
+            save_profiles(
+                std::slice::from_ref(&stored),
+                Some(&stored.id),
+                &StoredFonts::default(),
+                &StoredSettings::default(),
+            )
+            .unwrap();
+
+            let (profiles, ..) = load_profiles().unwrap();
+            assert_eq!(profiles[0], stored);
+        });
+    }
+
     #[test]
     fn a_profile_survives_the_round_trip_through_toml() {
         // TOML refuses a scalar written after a table, so the open-object list
@@ -818,6 +894,8 @@ mod tests {
             statement_timeout: Some(30),
             next_query_id: Some(7),
             color: None,
+            mode: Mode::default(),
+            confirmed: Vec::new(),
             open_query: Some("daily".into()),
             open_queries: Vec::new(),
             open_objects: vec![
@@ -909,6 +987,8 @@ open_objects = []
             statement_timeout: None,
             next_query_id: Some(0),
             color: Some(ConnectionColor::Purple.slug().to_string()),
+            mode: Mode::default(),
+            confirmed: Vec::new(),
             open_query: None,
             open_queries: Vec::new(),
             open_objects: vec![StoredObject {
@@ -968,6 +1048,8 @@ open_objects = []
             statement_timeout: None,
             next_query_id: Some(7),
             color: None,
+            mode: Mode::default(),
+            confirmed: Vec::new(),
             open_query: None,
             open_queries: Vec::new(),
             open_objects: vec![StoredObject {
@@ -1072,6 +1154,8 @@ open_objects = []
             statement_timeout: Some(30),
             next_query_id: Some(7),
             color: None,
+            mode: Mode::default(),
+            confirmed: Vec::new(),
             open_query: None,
             open_queries: Vec::new(),
             open_objects: vec![StoredObject {
@@ -1156,6 +1240,8 @@ open_objects = []
                     statement_timeout: Some(30),
                     next_query_id: Some(2),
                     color: None,
+                    mode: Mode::default(),
+                    confirmed: Vec::new(),
                     open_query: None,
                     open_queries: Vec::new(),
                     open_objects: Vec::new(),
@@ -1175,6 +1261,8 @@ open_objects = []
                     statement_timeout: None,
                     next_query_id: None,
                     color: None,
+                    mode: Mode::default(),
+                    confirmed: Vec::new(),
                     open_query: None,
                     open_queries: Vec::new(),
                     open_objects: Vec::new(),
@@ -1397,6 +1485,8 @@ open_objects = []
             statement_timeout: Some(30),
             next_query_id: Some(7),
             color: None,
+            mode: Mode::default(),
+            confirmed: Vec::new(),
             open_query: Some("daily".into()),
             open_queries: vec![
                 StoredQueryTab {
@@ -1651,6 +1741,8 @@ name = \"accounts\"
             statement_timeout: None,
             next_query_id: Some(0),
             color: None,
+            mode: Mode::default(),
+            confirmed: Vec::new(),
             open_query: None,
             open_queries: Vec::new(),
             open_objects: vec![
@@ -1740,6 +1832,8 @@ name = \"accounts\"
             statement_timeout: None,
             next_query_id: Some(0),
             color: None,
+            mode: Mode::default(),
+            confirmed: Vec::new(),
             open_query: None,
             open_queries: Vec::new(),
             open_objects: vec![object],

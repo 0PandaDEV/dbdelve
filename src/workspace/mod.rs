@@ -17,7 +17,7 @@ use std::collections::HashMap;
 
 use crate::connection_form::{Origin, password_to_persist};
 use crate::session::{write_buffer, write_grids};
-use crate::sql::{appended_statement, remember_statement, update_batch};
+use crate::sql::{Mode, appended_statement, remember_statement, update_batch};
 use crate::theme::{install_fonts, install_theme, restored_fonts, restored_theme};
 use crate::*;
 
@@ -177,6 +177,7 @@ impl Workspace {
                             name,
                             config,
                             None,
+                            Mode::default(),
                             Origin::Environment,
                             window,
                             cx,

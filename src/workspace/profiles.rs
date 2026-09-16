@@ -4,6 +4,7 @@
 //! impl live in as many modules as it has concerns; they moved out whole.
 
 use super::*;
+use crate::sql::Mode;
 
 impl Workspace {
     pub(crate) fn remember_profiles(&mut self, cx: &mut Context<Self>) {
@@ -139,6 +140,8 @@ impl Workspace {
             // A slug this build cannot read is decoration, so it drops to no
             // colour rather than refusing the profile it was written on.
             color: stored.color.as_deref().and_then(ConnectionColor::from_slug),
+            mode: stored.mode,
+            confirmed: stored.confirmed,
             generation: 0,
             state: ProfileState::Idle,
             catalog: CatalogState::Loading,
@@ -151,6 +154,7 @@ impl Workspace {
         name: String,
         config: ConnectionConfig,
         color: Option<ConnectionColor>,
+        mode: Mode,
         origin: Origin,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -168,6 +172,8 @@ impl Workspace {
             name,
             config,
             color,
+            mode,
+            confirmed: Vec::new(),
             generation: 0,
             state: ProfileState::Idle,
             catalog: CatalogState::Loading,
@@ -395,7 +401,15 @@ impl Workspace {
         match editing {
             Some(id) => self.save_profile(&id, name, config, color, cx),
             None => {
-                let index = self.create_profile(name, config, color, Origin::Form, window, cx);
+                let index = self.create_profile(
+                    name,
+                    config,
+                    color,
+                    Mode::default(),
+                    Origin::Form,
+                    window,
+                    cx,
+                );
                 self.activate(index, cx);
             }
         }

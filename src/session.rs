@@ -32,7 +32,7 @@ use crate::{
     },
     result_grid,
     result_grid::ResultGrid,
-    sql::SortKey,
+    sql::{Destructive, Mode, SortKey},
     store,
     theme::ConnectionColor,
 };
@@ -48,6 +48,8 @@ pub(crate) struct Profile {
     pub(crate) name: String,
     pub(crate) config: ConnectionConfig,
     pub(crate) color: Option<ConnectionColor>,
+    pub(crate) mode: Mode,
+    pub(crate) confirmed: Vec<Destructive>,
     pub(crate) generation: u64,
     pub(crate) state: ProfileState,
     pub(crate) catalog: CatalogState,
@@ -109,6 +111,8 @@ impl Profile {
             statement_timeout: Some(self.config.statement_timeout()),
             next_query_id: Some(self.session.next_query_id),
             color: self.color.map(|color| color.slug().to_string()),
+            mode: self.mode,
+            confirmed: self.confirmed.clone(),
             // Nothing writes the legacy scalar any more; a buffer's name is a
             // property of its tab now. Kept on the stored shape only so a
             // profile written by an older build still loads with its buffer.
