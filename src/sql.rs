@@ -15,6 +15,12 @@
 
 use std::ops::Range;
 
+use serde::{Deserialize, Serialize};
+// Aliased: `tree_sitter::Parser` already owns the name `Parser` in this file,
+// and the two parsers are never interchangeable -- see `classify`'s doc.
+use sqlparser::ast::{AlterTableOperation, Query, SetExpr, Statement};
+use sqlparser::dialect::{Dialect, MySqlDialect, PostgreSqlDialect, SQLiteDialect};
+use sqlparser::parser::Parser as SqlParser;
 use tree_sitter::{Node, Parser, Tree};
 
 use crate::db::Engine;
@@ -856,6 +862,261 @@ pub(crate) fn appended_statement(buffer: &str, statement: &str) -> String {
         false => ";",
     };
     format!("{text}{terminator}\n\n{statement}")
+}
+
+/// What a connection is allowed to do, and what a statement needs in order to
+/// run. One enum for both, because they are the same three-rung ladder and two
+/// types would be the same three values under different names.
+///
+/// **Variant order is load-bearing**: `Ord` derives from it, and the whole mode
+/// check is `required <= allowed`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum Mode {
+    ReadOnly,
+    /// What a profile written before modes existed reads back as -- which is
+    /// what it has always been connecting as.
+    #[default]
+    ReadWrite,
+    Full,
+}
+
+impl Mode {
+    pub(crate) const ALL: [Mode; 3] = [Mode::ReadOnly, Mode::ReadWrite, Mode::Full];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Mode::ReadOnly => "Read-only",
+            Mode::ReadWrite => "Read-write",
+            Mode::Full => "Full",
+        }
+    }
+}
+
+/// Why a statement needs Full. Carried so the confirmation can name what it is
+/// about to do, and so a "don't ask again" tick knows what it is silencing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum Destructive {
+    Drop,
+    Truncate,
+    UnfilteredDelete,
+    /// Slate could not parse it, so it cannot say what it does.
+    Unreadable,
+}
+
+impl Destructive {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Destructive::Drop => "DROP",
+            Destructive::Truncate => "TRUNCATE",
+            Destructive::UnfilteredDelete => "DELETE without WHERE",
+            Destructive::Unreadable => "unreadable statements",
+        }
+    }
+
+    /// Whether a "don't ask again" tick may silence this kind. Never for
+    /// `Unreadable`: that would silence an open-ended set -- every future typo,
+    /// every `DO` block -- on one decision about one of them.
+    pub(crate) fn suppressible(self) -> bool {
+        !matches!(self, Destructive::Unreadable)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Verdict {
+    pub(crate) mode: Mode,
+    pub(crate) destructive: Option<Destructive>,
+}
+
+impl Verdict {
+    const READ: Self = Self {
+        mode: Mode::ReadOnly,
+        destructive: None,
+    };
+    const WRITE: Self = Self {
+        mode: Mode::ReadWrite,
+        destructive: None,
+    };
+    const FULL: Self = Self {
+        mode: Mode::Full,
+        destructive: None,
+    };
+
+    fn destroys(kind: Destructive) -> Self {
+        Self {
+            mode: Mode::Full,
+            destructive: Some(kind),
+        }
+    }
+
+    /// The more restrictive of two verdicts. A tie prefers the one that can name
+    /// what it destroys, so the confirmation has something to say.
+    fn max(self, other: Self) -> Self {
+        match other.mode.cmp(&self.mode) {
+            std::cmp::Ordering::Greater => other,
+            std::cmp::Ordering::Less => self,
+            std::cmp::Ordering::Equal => {
+                if self.destructive.is_some() {
+                    self
+                } else {
+                    other
+                }
+            }
+        }
+    }
+}
+
+/// The lowest mode that may run `sql`, and what makes it dangerous if anything
+/// does.
+///
+/// Parses with `sqlparser` rather than the tree-sitter parse the rest of this
+/// module uses. The two do different jobs: tree-sitter is error-tolerant and
+/// finds statement boundaries in a buffer someone is still typing into;
+/// this needs a typed statement, and would rather refuse than guess.
+pub(crate) fn classify(engine: Engine, sql: &str) -> Verdict {
+    let dialect: Box<dyn Dialect> = match engine {
+        Engine::Postgres => Box::new(PostgreSqlDialect {}),
+        Engine::MySql => Box::new(MySqlDialect {}),
+        Engine::Sqlite => Box::new(SQLiteDialect {}),
+    };
+
+    // All or nothing: one statement it cannot read makes the whole submission
+    // one it cannot vouch for.
+    let Ok(statements) = SqlParser::parse_sql(dialect.as_ref(), sql) else {
+        return Verdict::destroys(Destructive::Unreadable);
+    };
+
+    // An empty or comment-only string parses to no statements at all. There is
+    // nothing there to be dangerous, and a dialog over nothing is noise.
+    statements
+        .iter()
+        .map(statement_verdict)
+        .fold(Verdict::READ, Verdict::max)
+}
+
+fn statement_verdict(statement: &Statement) -> Verdict {
+    match statement {
+        // Not classified by its variant: a CTE can hold a DELETE. See
+        // `query_verdict`.
+        Statement::Query(query) => query_verdict(query),
+
+        // `EXPLAIN ANALYZE DELETE FROM t` runs the delete -- documented in
+        // Postgres, and in MySQL since 8.0.18. Slate never sends it to SQLite:
+        // `Engine::explain_prefix` returns None for that pair.
+        Statement::Explain {
+            analyze, statement, ..
+        } => {
+            if *analyze {
+                statement_verdict(statement)
+            } else {
+                Verdict::READ
+            }
+        }
+        Statement::ExplainTable { .. } => Verdict::READ,
+
+        Statement::ShowTables { .. }
+        | Statement::ShowCatalogs { .. }
+        | Statement::ShowCharset { .. }
+        | Statement::ShowCollation { .. }
+        | Statement::ShowColumns { .. }
+        | Statement::ShowCreate { .. }
+        | Statement::ShowDatabases { .. }
+        | Statement::ShowFunctions { .. }
+        | Statement::ShowObjects { .. }
+        | Statement::ShowProcessList { .. }
+        | Statement::ShowSchemas { .. }
+        | Statement::ShowStatus { .. }
+        | Statement::ShowVariable { .. }
+        | Statement::ShowVariables { .. }
+        | Statement::ShowViews { .. }
+        | Statement::Use { .. }
+        | Statement::Set { .. }
+        | Statement::StartTransaction { .. }
+        | Statement::Commit { .. }
+        | Statement::Rollback { .. } => Verdict::READ,
+
+        // COPY TO reads a table out to a file; COPY FROM loads rows in.
+        Statement::Copy { to, .. } => {
+            if *to {
+                Verdict::READ
+            } else {
+                Verdict::WRITE
+            }
+        }
+
+        Statement::Insert { .. }
+        | Statement::Update { .. }
+        | Statement::CreateTable { .. }
+        | Statement::CreateIndex { .. }
+        | Statement::CreateView { .. }
+        | Statement::CreateSchema { .. }
+        | Statement::Comment { .. }
+        | Statement::Analyze { .. }
+        | Statement::Vacuum { .. } => Verdict::WRITE,
+
+        Statement::Delete(delete) => {
+            if delete.selection.is_some() {
+                Verdict::WRITE
+            } else {
+                Verdict::destroys(Destructive::UnfilteredDelete)
+            }
+        }
+
+        Statement::Drop { .. } => Verdict::destroys(Destructive::Drop),
+        Statement::Truncate { .. } => Verdict::destroys(Destructive::Truncate),
+
+        // One ALTER can carry several operations, so the verdict is the maximum
+        // over them and not the first.
+        Statement::AlterTable(alter) => alter
+            .operations
+            .iter()
+            .map(alter_verdict)
+            .fold(Verdict::WRITE, Verdict::max),
+
+        // Everything else needs Full, and this arm is the point of matching
+        // exhaustively: when the crate adds a statement type, the build breaks
+        // here and someone decides where it belongs, instead of it inheriting a
+        // default nobody chose.
+        _ => Verdict::FULL,
+    }
+}
+
+/// A CTE body can be a `DELETE`. `WITH x AS (DELETE FROM t RETURNING *) SELECT *
+/// FROM x` parses as `Statement::Query`, so reading only the top-level variant
+/// calls a statement that empties a table a read.
+fn query_verdict(query: &Query) -> Verdict {
+    let mut verdict = set_expr_verdict(&query.body);
+    if let Some(with) = &query.with {
+        for cte in &with.cte_tables {
+            verdict = verdict.max(query_verdict(&cte.query));
+        }
+    }
+    verdict
+}
+
+fn set_expr_verdict(body: &SetExpr) -> Verdict {
+    match body {
+        SetExpr::Select(_) | SetExpr::Values(_) | SetExpr::Table(_) => Verdict::READ,
+        SetExpr::Query(query) => query_verdict(query),
+        SetExpr::SetOperation { left, right, .. } => {
+            set_expr_verdict(left).max(set_expr_verdict(right))
+        }
+        SetExpr::Insert(statement)
+        | SetExpr::Update(statement)
+        | SetExpr::Delete(statement)
+        | SetExpr::Merge(statement) => statement_verdict(statement),
+    }
+}
+
+/// Additive is `ADD COLUMN` and nothing else. Deliberately strict: an operation
+/// this does not name -- and there are around sixty -- is treated as able to
+/// lose data, for the same reason the top-level wildcard is.
+fn alter_verdict(operation: &AlterTableOperation) -> Verdict {
+    match operation {
+        AlterTableOperation::AddColumn { .. } => Verdict::WRITE,
+        _ => Verdict::FULL,
+    }
 }
 
 #[cfg(test)]
@@ -1879,5 +2140,129 @@ mod tests {
             appended_statement("SELECT 1\n\n  ", "UPDATE t SET a = 1"),
             "SELECT 1;\n\nUPDATE t SET a = 1"
         );
+    }
+
+    #[test]
+    fn classify_separates_reads_writes_and_destruction() {
+        let cases: &[(&str, Mode, Option<Destructive>)] = &[
+            ("SELECT 1", Mode::ReadOnly, None),
+            ("WITH x AS (SELECT 1) SELECT * FROM x", Mode::ReadOnly, None),
+            ("SHOW TABLES", Mode::ReadOnly, None),
+            ("EXPLAIN SELECT 1", Mode::ReadOnly, None),
+            ("EXPLAIN ANALYZE SELECT 1", Mode::ReadOnly, None),
+            ("", Mode::ReadOnly, None),
+            ("-- nothing here", Mode::ReadOnly, None),
+            // The semicolon is inside a literal, so this is one read and not a DROP.
+            ("SELECT ';DROP TABLE t'", Mode::ReadOnly, None),
+            ("INSERT INTO t (a) VALUES (1)", Mode::ReadWrite, None),
+            ("UPDATE t SET a = 1 WHERE id = 2", Mode::ReadWrite, None),
+            ("DELETE FROM t WHERE id = 2", Mode::ReadWrite, None),
+            // A predicate that narrows nothing is still a predicate: spec §8.
+            ("DELETE FROM t WHERE 1 = 1", Mode::ReadWrite, None),
+            ("CREATE TABLE t (a int)", Mode::ReadWrite, None),
+            ("CREATE INDEX i ON t (a)", Mode::ReadWrite, None),
+            ("ALTER TABLE t ADD COLUMN c int", Mode::ReadWrite, None),
+            (
+                "DELETE FROM t",
+                Mode::Full,
+                Some(Destructive::UnfilteredDelete),
+            ),
+            (
+                "EXPLAIN ANALYZE DELETE FROM t",
+                Mode::Full,
+                Some(Destructive::UnfilteredDelete),
+            ),
+            ("DROP TABLE t", Mode::Full, Some(Destructive::Drop)),
+            ("TRUNCATE TABLE t", Mode::Full, Some(Destructive::Truncate)),
+            ("ALTER TABLE t DROP COLUMN c", Mode::Full, None),
+            ("ALTER TABLE t RENAME TO u", Mode::Full, None),
+            // The maximum over the operations, not the first.
+            (
+                "ALTER TABLE t ADD COLUMN a int, DROP COLUMN b",
+                Mode::Full,
+                None,
+            ),
+            // The case tree-sitter got wrong, kept as a regression test.
+            ("GRANT SELECT ON t TO u", Mode::Full, None),
+            ("REVOKE SELECT ON t FROM u", Mode::Full, None),
+            // Opaque bodies: Slate cannot see what these run.
+            ("CALL p()", Mode::Full, None),
+            // The maximum over the statements, not the first.
+            ("SELECT 1; DROP TABLE t", Mode::Full, Some(Destructive::Drop)),
+            ("SELCT 1", Mode::Full, Some(Destructive::Unreadable)),
+            (
+                "DO $$ BEGIN NULL; END $$",
+                Mode::Full,
+                Some(Destructive::Unreadable),
+            ),
+        ];
+
+        for (sql, mode, destructive) in cases {
+            assert_eq!(
+                classify(Engine::Postgres, sql),
+                Verdict {
+                    mode: *mode,
+                    destructive: *destructive,
+                },
+                "{sql}"
+            );
+        }
+    }
+
+    /// The single most likely bug in the feature: this parses as `Statement::Query`,
+    /// so a match on the top-level variant calls a table-emptying statement a read.
+    /// Spec §3.5.
+    #[test]
+    fn classify_sees_through_data_modifying_ctes() {
+        let delete = "WITH x AS (DELETE FROM t RETURNING *) SELECT * FROM x";
+        assert_eq!(
+            classify(Engine::Postgres, delete),
+            Verdict {
+                mode: Mode::Full,
+                destructive: Some(Destructive::UnfilteredDelete),
+            }
+        );
+
+        let insert = "WITH x AS (INSERT INTO t (a) VALUES (1) RETURNING *) SELECT * FROM x";
+        assert_eq!(classify(Engine::Postgres, insert).mode, Mode::ReadWrite);
+
+        let update = "WITH x AS (UPDATE t SET a = 1 WHERE id = 2 RETURNING *) SELECT * FROM x";
+        assert_eq!(classify(Engine::Postgres, update).mode, Mode::ReadWrite);
+    }
+
+    /// One AST, three dialects. Two statements genuinely differ and are asserted as
+    /// differing rather than skipped.
+    #[test]
+    fn classify_agrees_across_engines() {
+        for engine in [Engine::Postgres, Engine::MySql, Engine::Sqlite] {
+            assert_eq!(classify(engine, "SELECT 1").mode, Mode::ReadOnly, "{engine:?}");
+            assert_eq!(
+                classify(engine, "DROP TABLE t").destructive,
+                Some(Destructive::Drop),
+                "{engine:?}"
+            );
+            assert_eq!(
+                classify(engine, "DELETE FROM t").destructive,
+                Some(Destructive::UnfilteredDelete),
+                "{engine:?}"
+            );
+        }
+
+        // CREATE FUNCTION parses only under Postgres; elsewhere it is unreadable,
+        // which is Full either way.
+        assert_eq!(
+            classify(
+                Engine::MySql,
+                "CREATE FUNCTION f() RETURNS int AS $$ SELECT 1 $$"
+            )
+            .destructive,
+            Some(Destructive::Unreadable)
+        );
+    }
+
+    #[test]
+    fn unreadable_is_never_suppressible() {
+        assert!(!Destructive::Unreadable.suppressible());
+        assert!(Destructive::Drop.suppressible());
     }
 }

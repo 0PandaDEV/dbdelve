@@ -113,6 +113,18 @@ serde_json = "1"
 toml = "0.9"
 url = "2"
 
+# Classification only, for `sql::classify`: the mode check reads a typed
+# `Statement` so it cannot mistake one statement for another. tree-sitter-sequel
+# recovers `GRANT SELECT ON t TO u` as a `select` node, and a gate that reads a
+# GRANT as a read is worse than no gate. It does not replace tree-sitter, which
+# still finds statement boundaries in a half-typed buffer -- a strict parser
+# returns `Err` and nothing else.
+#
+# Default features off: they pull `psm`, which builds assembly through `cc`, to
+# guard against pathological nesting we do not accept from a local buffer. Off,
+# it is two pure-Rust crates and an 8.5s build instead of 28.6s.
+sqlparser = { version = "=0.63.0", default-features = false, features = ["std"] }
+
 # Profile passwords live in the macOS Keychain, never in profiles.toml.
 security-framework = "3"
 guic-gpui-assets = "=0.2.0"
