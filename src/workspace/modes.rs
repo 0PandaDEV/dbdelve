@@ -53,6 +53,29 @@ impl Workspace {
         false
     }
 
+    /// The titlebar menu's own entries route here rather than setting the
+    /// field themselves, so raising or lowering the mode from the picker gets
+    /// the same grid push and save as every other path into `set_mode`.
+    pub(crate) fn choose_mode(&mut self, action: &SetMode, _: &mut Window, cx: &mut Context<Self>) {
+        self.set_mode(action.mode, cx);
+    }
+
+    /// The picker's way back out of a silenced confirmation -- see `set_mode`'s
+    /// caller in the titlebar menu. Without it, ticking "don't ask again" is a
+    /// one-way door.
+    pub(crate) fn reset_confirmations(
+        &mut self,
+        _: &ResetConfirmations,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(profile) = self.profile_mut() {
+            profile.confirmed.clear();
+        }
+        self.remember_profiles(cx);
+        cx.notify();
+    }
+
     pub(crate) fn cancel_pending_run(&mut self, cx: &mut Context<Self>) {
         if let Some(profile) = self.profile_mut() {
             profile.session.pending_run = None;

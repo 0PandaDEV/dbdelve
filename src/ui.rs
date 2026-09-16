@@ -64,24 +64,23 @@ pub(crate) fn row_icon_tinted(
 ///
 /// Deliberately not tinted with the connection's `ConnectionColor`: that colour
 /// answers the first question, and two things wearing one hue answer neither.
-pub(crate) fn mode_pill(t: Theme, mode: Mode) -> gpui::Div {
-    div()
-        .px(px(layout::SPACE_SM))
-        .py(px(layout::SPACE_XS))
-        .rounded(px(layout::RADIUS_CONTROL))
-        .text_size(px(layout::TEXT_SM))
-        .whitespace_nowrap()
-        .border_1()
-        .border_color(match mode {
-            Mode::Full => t.border_strong,
-            _ => t.border,
-        })
-        .text_color(match mode {
-            Mode::ReadOnly => t.text_faint,
-            Mode::ReadWrite => t.text_muted,
-            Mode::Full => t.text,
-        })
-        .child(mode.label())
+///
+/// A `Button` rather than the plain `Div` this drew as before Task 7: the
+/// titlebar hangs a `dropdown_menu` off it, and that trait is bounded on
+/// `Selectable`, which `Div` does not implement.
+pub(crate) fn mode_pill(t: Theme, mode: Mode) -> Button {
+    button(
+        "connection-mode",
+        mode.label(),
+        Tone::Quiet,
+        Control::Compact,
+        t,
+    )
+    .border_1()
+    .border_color(match mode {
+        Mode::Full => t.border_strong,
+        _ => t.border,
+    })
 }
 
 /// Slate's own titlebar, drawn where the platform's would be.

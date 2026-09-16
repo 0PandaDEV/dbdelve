@@ -7,7 +7,7 @@
 use gpui::{Action, actions};
 use serde::Deserialize;
 
-use crate::{db::ExplainMode, filter::Operator};
+use crate::{db::ExplainMode, filter::Operator, sql::Mode};
 
 /// A header click. The column is the one in the grid; which statement it
 /// belongs to is whatever surface is in front, because that is the grid the
@@ -73,6 +73,15 @@ pub(crate) struct ExplainQuery {
     pub(crate) mode: ExplainMode,
 }
 
+/// Change what this connection is allowed to do, picked from the titlebar's
+/// mode menu. The mode travels with the action because it is the user's
+/// choice at the menu, not something the handler can infer.
+#[derive(Clone, PartialEq, Eq, Deserialize, Action)]
+#[action(namespace = slate, no_json)]
+pub(crate) struct SetMode {
+    pub(crate) mode: Mode,
+}
+
 actions!(
     slate,
     [
@@ -111,6 +120,7 @@ actions!(
         ToggleSidebar,
         AcceptCompletion,
         OpenSettings,
+        ResetConfirmations,
         Quit,
     ]
 );

@@ -100,6 +100,31 @@ impl Workspace {
                                 ),
                             ),
                     )
+                    // Only while creating: past that, `Workspace::set_mode` is
+                    // the one door a mode changes through, from the titlebar,
+                    // and it pushes the change into live grids this form has
+                    // no route to.
+                    .when(!editing, |form| {
+                        form.child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(layout::SPACE_XS))
+                                .child(
+                                    div()
+                                        .text_size(px(layout::TEXT_SM))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(t.text_muted)
+                                        .child("Mode"),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .gap(px(layout::SPACE_XS))
+                                        .children(Mode::ALL.map(|mode| self.mode_chip(mode, cx))),
+                                ),
+                        )
+                    })
                     .child(
                         div()
                             .flex()

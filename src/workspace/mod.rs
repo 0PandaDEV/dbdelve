@@ -16,6 +16,8 @@ mod tabs;
 
 use std::collections::HashMap;
 
+use gpui_component::menu::DropdownMenu;
+
 use crate::connection_form::{Origin, password_to_persist};
 use crate::session::{write_buffer, write_grids};
 use crate::sql::{Mode, appended_statement, remember_statement, update_batch};
@@ -577,6 +579,8 @@ impl Render for Workspace {
             .track_focus(&self.focus)
             .on_action(cx.listener(Self::run_query))
             .on_action(cx.listener(Self::explain_query))
+            .on_action(cx.listener(Self::choose_mode))
+            .on_action(cx.listener(Self::reset_confirmations))
             .on_action(cx.listener(Self::cancel_query))
             .on_action(cx.listener(Self::apply_edits))
             .on_action(cx.listener(Self::discard_edits))
@@ -626,7 +630,41 @@ impl Render for Workspace {
                 t,
                 Some(profile.name.clone()),
                 profile.color,
-                Some(ui::mode_pill(t, profile.mode).into_any_element()),
+                Some({
+                    let mode = profile.mode;
+                    let silenced = profile.confirmed.clone();
+                    ui::mode_pill(t, mode)
+                        .dropdown_menu(move |menu, _, _| {
+                            let menu = Mode::ALL.into_iter().fold(menu, |menu, option| {
+                                menu.menu_with_check(
+                                    option.label(),
+                                    option == mode,
+                                    Box::new(SetMode { mode: option }),
+                                )
+                            });
+                            // Absent unless this connection has actually
+                            // silenced something: suppression is per
+                            // connection, so the way back out belongs on the
+                            // connection, and one it never asked to reset is
+                            // one entry with nothing to do.
+                            if silenced.is_empty() {
+                                menu
+                            } else {
+                                menu.separator().menu(
+                                    format!(
+                                        "Reset silenced confirmations ({})",
+                                        silenced
+                                            .iter()
+                                            .map(|kind| kind.label())
+                                            .collect::<Vec<_>>()
+                                            .join(", ")
+                                    ),
+                                    Box::new(ResetConfirmations),
+                                )
+                            }
+                        })
+                        .into_any_element()
+                }),
                 Some(
                     icon_button(
                         "toggle-sidebar",

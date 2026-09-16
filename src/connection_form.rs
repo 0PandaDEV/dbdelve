@@ -14,6 +14,7 @@ use crate::{
     Workspace,
     db::{ConnectionConfig, Engine, ServerConfig, SslMode},
     session::Profile,
+    sql::Mode,
     theme::ConnectionColor,
 };
 
@@ -25,6 +26,11 @@ pub(crate) struct ConnectionForm {
     pub(crate) engine: Engine,
     pub(crate) name: Entity<InputState>,
     pub(crate) color: Option<ConnectionColor>,
+    /// What the connection will be allowed to do once it exists. Read only on
+    /// creation -- `Workspace::set_mode` is the one place it changes once a
+    /// profile is connecting, and it pushes into that profile's live grids,
+    /// which a profile still being typed into does not have.
+    pub(crate) mode: Mode,
     /// SQLite's entire connection. No host, no credentials, no transport.
     pub(crate) path: Entity<InputState>,
     pub(crate) host: Entity<InputState>,
@@ -142,6 +148,7 @@ impl ConnectionForm {
             engine: config.map(ConnectionConfig::engine).unwrap_or_default(),
             name,
             color: None,
+            mode: Mode::default(),
             path,
             host,
             port,
@@ -169,6 +176,7 @@ impl ConnectionForm {
         let mut form = Self::new(Some(&profile.config), window, cx);
         form.editing = Some(profile.id.clone());
         form.color = profile.color;
+        form.mode = profile.mode;
         form.name.update(cx, |name, cx| {
             name.set_value(profile.name.clone(), window, cx);
         });

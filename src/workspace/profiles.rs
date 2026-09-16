@@ -255,10 +255,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// One chip per mode, weakest first. A row of five words rather than a
-    /// dropdown: the choice is the security of the connection, and it should be
-    /// legible without opening anything. No keybinding, so no action type —
-    /// this is only reachable while the form is on screen.
     /// One chip per engine, in the same shape as the `sslmode` row below it.
     /// The engine decides which fields the form even has, so it is the first
     /// thing on it and not a dropdown two clicks away.
@@ -298,6 +294,46 @@ impl Workspace {
                     // The error belonged to the fields that just left the
                     // screen, so it would be reporting something invisible.
                     form.error = None;
+                    cx.notify();
+                }
+            }))
+            .into_any_element()
+    }
+
+    /// One chip per mode, weakest first. A row of three words rather than a
+    /// dropdown: the choice is the security of the connection, and it should
+    /// be legible without opening anything.
+    ///
+    /// Read only while a connection already exists: past creation,
+    /// `Workspace::set_mode` is the one door a mode changes through, and it
+    /// pushes the change into that connection's live grids -- something a
+    /// profile still being typed into has none of yet. `render_connection_form`
+    /// draws this row only when there is no `editing` id, for exactly that
+    /// reason.
+    pub(crate) fn mode_chip(&self, mode: Mode, cx: &mut Context<Self>) -> AnyElement {
+        let t = *theme(cx);
+        let selected = self.form.as_ref().is_some_and(|form| form.mode == mode);
+        div()
+            .id(mode.label())
+            .flex()
+            .items_center()
+            .h(px(24.))
+            .px(px(layout::SPACE_SM))
+            .rounded(px(layout::RADIUS_CONTROL))
+            .text_size(px(layout::TEXT_SM))
+            .whitespace_nowrap()
+            .map(|chip| {
+                if selected {
+                    chip.bg(t.element_active).text_color(t.text)
+                } else {
+                    chip.text_color(t.text_muted)
+                        .hover(|style| style.bg(t.element_hover))
+                }
+            })
+            .child(mode.label())
+            .on_click(cx.listener(move |workspace, _, _, cx| {
+                if let Some(form) = &mut workspace.form {
+                    form.mode = mode;
                     cx.notify();
                 }
             }))
@@ -388,6 +424,7 @@ impl Workspace {
             return;
         };
         let color = form.color;
+        let mode = form.mode;
         let editing = form.editing.clone();
         let (name, config) = match form.config(cx) {
             Ok(profile) => profile,
@@ -404,15 +441,8 @@ impl Workspace {
         match editing {
             Some(id) => self.save_profile(&id, name, config, color, cx),
             None => {
-                let index = self.create_profile(
-                    name,
-                    config,
-                    color,
-                    Mode::default(),
-                    Origin::Form,
-                    window,
-                    cx,
-                );
+                let index =
+                    self.create_profile(name, config, color, mode, Origin::Form, window, cx);
                 self.activate(index, cx);
             }
         }
