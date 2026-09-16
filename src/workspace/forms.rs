@@ -3,7 +3,10 @@
 //! These were methods on `Workspace` in main.rs. Rust lets one inherent
 //! impl live in as many modules as it has concerns; they moved out whole.
 
+use gpui_component::checkbox::Checkbox;
+
 use super::*;
+use crate::sql::Stop;
 
 impl Workspace {
     pub(crate) fn render_connection_form(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -483,6 +486,137 @@ impl Workspace {
                                             });
                                         },
                                     ),
+                                ),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+
+    /// The statement `execute_and_then` stopped, in one of three shapes
+    /// derived from `sql::gate` -- never stored, so the shape shown and the
+    /// verdict behind it cannot disagree about what they are asking (spec
+    /// §5).
+    pub(crate) fn render_pending_run(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let t = *theme(cx);
+        let profile = self.profile()?;
+        let pending = profile.session.pending_run.as_ref()?;
+        // Re-derived rather than trusted from when the prompt was raised: the
+        // mode or the silenced list may have changed underneath it (the
+        // upgrade arm changes the mode itself, mid-prompt).
+        let stop = sql::gate(pending.verdict, profile.mode, &profile.confirmed)?;
+        let name = profile.name.clone();
+        let current_mode = profile.mode.label();
+        let sql = pending.resume.as_ref().map(|resume| resume.sql.clone());
+        let dont_ask = pending.dont_ask;
+
+        let (title, message, confirm, tone) = match stop {
+            Stop::Upgrade(needed) => (
+                "Mode",
+                format!("{name} is in {current_mode} mode. This needs {}.", needed.label()),
+                if sql.is_some() {
+                    format!("Switch to {} and run", needed.label())
+                } else {
+                    format!("Switch to {}", needed.label())
+                },
+                Tone::Primary,
+            ),
+            Stop::Confirm(kind) => (
+                "Confirm",
+                format!("This is a {}. It cannot be undone.", kind.label()),
+                "Run".to_string(),
+                Tone::Danger,
+            ),
+            Stop::RunOnce => (
+                "Unreadable statement",
+                "Slate can't parse this, so it can't tell what it does or whether \
+                 this connection's mode covers it."
+                    .to_string(),
+                "Run once".to_string(),
+                Tone::Danger,
+            ),
+        };
+
+        let cancel = cx.entity().downgrade();
+        let approve = cancel.clone();
+        let tick = cancel.clone();
+
+        Some(
+            div()
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    dialog(t)
+                        .child(section_label(t, title))
+                        .child(
+                            div()
+                                .text_size(px(layout::TEXT_SM))
+                                .text_color(t.text_muted)
+                                .child(message),
+                        )
+                        // The statement itself, because a dialog asking about
+                        // SQL that does not show the SQL is asking the user to
+                        // trust it rather than read it. Absent for the edit
+                        // refusal (Task 6), which has no statement to show.
+                        .children(sql.map(|sql| {
+                            div()
+                                .p(px(layout::SPACE_SM))
+                                .rounded(px(layout::RADIUS_CONTROL))
+                                .bg(t.surface)
+                                .text_size(px(layout::TEXT_SM))
+                                .text_color(t.text)
+                                .child(sql)
+                        }))
+                        // Never for `Unreadable`: silencing it would cover
+                        // every future typo along with it, on the strength of
+                        // one decision about one of them.
+                        .children(match stop {
+                            Stop::Confirm(kind) if kind.suppressible() => Some(
+                                Checkbox::new("dont-ask-again")
+                                    .label(format!(
+                                        "Don't ask again for {} on {name}",
+                                        kind.label()
+                                    ))
+                                    .checked(dont_ask)
+                                    .on_click(move |_, _, cx| {
+                                        _ = tick.update(cx, |workspace, cx| {
+                                            workspace.toggle_dont_ask(cx);
+                                        });
+                                    }),
+                            ),
+                            _ => None,
+                        })
+                        .child(
+                            div()
+                                .flex()
+                                .justify_end()
+                                .gap(px(layout::SPACE_SM))
+                                .child(
+                                    button(
+                                        "cancel-pending-run",
+                                        "Cancel",
+                                        Tone::Quiet,
+                                        Control::Standard,
+                                        t,
+                                    )
+                                    .on_click(
+                                        move |_, _, cx| {
+                                            _ = cancel.update(cx, |workspace, cx| {
+                                                workspace.cancel_pending_run(cx);
+                                            });
+                                        },
+                                    ),
+                                )
+                                .child(
+                                    button("approve-pending-run", confirm, tone, Control::Standard, t)
+                                        .on_click(move |_, _, cx| {
+                                            _ = approve.update(cx, |workspace, cx| {
+                                                workspace.approve_pending_run(cx);
+                                            });
+                                        }),
                                 ),
                         ),
                 )

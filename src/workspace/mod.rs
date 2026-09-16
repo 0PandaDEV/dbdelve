@@ -8,6 +8,7 @@ mod commands;
 mod editing;
 mod filters;
 mod forms;
+mod modes;
 mod objects;
 mod profiles;
 mod queries;
@@ -736,6 +737,7 @@ impl Render for Workspace {
             .children(self.render_apply_review(cx))
             .children(self.render_close_confirmation(cx))
             .children(self.render_discard_confirmation(cx))
+            .children(self.render_pending_run(cx))
             .children(self.settings_open.then(|| views::render_settings(self, cx)))
             .children(self.render_palette(cx))
     }
