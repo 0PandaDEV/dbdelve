@@ -4,6 +4,7 @@
 //! impl live in as many modules as it has concerns; they moved out whole.
 
 use super::*;
+use crate::session::{PendingRun, Resume};
 
 impl Workspace {
     /// Edits sitting in the visible grid, waiting to be written back. Read off
@@ -640,8 +641,52 @@ impl Workspace {
         self.execute_and_then(sql, tab, None, false, None, cx);
     }
 
-    /// As `execute_sql`, with something to run once this statement has
-    /// succeeded.
+    /// Runs a statement, if the connection's mode allows it.
+    ///
+    /// The check lives here rather than in each caller because every path that
+    /// runs SQL routes through this one -- `connection.query` has exactly one
+    /// call site in the app, inside `execute_unchecked`. A stopped statement is
+    /// held on `pending_run` rather than run: nothing here sets
+    /// `QueryState::Running` or appends to history, because a statement that
+    /// did not run is not history and must not leave a spinner behind.
+    pub(crate) fn execute_and_then(
+        &mut self,
+        sql: String,
+        tab: Tab,
+        refresh: Option<Refresh>,
+        keep_rows: bool,
+        explain: Option<ExplainMode>,
+        cx: &mut Context<Self>,
+    ) {
+        let verdict = sql::classify(self.engine(), &sql);
+        let stopped = self
+            .profile()
+            .and_then(|profile| sql::gate(verdict, profile.mode, &profile.confirmed));
+
+        if stopped.is_some() {
+            if let Some(profile) = self.profile_mut() {
+                profile.session.pending_run = Some(PendingRun {
+                    resume: Some(Resume {
+                        sql,
+                        tab,
+                        refresh,
+                        keep_rows,
+                        explain,
+                    }),
+                    verdict,
+                    dont_ask: false,
+                });
+            }
+            cx.notify();
+            return;
+        }
+
+        self.execute_unchecked(sql, tab, refresh, keep_rows, explain, cx);
+    }
+
+    /// Runs a statement without consulting the connection's mode. Only two
+    /// callers: `execute_and_then`, once the mode has allowed it, and the
+    /// prompt's own Run.
     ///
     /// `keep_rows` leaves whatever the grid is showing in place until the new
     /// result lands, for the refresh of a tab whose rows came off disk. Every
@@ -659,7 +704,7 @@ impl Workspace {
     /// refuses to start while a query is running, so a second call made here
     /// would be dropped on the floor. Nothing follows a failure — the error is
     /// what there is to see, and a refresh would replace it with rows.
-    pub(crate) fn execute_and_then(
+    pub(crate) fn execute_unchecked(
         &mut self,
         sql: String,
         tab: Tab,

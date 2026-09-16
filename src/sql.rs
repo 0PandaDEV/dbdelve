@@ -1119,6 +1119,34 @@ fn alter_verdict(operation: &AlterTableOperation) -> Verdict {
     }
 }
 
+/// Why the mode stopped a statement. Answered by `gate`, which decides; saying
+/// so is the dialog's job and lives elsewhere.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Stop {
+    /// The connection is not allowed to run this. The mode carried is exactly
+    /// what the statement needs -- never a higher one.
+    Upgrade(Mode),
+    /// Allowed, but it destroys something and this connection has not silenced
+    /// that kind.
+    Confirm(Destructive),
+    /// Slate could not read it. Runs once on confirmation and changes nothing.
+    RunOnce,
+}
+
+/// Whether the mode stops this statement. `None` means run it.
+pub(crate) fn gate(verdict: Verdict, mode: Mode, confirmed: &[Destructive]) -> Option<Stop> {
+    match verdict.destructive {
+        // Tested before the mode comparison, because it is the one verdict
+        // whose remedy is not a mode change: every typo lands here, and asking
+        // someone to raise a connection to Full to get a syntax error back
+        // would teach them to live in Full.
+        Some(Destructive::Unreadable) => Some(Stop::RunOnce),
+        _ if verdict.mode > mode => Some(Stop::Upgrade(verdict.mode)),
+        Some(kind) if !confirmed.contains(&kind) => Some(Stop::Confirm(kind)),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2264,5 +2292,60 @@ mod tests {
     fn unreadable_is_never_suppressible() {
         assert!(!Destructive::Unreadable.suppressible());
         assert!(Destructive::Drop.suppressible());
+    }
+
+    #[test]
+    fn the_gate_offers_exactly_the_mode_a_statement_needs() {
+        let write = Verdict {
+            mode: Mode::ReadWrite,
+            destructive: None,
+        };
+        let drop = Verdict {
+            mode: Mode::Full,
+            destructive: Some(Destructive::Drop),
+        };
+
+        assert_eq!(gate(Verdict::READ, Mode::ReadOnly, &[]), None);
+        assert_eq!(
+            gate(write, Mode::ReadOnly, &[]),
+            Some(Stop::Upgrade(Mode::ReadWrite))
+        );
+        // Full, not Read-write: offering an intermediate mode that still refuses is
+        // a second dialog dressed as a first.
+        assert_eq!(
+            gate(drop, Mode::ReadOnly, &[]),
+            Some(Stop::Upgrade(Mode::Full))
+        );
+        assert_eq!(gate(write, Mode::ReadWrite, &[]), None);
+        assert_eq!(
+            gate(drop, Mode::Full, &[]),
+            Some(Stop::Confirm(Destructive::Drop))
+        );
+        assert_eq!(gate(drop, Mode::Full, &[Destructive::Drop]), None);
+        // Per kind: silencing DROP says nothing about TRUNCATE.
+        assert_eq!(
+            gate(drop, Mode::Full, &[Destructive::Truncate]),
+            Some(Stop::Confirm(Destructive::Drop))
+        );
+    }
+
+    #[test]
+    fn an_unreadable_statement_never_offers_a_mode_and_never_goes_quiet() {
+        let unreadable = Verdict {
+            mode: Mode::Full,
+            destructive: Some(Destructive::Unreadable),
+        };
+
+        // Not Upgrade, in any mode: a typo must never ask to raise a connection to
+        // Full in order to receive a syntax error.
+        for mode in Mode::ALL {
+            assert_eq!(gate(unreadable, mode, &[]), Some(Stop::RunOnce), "{mode:?}");
+        }
+
+        // Not suppressible even if something contrived writes it into the list.
+        assert_eq!(
+            gate(unreadable, Mode::Full, &[Destructive::Unreadable]),
+            Some(Stop::RunOnce)
+        );
     }
 }

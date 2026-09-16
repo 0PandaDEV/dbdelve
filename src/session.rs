@@ -32,7 +32,7 @@ use crate::{
     },
     result_grid,
     result_grid::ResultGrid,
-    sql::{Destructive, Mode, SortKey},
+    sql::{Destructive, Mode, SortKey, Verdict},
     store,
     theme::ConnectionColor,
 };
@@ -201,6 +201,8 @@ pub(crate) struct Session {
     /// because the two are halves of one flow: the form collects, the review
     /// shows the statement it generated, and only Run sends it.
     pub(crate) insert_form: Option<InsertForm>,
+    /// The statement the mode check stopped, held until the user answers.
+    pub(crate) pending_run: Option<PendingRun>,
 }
 
 /// A generated statement waiting to be read and run.
@@ -251,6 +253,27 @@ pub(crate) fn insert_value(nulled: bool, touched: bool, typed: &str) -> Option<O
         (false, true) => Some(Some(typed.to_string())),
         (false, false) => None,
     }
+}
+
+/// Everything `execute_and_then` needs to run a statement it was stopped from
+/// running.
+pub(crate) struct Resume {
+    pub(crate) sql: String,
+    pub(crate) tab: Tab,
+    pub(crate) refresh: Option<Refresh>,
+    pub(crate) keep_rows: bool,
+    pub(crate) explain: Option<ExplainMode>,
+}
+
+/// The statement the mode check stopped, held until the user answers. Nothing
+/// runs from here without an explicit Run.
+pub(crate) struct PendingRun {
+    /// `None` when the mode refused an inline edit rather than a statement --
+    /// there is nothing to resume, and the dialog offers only the mode change.
+    pub(crate) resume: Option<Resume>,
+    pub(crate) verdict: Verdict,
+    /// The "don't ask again" tick, which only the Confirm shape shows.
+    pub(crate) dont_ask: bool,
 }
 
 impl Session {
@@ -361,6 +384,7 @@ impl Session {
             notice,
             apply_review: None,
             insert_form: None,
+            pending_run: None,
         }
     }
 
@@ -481,6 +505,9 @@ impl Session {
         self.pending_discard = None;
         self.naming = false;
         self.save_name_needs_focus = false;
+        // A stopped statement must not survive a tab or profile switch and get
+        // confirmed against a connection it was never aimed at.
+        self.pending_run = None;
     }
 }
 
