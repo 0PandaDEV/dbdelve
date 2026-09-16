@@ -149,6 +149,9 @@ impl Workspace {
         });
     }
 
+    // Eight, because a connection is eight things and a struct holding them for
+    // two call sites would be a parameter list with extra steps.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn create_profile(
         &mut self,
         name: String,
