@@ -469,7 +469,7 @@ impl Render for Workspace {
                 .on_action(cx.listener(Self::previous_profile))
                 // Without a titlebar of its own the form has no drag handle at
                 // all, since the platform's is transparent.
-                .child(titlebar(t, None, None, None))
+                .child(titlebar(t, None, None, None, None))
                 .child(
                     div()
                         .flex_1()
@@ -625,6 +625,7 @@ impl Render for Workspace {
                 t,
                 Some(profile.name.clone()),
                 profile.color,
+                Some(ui::mode_pill(t, profile.mode).into_any_element()),
                 Some(
                     icon_button(
                         "toggle-sidebar",

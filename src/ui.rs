@@ -20,6 +20,7 @@ use crate::{
     db::{RelationKind, RoutineKind},
     explorer::ObjectKind,
     icons::icon,
+    sql::Mode,
     theme::{self, ConnectionColor, Theme, layout},
 };
 
@@ -57,6 +58,32 @@ pub(crate) fn row_icon_tinted(
         .text_color(color.map_or(t.text_faint, ConnectionColor::swatch))
 }
 
+/// What this connection is allowed to do, drawn beside its name because "which
+/// database am I on" and "what can I do to it" are read in one glance or not at
+/// all.
+///
+/// Deliberately not tinted with the connection's `ConnectionColor`: that colour
+/// answers the first question, and two things wearing one hue answer neither.
+pub(crate) fn mode_pill(t: Theme, mode: Mode) -> gpui::Div {
+    div()
+        .px(px(layout::SPACE_SM))
+        .py(px(layout::SPACE_XS))
+        .rounded(px(layout::RADIUS_CONTROL))
+        .text_size(px(layout::TEXT_SM))
+        .whitespace_nowrap()
+        .border_1()
+        .border_color(match mode {
+            Mode::Full => t.border_strong,
+            _ => t.border,
+        })
+        .text_color(match mode {
+            Mode::ReadOnly => t.text_faint,
+            Mode::ReadWrite => t.text_muted,
+            Mode::Full => t.text,
+        })
+        .child(mode.label())
+}
+
 /// Slate's own titlebar, drawn where the platform's would be.
 ///
 /// The system titlebar is transparent (see `main`), so this row is what runs to
@@ -69,6 +96,7 @@ pub(crate) fn titlebar(
     t: Theme,
     subtitle: Option<String>,
     color: Option<ConnectionColor>,
+    mode: Option<AnyElement>,
     leading: Option<AnyElement>,
 ) -> impl IntoElement {
     div()
@@ -114,7 +142,8 @@ pub(crate) fn titlebar(
                                 .text_color(t.text)
                                 .font_weight(FontWeight::MEDIUM)
                         })
-                })),
+                }))
+                .children(mode),
         )
 }
 
