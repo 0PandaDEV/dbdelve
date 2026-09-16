@@ -14,8 +14,43 @@ impl Workspace {
             return;
         };
         profile.mode = mode;
+        // Every open grid caches the mode `editable` reads (`result_grid.rs`),
+        // because that predicate is asked from the mouse and the palette with
+        // no route back to the profile. Without this push a grid opened before
+        // the change keeps answering from the mode it was built under until
+        // its tab happens to re-run.
+        let grids = profile.session.grids().cloned().collect::<Vec<_>>();
+        for grid in grids {
+            grid.update(cx, |table, _| table.delegate_mut().set_mode(mode));
+        }
         self.remember_profiles(cx);
         cx.notify();
+    }
+
+    /// Whether this connection may do `mode`-level work, raising the prompt
+    /// when it may not. The prompt has nothing to resume: it offers the mode
+    /// change alone, and the user repeats the keystroke.
+    ///
+    /// ponytail: threading a resumable gpui action through the prompt to save
+    /// one keystroke is more machinery than the keystroke is worth. Store the
+    /// action and re-dispatch it if the retry ever becomes annoying.
+    pub(crate) fn require(&mut self, mode: Mode, cx: &mut Context<Self>) -> bool {
+        let Some(profile) = self.profile_mut() else {
+            return false;
+        };
+        if profile.mode >= mode {
+            return true;
+        }
+        profile.session.pending_run = Some(PendingRun {
+            resume: None,
+            verdict: sql::Verdict {
+                mode,
+                destructive: None,
+            },
+            dont_ask: false,
+        });
+        cx.notify();
+        false
     }
 
     pub(crate) fn cancel_pending_run(&mut self, cx: &mut Context<Self>) {

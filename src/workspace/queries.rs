@@ -812,6 +812,10 @@ impl Workspace {
                             workspace.drop_stale_run(&id, tab, cx);
                             return;
                         };
+                        // Read before `slot`, which borrows the session and not
+                        // this field -- but the mode a result lands under has to
+                        // be the mode at landing time, not a stale default.
+                        let mode = profile.mode;
                         let Some((state, results)) = profile.session.slot(tab) else {
                             return;
                         };
@@ -846,7 +850,7 @@ impl Workspace {
                                 results.update(cx, |table, cx| {
                                     let sort = sort_columns(engine, &keys, &result.columns);
                                     *table.delegate_mut() =
-                                        ResultGrid::new(result).with_sort(sort, sortable);
+                                        ResultGrid::new(result, mode).with_sort(sort, sortable);
                                     table.refresh(cx);
                                 });
                                 (true, produced_grid, None)

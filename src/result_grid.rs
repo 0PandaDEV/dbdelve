@@ -13,6 +13,7 @@ use crate::{
     Workspace,
     db::{self, EditTarget, QueryResult},
     icons::icon,
+    sql::Mode,
     store::{GRID_ROW_CAP, StoredGrid, captured_at},
     theme::{layout, theme},
 };
@@ -107,6 +108,10 @@ pub struct ResultGrid {
     /// every frame under a no-allocation rule, and a group named there would be
     /// a `format!` per cell per frame.
     follow_groups: Vec<SharedString>,
+    /// The connection's mode, cached because `editable` is asked by the grid's
+    /// own double-click handler, which has no route back to the profile.
+    /// `Workspace::set_mode` is the only thing that writes it after construction.
+    mode: Mode,
 }
 
 /// One changed cell, held beside the fetched value rather than over it.
@@ -145,11 +150,14 @@ pub struct PendingRow {
 }
 
 impl ResultGrid {
+    /// An empty grid never has an edit target, so `editable` refuses on that
+    /// alone -- the mode it starts with cannot matter, and callers that build
+    /// one before a profile is known (`new_grid`) have no mode to give it.
     pub fn empty() -> Self {
-        Self::new(QueryResult::default())
+        Self::new(QueryResult::default(), Mode::default())
     }
 
-    pub fn new(result: QueryResult) -> Self {
+    pub fn new(result: QueryResult, mode: Mode) -> Self {
         let display: Vec<Vec<Option<SharedString>>> = result
             .rows
             .iter()
@@ -188,6 +196,7 @@ impl ResultGrid {
             restored_total: None,
             foreign_keys: Vec::new(),
             follow_groups: Vec::new(),
+            mode,
         }
     }
 
@@ -207,18 +216,24 @@ impl ResultGrid {
     /// a restored grid shows rows, and the inspector and in-grid editing come
     /// back with the run that replaces it.
     pub fn restored(stored: &StoredGrid) -> Self {
-        let mut grid = Self::new(QueryResult {
-            columns: stored
-                .columns
-                .iter()
-                .map(|name| db::Column {
-                    name: name.clone(),
-                    data_type: None,
-                })
-                .collect(),
-            rows: stored.rows.clone(),
-            ..QueryResult::default()
-        });
+        // No `edit` target comes back with a snapshot (see the doc comment
+        // above), so `editable` refuses regardless of mode -- there is nothing
+        // for this value to gate until the run that replaces it lands.
+        let mut grid = Self::new(
+            QueryResult {
+                columns: stored
+                    .columns
+                    .iter()
+                    .map(|name| db::Column {
+                        name: name.clone(),
+                        data_type: None,
+                    })
+                    .collect(),
+                rows: stored.rows.clone(),
+                ..QueryResult::default()
+            },
+            Mode::default(),
+        );
 
         // Over the widths `new` just fitted, which measured the capped rows
         // rather than the layout the user was actually looking at.
@@ -443,6 +458,13 @@ impl ResultGrid {
         self.active = Some((row, col));
     }
 
+    /// Called whenever the connection's mode changes, so a grid that was
+    /// built before the change does not go on answering `editable` from a
+    /// stale cache. See `Workspace::set_mode`.
+    pub fn set_mode(&mut self, mode: Mode) {
+        self.mode = mode;
+    }
+
     /// Whether this cell can be written back at all: the result has to be
     /// traceable to one table, the column has to exist in it, and it must not
     /// be part of the key — a key edit is the one edit whose result cannot be
@@ -453,6 +475,14 @@ impl ResultGrid {
     /// back would be written as the text it looks like — see
     /// [`db::is_binary_type`].
     pub fn editable(&self, row: usize, col: usize) -> bool {
+        // Every write the grid can start is behind this one predicate --
+        // `begin_edit`, `set_pending`, `set_null`, `commit_edit`, and
+        // `has_editable_cell`, which hides the palette's entries. Guarding the
+        // four action handlers instead would leave the double-click, which
+        // calls `begin_edit` directly.
+        if self.mode < Mode::ReadWrite {
+            return false;
+        }
         let Some(edit) = &self.result.edit else {
             return false;
         };
@@ -990,14 +1020,14 @@ impl TableDelegate for ResultGrid {
                         window.dispatch_action(Box::new(crate::FollowForeignKey), cx);
                     }))
             }))
-            // No fallback: `begin_edit` already refuses silently on a cell
-            // that cannot be written, which is the right outcome here too --
-            // a double click on a read-only cell does nothing rather than
-            // copying, because copying is `cmd+c` on every cell alike.
-            .on_double_click(cx.listener(move |table, _, _, cx| {
-                if table.delegate_mut().begin_edit(row_ix, col_ix) {
-                    cx.notify();
-                }
+            // Dispatched rather than editing the cell here, so the mouse and
+            // the keystroke cannot drift -- and so a refusal (a mode below
+            // Read-write, a key or computed column) reaches the same
+            // explanation `EditCell` already gives from the keyboard.
+            .on_double_click(cx.listener(move |table, _, window, cx| {
+                table.delegate_mut().set_active(row_ix, col_ix);
+                window.dispatch_action(Box::new(crate::EditCell), cx);
+                cx.notify();
             }))
             // What `Enter` will act on. The library records the row of a cell
             // click and never the column, so the coordinate is set here whole.
@@ -1081,66 +1111,78 @@ mod tests {
 
     /// A grid over one column of cells, which is enough to order rows by.
     fn grid_of(values: &[Option<&str>]) -> ResultGrid {
-        ResultGrid::new(QueryResult {
-            columns: vec![column("a")],
-            rows: values
-                .iter()
-                .map(|value| vec![value.map(str::to_string)])
-                .collect(),
-            ..QueryResult::default()
-        })
+        ResultGrid::new(
+            QueryResult {
+                columns: vec![column("a")],
+                rows: values
+                    .iter()
+                    .map(|value| vec![value.map(str::to_string)])
+                    .collect(),
+                ..QueryResult::default()
+            },
+            Mode::ReadWrite,
+        )
     }
 
     /// A grid over `id, note, total` where `id` is the key, `note` is an alias
     /// for the real column `body`, and `total` is computed. One column of each
     /// kind that editing has to tell apart.
     fn editable_grid() -> ResultGrid {
-        ResultGrid::new(QueryResult {
-            columns: vec![column("id"), column("note"), column("total")],
-            rows: vec![
-                vec![Some("7".into()), Some("first".into()), Some("1".into())],
-                vec![Some("8".into()), Some("second".into()), Some("2".into())],
-            ],
-            edit: Some(EditTarget {
-                schema: "public".into(),
-                table: "measurements".into(),
-                columns: vec![Some("id".into()), Some("body".into()), None],
-                keys: vec![0],
-            }),
-            ..QueryResult::default()
-        })
+        ResultGrid::new(
+            QueryResult {
+                columns: vec![column("id"), column("note"), column("total")],
+                rows: vec![
+                    vec![Some("7".into()), Some("first".into()), Some("1".into())],
+                    vec![Some("8".into()), Some("second".into()), Some("2".into())],
+                ],
+                edit: Some(EditTarget {
+                    schema: "public".into(),
+                    table: "measurements".into(),
+                    columns: vec![Some("id".into()), Some("body".into()), None],
+                    keys: vec![0],
+                }),
+                ..QueryResult::default()
+            },
+            Mode::ReadWrite,
+        )
     }
 
     /// The same shape as [`editable_grid`], but with the editable column left
     /// NULL by the server: the one row a staged NULL has to be told apart from.
     fn grid_with_a_null() -> ResultGrid {
-        ResultGrid::new(QueryResult {
-            columns: vec![column("id"), column("note")],
-            rows: vec![vec![Some("7".into()), None]],
-            edit: Some(EditTarget {
-                schema: "public".into(),
-                table: "measurements".into(),
-                columns: vec![Some("id".into()), Some("body".into())],
-                keys: vec![0],
-            }),
-            ..QueryResult::default()
-        })
+        ResultGrid::new(
+            QueryResult {
+                columns: vec![column("id"), column("note")],
+                rows: vec![vec![Some("7".into()), None]],
+                edit: Some(EditTarget {
+                    schema: "public".into(),
+                    table: "measurements".into(),
+                    columns: vec![Some("id".into()), Some("body".into())],
+                    keys: vec![0],
+                }),
+                ..QueryResult::default()
+            },
+            Mode::ReadWrite,
+        )
     }
 
     /// The same shape again, but the NULL is in the *key* column: the row the
     /// server left unnameable.
     fn grid_with_a_null_key() -> ResultGrid {
-        ResultGrid::new(QueryResult {
-            columns: vec![column("id"), column("note")],
-            rows: vec![vec![None, Some("first".into())]],
-            edit: Some(EditTarget {
-                schema: "public".into(),
-                table: "measurements".into(),
-                columns: vec![Some("id".into()), Some("body".into())],
-                keys: vec![0],
-            }),
-            ..QueryResult::default()
-        })
+        ResultGrid::new(
+            QueryResult {
+                columns: vec![column("id"), column("note")],
+                rows: vec![vec![None, Some("first".into())]],
+                edit: Some(EditTarget {
+                    schema: "public".into(),
+                    table: "measurements".into(),
+                    columns: vec![Some("id".into()), Some("body".into())],
+                    keys: vec![0],
+                }),
+                ..QueryResult::default()
+            },
+            Mode::ReadWrite,
+        )
     }
 
     #[test]
@@ -1293,13 +1335,16 @@ mod tests {
     fn a_result_larger_than_the_cap_is_capped_once_by_the_grid() {
         // `write_grid` caps too, but only as a backstop: cloning the whole row
         // vector to keep the front of it is what this avoids.
-        let grid = ResultGrid::new(QueryResult {
-            columns: vec![column("n")],
-            rows: (0..GRID_ROW_CAP + 10)
-                .map(|n| vec![Some(n.to_string())])
-                .collect(),
-            ..QueryResult::default()
-        });
+        let grid = ResultGrid::new(
+            QueryResult {
+                columns: vec![column("n")],
+                rows: (0..GRID_ROW_CAP + 10)
+                    .map(|n| vec![Some(n.to_string())])
+                    .collect(),
+                ..QueryResult::default()
+            },
+            Mode::ReadWrite,
+        );
 
         let written = grid.stored();
         assert_eq!(written.rows.len(), GRID_ROW_CAP);
@@ -1338,20 +1383,42 @@ mod tests {
     fn a_row_slate_cannot_name_produces_no_statement() {
         // A NULL key value leaves no predicate to write, and a row updated by
         // guesswork is the failure this whole feature is built to avoid.
-        let mut grid = ResultGrid::new(QueryResult {
-            columns: vec![column("id"), column("note")],
-            rows: vec![vec![None, Some("orphan".into())]],
-            edit: Some(EditTarget {
-                schema: "public".into(),
-                table: "measurements".into(),
-                columns: vec![Some("id".into()), Some("body".into())],
-                keys: vec![0],
-            }),
-            ..QueryResult::default()
-        });
+        let mut grid = ResultGrid::new(
+            QueryResult {
+                columns: vec![column("id"), column("note")],
+                rows: vec![vec![None, Some("orphan".into())]],
+                edit: Some(EditTarget {
+                    schema: "public".into(),
+                    table: "measurements".into(),
+                    columns: vec![Some("id".into()), Some("body".into())],
+                    keys: vec![0],
+                }),
+                ..QueryResult::default()
+            },
+            Mode::ReadWrite,
+        );
 
         assert!(grid.set_pending(0, 1, Some("changed".into())));
         assert!(grid.pending_updates().is_empty());
+    }
+
+    #[test]
+    fn a_read_only_grid_edits_nothing() {
+        let mut grid = editable_grid();
+        assert!(grid.editable(0, 1), "`note` is the editable column");
+
+        grid.set_mode(Mode::ReadOnly);
+        assert!(!grid.editable(0, 1));
+        // The guard is in `editable`, so everything downstream of it follows.
+        assert!(!grid.begin_edit(0, 1));
+        assert!(!grid.set_pending(0, 1, Some("x".into())));
+
+        grid.set_mode(Mode::ReadWrite);
+        assert!(grid.editable(0, 1), "raising the mode gives the cell back");
+
+        // Not a mode question: a key column stays uneditable at every mode.
+        grid.set_mode(Mode::Full);
+        assert!(!grid.editable(0, 0));
     }
 
     #[test]
@@ -1387,23 +1454,26 @@ mod tests {
         // literal as the text it looks like. Each engine's spelling of the
         // type, since one predicate answers for all three.
         for data_type in ["bytea", "blob", "longblob", "varbinary(16)", "BLOB"] {
-            let mut grid = ResultGrid::new(QueryResult {
-                columns: vec![
-                    column("id"),
-                    DbColumn {
-                        name: "payload".into(),
-                        data_type: Some(data_type.into()),
-                    },
-                ],
-                rows: vec![vec![Some("7".into()), Some("x'AB'".into())]],
-                edit: Some(EditTarget {
-                    schema: "public".into(),
-                    table: "measurements".into(),
-                    columns: vec![Some("id".into()), Some("payload".into())],
-                    keys: vec![0],
-                }),
-                ..QueryResult::default()
-            });
+            let mut grid = ResultGrid::new(
+                QueryResult {
+                    columns: vec![
+                        column("id"),
+                        DbColumn {
+                            name: "payload".into(),
+                            data_type: Some(data_type.into()),
+                        },
+                    ],
+                    rows: vec![vec![Some("7".into()), Some("x'AB'".into())]],
+                    edit: Some(EditTarget {
+                        schema: "public".into(),
+                        table: "measurements".into(),
+                        columns: vec![Some("id".into()), Some("payload".into())],
+                        keys: vec![0],
+                    }),
+                    ..QueryResult::default()
+                },
+                Mode::ReadWrite,
+            );
 
             assert!(!grid.editable(0, 1), "{data_type}");
             assert!(!grid.begin_edit(0, 1), "{data_type}");
@@ -1684,11 +1754,14 @@ mod tests {
         // clipped display string is what the previous copy gesture deliberately
         // did not read, and the reason it read the fetched row instead.
         let value = "x".repeat(CELL_DISPLAY_LIMIT * 2);
-        let mut grid = ResultGrid::new(QueryResult {
-            columns: vec![column("a"), column("b")],
-            rows: vec![vec![Some(value.clone()), None]],
-            ..QueryResult::default()
-        });
+        let mut grid = ResultGrid::new(
+            QueryResult {
+                columns: vec![column("a"), column("b")],
+                rows: vec![vec![Some(value.clone()), None]],
+                ..QueryResult::default()
+            },
+            Mode::ReadWrite,
+        );
 
         // Nothing active, nothing to copy.
         assert!(grid.active_value().is_none());
@@ -1743,11 +1816,14 @@ mod tests {
         let mut grid = editable_grid();
         grid.set_active(1, 1);
 
-        let replaced = ResultGrid::new(QueryResult {
-            columns: vec![column("a")],
-            rows: vec![vec![Some("only".into())]],
-            ..QueryResult::default()
-        });
+        let replaced = ResultGrid::new(
+            QueryResult {
+                columns: vec![column("a")],
+                rows: vec![vec![Some("only".into())]],
+                ..QueryResult::default()
+            },
+            Mode::ReadWrite,
+        );
 
         assert!(replaced.active().is_none());
         // And an index that did outlive its rows opens nothing.
@@ -1757,11 +1833,14 @@ mod tests {
     /// A grid over `id, account_id, sku` — one key column between two that are
     /// not, so a mark by position would be visible as a mark on the wrong one.
     fn keyed_grid() -> ResultGrid {
-        ResultGrid::new(QueryResult {
-            columns: vec![column("id"), column("account_id"), column("sku")],
-            rows: vec![vec![Some("7".into()), Some("42".into()), Some("x".into())]],
-            ..QueryResult::default()
-        })
+        ResultGrid::new(
+            QueryResult {
+                columns: vec![column("id"), column("account_id"), column("sku")],
+                rows: vec![vec![Some("7".into()), Some("42".into()), Some("x".into())]],
+                ..QueryResult::default()
+            },
+            Mode::ReadWrite,
+        )
     }
 
     #[test]
@@ -1823,17 +1902,20 @@ mod tests {
 
     #[test]
     fn a_row_reads_out_as_its_named_and_typed_fields() {
-        let grid = ResultGrid::new(QueryResult {
-            columns: vec![
-                DbColumn {
-                    name: "id".into(),
-                    data_type: Some("int4".into()),
-                },
-                column("note"),
-            ],
-            rows: vec![vec![Some("7".into()), None]],
-            ..QueryResult::default()
-        });
+        let grid = ResultGrid::new(
+            QueryResult {
+                columns: vec![
+                    DbColumn {
+                        name: "id".into(),
+                        data_type: Some("int4".into()),
+                    },
+                    column("note"),
+                ],
+                rows: vec![vec![Some("7".into()), None]],
+                ..QueryResult::default()
+            },
+            Mode::ReadWrite,
+        );
 
         let fields = grid.fields(0);
         assert_eq!(fields.len(), 2);
@@ -1884,11 +1966,14 @@ mod tests {
     #[test]
     fn a_copy_takes_the_whole_value_the_column_could_not_show() {
         let value = "x".repeat(CELL_DISPLAY_LIMIT * 3);
-        let grid = ResultGrid::new(QueryResult {
-            columns: vec![column("a")],
-            rows: vec![vec![Some(value.clone())], vec![None]],
-            ..QueryResult::default()
-        });
+        let grid = ResultGrid::new(
+            QueryResult {
+                columns: vec![column("a")],
+                rows: vec![vec![Some(value.clone())], vec![None]],
+                ..QueryResult::default()
+            },
+            Mode::ReadWrite,
+        );
 
         assert_eq!(grid.cell(0, 0), Some(value.as_str()));
         assert_ne!(
@@ -1903,11 +1988,14 @@ mod tests {
     #[test]
     fn a_short_row_reads_as_absent_rather_than_panicking() {
         // A ragged result set must not be able to abort the render pass.
-        let grid = ResultGrid::new(QueryResult {
-            columns: vec![column("a"), column("b")],
-            rows: vec![vec![Some("only one cell".into())]],
-            ..QueryResult::default()
-        });
+        let grid = ResultGrid::new(
+            QueryResult {
+                columns: vec![column("a"), column("b")],
+                rows: vec![vec![Some("only one cell".into())]],
+                ..QueryResult::default()
+            },
+            Mode::ReadWrite,
+        );
 
         let row = &grid.display[0];
         assert!(!row.is_empty());

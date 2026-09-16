@@ -470,6 +470,20 @@ impl Session {
         }
     }
 
+    /// Every live grid this session holds, across both tab strips. `results`
+    /// and `slot` reach one grid by tab; this reaches all of them, for a
+    /// setting that belongs to the connection rather than to a run --
+    /// `Workspace::set_mode` is the caller.
+    pub(crate) fn grids(&self) -> impl Iterator<Item = &Entity<TableState<ResultGrid>>> {
+        self.queries
+            .iter()
+            .map(|tab| &tab.results)
+            .chain(self.objects.iter().filter_map(|tab| match &tab.body {
+                ObjectBody::Relation { results, .. } => Some(results),
+                ObjectBody::Routine(_) => None,
+            }))
+    }
+
     /// Where a run's state and rows belong. Returning both together is what
     /// keeps a result from landing in one tab's grid with another tab's status.
     pub(crate) fn slot(

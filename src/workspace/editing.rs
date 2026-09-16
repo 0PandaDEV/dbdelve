@@ -12,6 +12,11 @@ impl Workspace {
     /// Requires a schema and a table and not a primary key, which is why this
     /// is offered on relations the grid refuses to edit.
     pub(crate) fn new_row(&mut self, _: &NewRow, window: &mut Window, cx: &mut Context<Self>) {
+        // Does not route through `editable`: an insert has no existing row to
+        // check a column of, so the mode is asked outright.
+        if !self.require(Mode::ReadWrite, cx) {
+            return;
+        }
         self.clear_notice();
         let Some(profile) = self.profile() else {
             return;
@@ -362,6 +367,12 @@ impl Workspace {
             return;
         }
 
+        // A mode refusal has an action attached -- raise the mode -- and a
+        // status-bar notice has nowhere to put it.
+        if !self.require(Mode::ReadWrite, cx) {
+            return;
+        }
+
         // Which of the two refusals this is, read off `editable` rather than off
         // an edit target the grid deliberately does not expose: a result Slate
         // cannot trace to one table has no editable cell anywhere in the row,
@@ -383,6 +394,9 @@ impl Workspace {
     /// the `NULL` beside an open cell input — one action behind all three, so
     /// none of them can mean something different (spec §3).
     pub(crate) fn set_null(&mut self, _: &SetNull, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.require(Mode::ReadWrite, cx) {
+            return;
+        }
         let Some(profile) = self.profile() else {
             return;
         };
@@ -417,6 +431,11 @@ impl Workspace {
     /// is not: a destructive write one fat finger from a navigation key is a
     /// write nobody asked for. The palette row is how it is reached.
     pub(crate) fn delete_row(&mut self, _: &DeleteRow, _: &mut Window, cx: &mut Context<Self>) {
+        // Does not route through `editable`: `row_key` answers "can this row be
+        // named" and is true regardless of mode, so the mode is asked outright.
+        if !self.require(Mode::ReadWrite, cx) {
+            return;
+        }
         self.clear_notice();
         let engine = self.engine();
         let Some(profile) = self.profile() else {
