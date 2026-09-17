@@ -923,47 +923,49 @@ impl Destructive {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Verdict {
     pub(crate) mode: Mode,
-    pub(crate) destructive: Option<Destructive>,
+    /// **Every** destructive kind the submission carries, in the order it
+    /// carries them -- not just the first. Suppression is per kind (spec §6),
+    /// so a single slot let one silenced kind mask another:
+    /// `DROP TABLE a; TRUNCATE TABLE b` with DROP silenced ran both, and
+    /// nobody was ever asked about the TRUNCATE.
+    pub(crate) destructive: Vec<Destructive>,
 }
 
 impl Verdict {
     const READ: Self = Self {
         mode: Mode::ReadOnly,
-        destructive: None,
+        destructive: Vec::new(),
     };
     const WRITE: Self = Self {
         mode: Mode::ReadWrite,
-        destructive: None,
+        destructive: Vec::new(),
     };
     const FULL: Self = Self {
         mode: Mode::Full,
-        destructive: None,
+        destructive: Vec::new(),
     };
 
     fn destroys(kind: Destructive) -> Self {
         Self {
             mode: Mode::Full,
-            destructive: Some(kind),
+            destructive: vec![kind],
         }
     }
 
-    /// The more restrictive of two verdicts. A tie prefers the one that can name
-    /// what it destroys, so the confirmation has something to say.
-    fn max(self, other: Self) -> Self {
-        match other.mode.cmp(&self.mode) {
-            std::cmp::Ordering::Greater => other,
-            std::cmp::Ordering::Less => self,
-            std::cmp::Ordering::Equal => {
-                if self.destructive.is_some() {
-                    self
-                } else {
-                    other
-                }
+    /// The more restrictive of two verdicts: the higher mode, and the union of
+    /// what they destroy. A kind only ever arrives with `Mode::Full`, so taking
+    /// the union never smuggles a destructive kind under a lower mode.
+    fn max(mut self, other: Self) -> Self {
+        self.mode = self.mode.max(other.mode);
+        for kind in other.destructive {
+            if !self.destructive.contains(&kind) {
+                self.destructive.push(kind);
             }
         }
+        self
     }
 }
 
@@ -1177,17 +1179,27 @@ pub(crate) enum Stop {
 }
 
 /// Whether the mode stops this statement. `None` means run it.
-pub(crate) fn gate(verdict: Verdict, mode: Mode, confirmed: &[Destructive]) -> Option<Stop> {
-    match verdict.destructive {
-        // Tested before the mode comparison, because it is the one verdict
-        // whose remedy is not a mode change: every typo lands here, and asking
-        // someone to raise a connection to Full to get a syntax error back
-        // would teach them to live in Full.
-        Some(Destructive::Unreadable) => Some(Stop::RunOnce),
-        _ if verdict.mode > mode => Some(Stop::Upgrade(verdict.mode)),
-        Some(kind) if !confirmed.contains(&kind) => Some(Stop::Confirm(kind)),
-        _ => None,
+pub(crate) fn gate(verdict: &Verdict, mode: Mode, confirmed: &[Destructive]) -> Option<Stop> {
+    // Tested before the mode comparison, because it is the one verdict whose
+    // remedy is not a mode change: every typo lands here, and asking someone to
+    // raise a connection to Full to get a syntax error back would teach them to
+    // live in Full.
+    if verdict.destructive.contains(&Destructive::Unreadable) {
+        return Some(Stop::RunOnce);
     }
+    if verdict.mode > mode {
+        return Some(Stop::Upgrade(verdict.mode));
+    }
+    // The first kind nobody has silenced, and only that one: the dialog names
+    // one kind at a time, so confirming it and re-running prompts for the next.
+    // Two dialogs for `DROP TABLE a; TRUNCATE TABLE b` is the acceptable cost of
+    // never running a kind this connection was not asked about.
+    verdict
+        .destructive
+        .iter()
+        .find(|kind| !confirmed.contains(kind))
+        .copied()
+        .map(Stop::Confirm)
 }
 
 #[cfg(test)]
@@ -2266,6 +2278,14 @@ mod tests {
                 Mode::Full,
                 Some(Destructive::Unreadable),
             ),
+            // A normal thing to type at a SQLite database, and the crate does not
+            // accept it under any dialect -- spec §3.4, and the reason shape C
+            // exists at all.
+            (
+                "PRAGMA table_info(t)",
+                Mode::Full,
+                Some(Destructive::Unreadable),
+            ),
         ];
 
         for (sql, mode, destructive) in cases {
@@ -2273,7 +2293,7 @@ mod tests {
                 classify(Engine::Postgres, sql),
                 Verdict {
                     mode: *mode,
-                    destructive: *destructive,
+                    destructive: destructive.iter().copied().collect(),
                 },
                 "{sql}"
             );
@@ -2290,7 +2310,7 @@ mod tests {
             classify(Engine::Postgres, delete),
             Verdict {
                 mode: Mode::Full,
-                destructive: Some(Destructive::UnfilteredDelete),
+                destructive: vec![Destructive::UnfilteredDelete],
             }
         );
 
@@ -2319,7 +2339,7 @@ mod tests {
                 classify(Engine::Postgres, sql),
                 Verdict {
                     mode: Mode::Full,
-                    destructive: Some(Destructive::UnfilteredDelete),
+                    destructive: vec![Destructive::UnfilteredDelete],
                 },
                 "{sql}"
             );
@@ -2348,26 +2368,43 @@ mod tests {
             assert_eq!(classify(engine, "SELECT 1").mode, Mode::ReadOnly, "{engine:?}");
             assert_eq!(
                 classify(engine, "DROP TABLE t").destructive,
-                Some(Destructive::Drop),
+                vec![Destructive::Drop],
                 "{engine:?}"
             );
             assert_eq!(
                 classify(engine, "DELETE FROM t").destructive,
-                Some(Destructive::UnfilteredDelete),
+                vec![Destructive::UnfilteredDelete],
                 "{engine:?}"
             );
         }
 
-        // CREATE FUNCTION parses only under Postgres; elsewhere it is unreadable,
-        // which is Full either way.
+        // CREATE FUNCTION parses only under Postgres, where its opaque body makes
+        // it Full outright; elsewhere it is unreadable, which is Full too but by a
+        // different route and with a different dialog.
+        let create_function = "CREATE FUNCTION f() RETURNS int AS $$ SELECT 1 $$";
         assert_eq!(
-            classify(
-                Engine::MySql,
-                "CREATE FUNCTION f() RETURNS int AS $$ SELECT 1 $$"
-            )
-            .destructive,
-            Some(Destructive::Unreadable)
+            classify(Engine::Postgres, create_function),
+            Verdict {
+                mode: Mode::Full,
+                destructive: Vec::new(),
+            }
         );
+        assert_eq!(
+            classify(Engine::MySql, create_function).destructive,
+            vec![Destructive::Unreadable]
+        );
+
+        // COMMENT ON is the other measured divergence: a write on Postgres, and
+        // syntax the crate does not accept under the other two dialects.
+        let comment = "COMMENT ON TABLE t IS 'hello'";
+        assert_eq!(classify(Engine::Postgres, comment).mode, Mode::ReadWrite);
+        for engine in [Engine::MySql, Engine::Sqlite] {
+            assert_eq!(
+                classify(engine, comment).destructive,
+                vec![Destructive::Unreadable],
+                "{engine:?}"
+            );
+        }
     }
 
     #[test]
@@ -2380,34 +2417,60 @@ mod tests {
     fn the_gate_offers_exactly_the_mode_a_statement_needs() {
         let write = Verdict {
             mode: Mode::ReadWrite,
-            destructive: None,
+            destructive: Vec::new(),
         };
         let drop = Verdict {
             mode: Mode::Full,
-            destructive: Some(Destructive::Drop),
+            destructive: vec![Destructive::Drop],
         };
 
-        assert_eq!(gate(Verdict::READ, Mode::ReadOnly, &[]), None);
+        assert_eq!(gate(&Verdict::READ, Mode::ReadOnly, &[]), None);
         assert_eq!(
-            gate(write, Mode::ReadOnly, &[]),
+            gate(&write, Mode::ReadOnly, &[]),
             Some(Stop::Upgrade(Mode::ReadWrite))
         );
         // Full, not Read-write: offering an intermediate mode that still refuses is
         // a second dialog dressed as a first.
         assert_eq!(
-            gate(drop, Mode::ReadOnly, &[]),
+            gate(&drop, Mode::ReadOnly, &[]),
             Some(Stop::Upgrade(Mode::Full))
         );
-        assert_eq!(gate(write, Mode::ReadWrite, &[]), None);
+        assert_eq!(gate(&write, Mode::ReadWrite, &[]), None);
         assert_eq!(
-            gate(drop, Mode::Full, &[]),
+            gate(&drop, Mode::Full, &[]),
             Some(Stop::Confirm(Destructive::Drop))
         );
-        assert_eq!(gate(drop, Mode::Full, &[Destructive::Drop]), None);
+        assert_eq!(gate(&drop, Mode::Full, &[Destructive::Drop]), None);
         // Per kind: silencing DROP says nothing about TRUNCATE.
         assert_eq!(
-            gate(drop, Mode::Full, &[Destructive::Truncate]),
+            gate(&drop, Mode::Full, &[Destructive::Truncate]),
             Some(Stop::Confirm(Destructive::Drop))
+        );
+    }
+
+    /// One silenced kind must not mask another. With DROP silenced,
+    /// `DROP TABLE a; TRUNCATE TABLE b` used to gate to None and run both --
+    /// and the TRUNCATE had never been confirmed on that connection.
+    #[test]
+    fn a_silenced_kind_does_not_silence_the_one_beside_it() {
+        let both = classify(Engine::Postgres, "DROP TABLE a; TRUNCATE TABLE b");
+        assert_eq!(
+            both.destructive,
+            vec![Destructive::Drop, Destructive::Truncate]
+        );
+
+        assert_eq!(
+            gate(&both, Mode::Full, &[Destructive::Drop]),
+            Some(Stop::Confirm(Destructive::Truncate))
+        );
+        // One kind at a time, in the order the submission carries them.
+        assert_eq!(
+            gate(&both, Mode::Full, &[]),
+            Some(Stop::Confirm(Destructive::Drop))
+        );
+        assert_eq!(
+            gate(&both, Mode::Full, &[Destructive::Drop, Destructive::Truncate]),
+            None
         );
     }
 
@@ -2415,18 +2478,18 @@ mod tests {
     fn an_unreadable_statement_never_offers_a_mode_and_never_goes_quiet() {
         let unreadable = Verdict {
             mode: Mode::Full,
-            destructive: Some(Destructive::Unreadable),
+            destructive: vec![Destructive::Unreadable],
         };
 
         // Not Upgrade, in any mode: a typo must never ask to raise a connection to
         // Full in order to receive a syntax error.
         for mode in Mode::ALL {
-            assert_eq!(gate(unreadable, mode, &[]), Some(Stop::RunOnce), "{mode:?}");
+            assert_eq!(gate(&unreadable, mode, &[]), Some(Stop::RunOnce), "{mode:?}");
         }
 
         // Not suppressible even if something contrived writes it into the list.
         assert_eq!(
-            gate(unreadable, Mode::Full, &[Destructive::Unreadable]),
+            gate(&unreadable, Mode::Full, &[Destructive::Unreadable]),
             Some(Stop::RunOnce)
         );
     }

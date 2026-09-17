@@ -529,7 +529,7 @@ impl Workspace {
         // Re-derived rather than trusted from when the prompt was raised: the
         // mode or the silenced list may have changed underneath it (the
         // upgrade arm changes the mode itself, mid-prompt).
-        let stop = sql::gate(pending.verdict, profile.mode, &profile.confirmed)?;
+        let stop = sql::gate(&pending.verdict, profile.mode, &profile.confirmed)?;
         let name = profile.name.clone();
         let current_mode = profile.mode.label();
         let sql = pending.resume.as_ref().map(|resume| resume.sql.clone());

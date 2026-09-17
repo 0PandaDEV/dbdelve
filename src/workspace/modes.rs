@@ -45,7 +45,7 @@ impl Workspace {
             resume: None,
             verdict: sql::Verdict {
                 mode,
-                destructive: None,
+                destructive: Vec::new(),
             },
             dont_ask: false,
         });
@@ -104,7 +104,7 @@ impl Workspace {
         else {
             return;
         };
-        let Some(stop) = sql::gate(verdict, profile.mode, &profile.confirmed) else {
+        let Some(stop) = sql::gate(&verdict, profile.mode, &profile.confirmed) else {
             return;
         };
 

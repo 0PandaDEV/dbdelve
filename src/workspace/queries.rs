@@ -661,7 +661,7 @@ impl Workspace {
         let verdict = sql::classify(self.engine(), &sql);
         let stopped = self
             .profile()
-            .and_then(|profile| sql::gate(verdict, profile.mode, &profile.confirmed));
+            .and_then(|profile| sql::gate(&verdict, profile.mode, &profile.confirmed));
 
         if stopped.is_some() {
             if let Some(profile) = self.profile_mut() {
