@@ -8,7 +8,6 @@ use security_framework::passwords::{self, PasswordOptions};
 use serde::{Deserialize, Serialize};
 
 use crate::db::{Cell, RelationKind};
-use crate::sql::{Destructive, Mode};
 
 const PROFILES_FILE: &str = "profiles.toml";
 const KEYCHAIN_SERVICE: &str = "Slate";
@@ -81,16 +80,21 @@ pub struct StoredProfile {
     /// exactly how it has always been drawn.
     #[serde(default)]
     pub color: Option<String>,
-    /// What this connection is allowed to do. Absent is a profile written
-    /// before modes existed, and reads back as Read-write -- which is what it
-    /// has always been connecting as.
+    /// `sql::Mode::slug()`. Absent is a profile written before modes existed,
+    /// and reads back as Read-write -- which is what it has always been
+    /// connecting as. Stored as the raw slug and decoded in `restore_profile`
+    /// for the same reason `color` is: a value written by a build this one is
+    /// older than must cost the user that one field, not every connection in
+    /// the file.
     #[serde(default)]
-    pub mode: Mode,
-    /// The destructive kinds whose confirmation this connection has silenced.
-    /// Per connection and per kind: silencing DROP on a scratch database says
-    /// nothing about whether you want to be asked on prod.
+    pub mode: Option<String>,
+    /// `sql::Destructive::slug()`, for the kinds whose confirmation this
+    /// connection has silenced. Per connection and per kind: silencing DROP on
+    /// a scratch database says nothing about whether you want to be asked on
+    /// prod. Raw slugs, and an entry this build cannot read is dropped -- that
+    /// kind simply keeps asking, which is the safe direction.
     #[serde(default)]
-    pub confirmed: Vec<Destructive>,
+    pub confirmed: Vec<String>,
     /// The name of the one query buffer a profile had, before a profile could
     /// have several. Read only: nothing writes it any more, and it is kept
     /// because every profile on disk today carries its open query here and
@@ -811,8 +815,8 @@ mod tests {
     }
 
     /// The whole backward-compatibility story: a file written before modes
-    /// existed has neither key, and must load as Read-write with nothing
-    /// silenced.
+    /// existed has neither key, which is what `restore_profile` reads as
+    /// Read-write with nothing silenced.
     #[test]
     fn a_profile_without_a_mode_loads_as_read_write() {
         with_home(|| {
@@ -832,8 +836,47 @@ user = "shayan"
 
             let (profiles, ..) = load_profiles().unwrap();
             let profile = &profiles[0];
-            assert_eq!(profile.mode, Mode::ReadWrite);
+            assert_eq!(profile.mode, None);
             assert!(profile.confirmed.is_empty());
+        });
+    }
+
+    /// A value from a build this one is older than costs that one field, not
+    /// every connection in the file. Both fields were typed enums until this
+    /// test existed, so an unknown mode failed `load_profiles` outright and the
+    /// user lost the lot.
+    #[test]
+    fn a_stored_mode_this_build_cannot_read_does_not_take_the_file_with_it() {
+        with_home(|| {
+            let toml = r#"
+active = "local"
+
+[[profiles]]
+id = "local"
+name = "local"
+host = "localhost"
+database = "postgres"
+user = "shayan"
+mode = "read-append"
+confirmed = ["drop", "shred"]
+
+[[profiles]]
+id = "other"
+name = "other"
+host = "localhost"
+database = "postgres"
+user = "shayan"
+"#;
+            let path = slate_directory().unwrap().join(PROFILES_FILE);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, toml).unwrap();
+
+            let (profiles, ..) = load_profiles().unwrap();
+            assert_eq!(profiles.len(), 2);
+            // Kept raw here; `restore_profile` is where an unreadable slug
+            // becomes a mode, and where it decides which way to fail.
+            assert_eq!(profiles[0].mode.as_deref(), Some("read-append"));
+            assert_eq!(profiles[0].confirmed, vec!["drop", "shred"]);
         });
     }
 
@@ -855,8 +898,8 @@ user = "shayan"
                 statement_timeout: Some(30),
                 next_query_id: Some(1),
                 color: None,
-                mode: Mode::Full,
-                confirmed: vec![Destructive::Drop, Destructive::Truncate],
+                mode: Some("full".into()),
+                confirmed: vec!["drop".into(), "truncate".into()],
                 open_query: None,
                 open_queries: Vec::new(),
                 open_objects: Vec::new(),
@@ -894,7 +937,7 @@ user = "shayan"
             statement_timeout: Some(30),
             next_query_id: Some(7),
             color: None,
-            mode: Mode::default(),
+            mode: None,
             confirmed: Vec::new(),
             open_query: Some("daily".into()),
             open_queries: Vec::new(),
@@ -987,7 +1030,7 @@ open_objects = []
             statement_timeout: None,
             next_query_id: Some(0),
             color: Some(ConnectionColor::Purple.slug().to_string()),
-            mode: Mode::default(),
+            mode: None,
             confirmed: Vec::new(),
             open_query: None,
             open_queries: Vec::new(),
@@ -1048,7 +1091,7 @@ open_objects = []
             statement_timeout: None,
             next_query_id: Some(7),
             color: None,
-            mode: Mode::default(),
+            mode: None,
             confirmed: Vec::new(),
             open_query: None,
             open_queries: Vec::new(),
@@ -1154,7 +1197,7 @@ open_objects = []
             statement_timeout: Some(30),
             next_query_id: Some(7),
             color: None,
-            mode: Mode::default(),
+            mode: None,
             confirmed: Vec::new(),
             open_query: None,
             open_queries: Vec::new(),
@@ -1240,7 +1283,7 @@ open_objects = []
                     statement_timeout: Some(30),
                     next_query_id: Some(2),
                     color: None,
-                    mode: Mode::default(),
+                    mode: None,
                     confirmed: Vec::new(),
                     open_query: None,
                     open_queries: Vec::new(),
@@ -1261,7 +1304,7 @@ open_objects = []
                     statement_timeout: None,
                     next_query_id: None,
                     color: None,
-                    mode: Mode::default(),
+                    mode: None,
                     confirmed: Vec::new(),
                     open_query: None,
                     open_queries: Vec::new(),
@@ -1485,7 +1528,7 @@ open_objects = []
             statement_timeout: Some(30),
             next_query_id: Some(7),
             color: None,
-            mode: Mode::default(),
+            mode: None,
             confirmed: Vec::new(),
             open_query: Some("daily".into()),
             open_queries: vec![
@@ -1741,7 +1784,7 @@ name = \"accounts\"
             statement_timeout: None,
             next_query_id: Some(0),
             color: None,
-            mode: Mode::default(),
+            mode: None,
             confirmed: Vec::new(),
             open_query: None,
             open_queries: Vec::new(),
@@ -1832,7 +1875,7 @@ name = \"accounts\"
             statement_timeout: None,
             next_query_id: Some(0),
             color: None,
-            mode: Mode::default(),
+            mode: None,
             confirmed: Vec::new(),
             open_query: None,
             open_queries: Vec::new(),

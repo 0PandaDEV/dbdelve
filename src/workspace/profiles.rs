@@ -4,7 +4,7 @@
 //! impl live in as many modules as it has concerns; they moved out whole.
 
 use super::*;
-use crate::sql::Mode;
+use crate::sql::{Destructive, Mode};
 
 impl Workspace {
     pub(crate) fn remember_profiles(&mut self, cx: &mut Context<Self>) {
@@ -140,8 +140,27 @@ impl Workspace {
             // A slug this build cannot read is decoration, so it drops to no
             // colour rather than refusing the profile it was written on.
             color: stored.color.as_deref().and_then(ConnectionColor::from_slug),
-            mode: stored.mode,
-            confirmed: stored.confirmed,
+            // No mode at all is a profile written before modes existed, and
+            // Read-write is what it has always been connecting as. A slug this
+            // build cannot read was written by a build that has a mode this one
+            // does not, and it fails closed to Read-only: whatever it named, it
+            // was not a licence this build can vouch for, and the badge says
+            // Read-only where the user can see it and raise it in one click.
+            // Either way the profile loads -- the alternative was every
+            // connection in the file becoming unreadable at once.
+            mode: stored
+                .mode
+                .as_deref()
+                .map_or(Mode::default(), |slug| {
+                    Mode::from_slug(slug).unwrap_or(Mode::ReadOnly)
+                }),
+            // A silenced kind this build cannot read is dropped, which only
+            // means that kind still asks.
+            confirmed: stored
+                .confirmed
+                .iter()
+                .filter_map(|slug| Destructive::from_slug(slug))
+                .collect(),
             generation: 0,
             state: ProfileState::Idle,
             catalog: CatalogState::Loading,

@@ -15,7 +15,7 @@
 
 use std::ops::Range;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 // Aliased: `tree_sitter::Parser` already owns the name `Parser` in this file,
 // and the two parsers are never interchangeable -- see `classify`'s doc.
 use sqlparser::ast::{AlterTableOperation, CopySource, Query, SetExpr, Statement};
@@ -870,7 +870,7 @@ pub(crate) fn appended_statement(buffer: &str, statement: &str) -> String {
 ///
 /// **Variant order is load-bearing**: `Ord` derives from it, and the whole mode
 /// check is `required <= allowed`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum Mode {
     ReadOnly,
@@ -891,12 +891,29 @@ impl Mode {
             Mode::Full => "Full",
         }
     }
+
+    /// How a mode is written to `profiles.toml`: a name rather than a number,
+    /// so the file stays readable and a build that drops a mode still reads
+    /// something it can name in a message.
+    pub(crate) fn slug(self) -> &'static str {
+        match self {
+            Mode::ReadOnly => "read-only",
+            Mode::ReadWrite => "read-write",
+            Mode::Full => "full",
+        }
+    }
+
+    /// `None` for a slug this build does not have. The caller decides what to do
+    /// with that -- `restore_profile` reads it as Read-only rather than refusing
+    /// the profile, let alone the file it came in.
+    pub(crate) fn from_slug(slug: &str) -> Option<Mode> {
+        Mode::ALL.into_iter().find(|mode| mode.slug() == slug)
+    }
 }
 
 /// Why a statement needs Full. Carried so the confirmation can name what it is
 /// about to do, and so a "don't ask again" tick knows what it is silencing.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Destructive {
     Drop,
     Truncate,
@@ -906,13 +923,44 @@ pub(crate) enum Destructive {
 }
 
 impl Destructive {
+    const SUPPRESSIBLE: [Destructive; 3] = [
+        Destructive::Drop,
+        Destructive::Truncate,
+        Destructive::UnfilteredDelete,
+    ];
+
+    /// How the confirmation and the picker name a kind.
     pub(crate) fn label(self) -> &'static str {
         match self {
             Destructive::Drop => "DROP",
             Destructive::Truncate => "TRUNCATE",
             Destructive::UnfilteredDelete => "DELETE without WHERE",
-            Destructive::Unreadable => "unreadable statements",
+            // Unreachable by construction, and the three things that make it so
+            // are worth naming because breaking any one of them lands here:
+            // `gate` answers RunOnce for an unreadable statement and never
+            // Confirm, `suppressible` keeps it out of `confirmed` going in, and
+            // `from_slug` keeps it out coming back off disk.
+            Destructive::Unreadable => unreachable!("an unreadable statement is never named"),
         }
+    }
+
+    /// How a silenced kind is written to `profiles.toml`.
+    pub(crate) fn slug(self) -> &'static str {
+        match self {
+            Destructive::Drop => "drop",
+            Destructive::Truncate => "truncate",
+            Destructive::UnfilteredDelete => "unfiltered-delete",
+            Destructive::Unreadable => "unreadable",
+        }
+    }
+
+    /// `None` for anything that has no business in a silenced list -- a slug this
+    /// build does not have, and `unreadable`, which §5.3 says is never
+    /// suppressible however it got written there.
+    pub(crate) fn from_slug(slug: &str) -> Option<Destructive> {
+        Destructive::SUPPRESSIBLE
+            .into_iter()
+            .find(|kind| kind.slug() == slug)
     }
 
     /// Whether a "don't ask again" tick may silence this kind. Never for
@@ -2405,6 +2453,25 @@ mod tests {
                 "{engine:?}"
             );
         }
+    }
+
+    /// What `restore_profile` reads off disk. A slug this build does not have
+    /// must be answerable, not fatal -- the alternative was one unknown value
+    /// costing the user every connection in the file.
+    #[test]
+    fn a_stored_slug_this_build_cannot_read_is_answerable() {
+        for mode in Mode::ALL {
+            assert_eq!(Mode::from_slug(mode.slug()), Some(mode));
+        }
+        assert_eq!(Mode::from_slug("read-append"), None);
+
+        for kind in Destructive::SUPPRESSIBLE {
+            assert_eq!(Destructive::from_slug(kind.slug()), Some(kind));
+        }
+        assert_eq!(Destructive::from_slug("shred"), None);
+        // Never silenceable however it got written there, which is also what
+        // keeps `Destructive::label` from ever being asked about it.
+        assert_eq!(Destructive::from_slug(Destructive::Unreadable.slug()), None);
     }
 
     #[test]

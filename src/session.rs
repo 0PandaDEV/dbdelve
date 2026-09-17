@@ -111,8 +111,12 @@ impl Profile {
             statement_timeout: Some(self.config.statement_timeout()),
             next_query_id: Some(self.session.next_query_id),
             color: self.color.map(|color| color.slug().to_string()),
-            mode: self.mode,
-            confirmed: self.confirmed.clone(),
+            mode: Some(self.mode.slug().to_string()),
+            confirmed: self
+                .confirmed
+                .iter()
+                .map(|kind| kind.slug().to_string())
+                .collect(),
             // Nothing writes the legacy scalar any more; a buffer's name is a
             // property of its tab now. Kept on the stored shape only so a
             // profile written by an older build still loads with its buffer.
