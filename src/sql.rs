@@ -971,7 +971,9 @@ impl Destructive {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+// No `Default`: it would inherit `Mode`'s, handing out a Read-write verdict to
+// anyone who reached for it. A verdict is something `classify` concludes.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Verdict {
     pub(crate) mode: Mode,
     /// **Every** destructive kind the submission carries, in the order it
@@ -1238,10 +1240,12 @@ pub(crate) fn gate(verdict: &Verdict, mode: Mode, confirmed: &[Destructive]) -> 
     if verdict.mode > mode {
         return Some(Stop::Upgrade(verdict.mode));
     }
-    // The first kind nobody has silenced, and only that one: the dialog names
-    // one kind at a time, so confirming it and re-running prompts for the next.
-    // Two dialogs for `DROP TABLE a; TRUNCATE TABLE b` is the acceptable cost of
-    // never running a kind this connection was not asked about.
+    // The first kind nobody has silenced, and only that one: the dialog names a
+    // single kind, and confirming it runs the whole submission -- so
+    // `DROP TABLE a; TRUNCATE TABLE b` asks about the `DROP` and then runs both.
+    // What the set buys is narrower than one confirmation per kind: it stops a
+    // silenced kind from masking an unsilenced one, which a single slot did.
+    // The dialog renders the submission, so what Run covers is on screen.
     verdict
         .destructive
         .iter()
