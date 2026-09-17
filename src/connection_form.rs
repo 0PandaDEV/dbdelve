@@ -176,7 +176,10 @@ impl ConnectionForm {
         let mut form = Self::new(Some(&profile.config), window, cx);
         form.editing = Some(profile.id.clone());
         form.color = profile.color;
-        form.mode = profile.mode;
+        // No `form.mode` here: the chip row draws only on a fresh form and
+        // `save_profile` has no mode to take, so copying it in was a write
+        // nothing ever read. The titlebar picker is where an existing
+        // connection's mode changes.
         form.name.update(cx, |name, cx| {
             name.set_value(profile.name.clone(), window, cx);
         });
