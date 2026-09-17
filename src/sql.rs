@@ -2536,7 +2536,11 @@ mod tests {
             Some(Stop::Confirm(Destructive::Drop))
         );
         assert_eq!(
-            gate(&both, Mode::Full, &[Destructive::Drop, Destructive::Truncate]),
+            gate(
+                &both,
+                Mode::Full,
+                &[Destructive::Drop, Destructive::Truncate]
+            ),
             None
         );
     }
@@ -2551,7 +2555,11 @@ mod tests {
         // Not Upgrade, in any mode: a typo must never ask to raise a connection to
         // Full in order to receive a syntax error.
         for mode in Mode::ALL {
-            assert_eq!(gate(&unreadable, mode, &[]), Some(Stop::RunOnce), "{mode:?}");
+            assert_eq!(
+                gate(&unreadable, mode, &[]),
+                Some(Stop::RunOnce),
+                "{mode:?}"
+            );
         }
 
         // Not suppressible even if something contrived writes it into the list.

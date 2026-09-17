@@ -148,12 +148,9 @@ impl Workspace {
             // Read-only where the user can see it and raise it in one click.
             // Either way the profile loads -- the alternative was every
             // connection in the file becoming unreadable at once.
-            mode: stored
-                .mode
-                .as_deref()
-                .map_or(Mode::default(), |slug| {
-                    Mode::from_slug(slug).unwrap_or(Mode::ReadOnly)
-                }),
+            mode: stored.mode.as_deref().map_or(Mode::default(), |slug| {
+                Mode::from_slug(slug).unwrap_or(Mode::ReadOnly)
+            }),
             // A silenced kind this build cannot read is dropped, which only
             // means that kind still asks.
             confirmed: stored
