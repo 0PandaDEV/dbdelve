@@ -18,7 +18,7 @@ use std::ops::Range;
 use serde::{Deserialize, Serialize};
 // Aliased: `tree_sitter::Parser` already owns the name `Parser` in this file,
 // and the two parsers are never interchangeable -- see `classify`'s doc.
-use sqlparser::ast::{AlterTableOperation, Query, SetExpr, Statement};
+use sqlparser::ast::{AlterTableOperation, CopySource, Query, SetExpr, Statement};
 use sqlparser::dialect::{Dialect, MySqlDialect, PostgreSqlDialect, SQLiteDialect};
 use sqlparser::parser::Parser as SqlParser;
 use tree_sitter::{Node, Parser, Tree};
@@ -995,11 +995,48 @@ pub(crate) fn classify(engine: Engine, sql: &str) -> Verdict {
         .fold(Verdict::READ, Verdict::max)
 }
 
+/// The lowest mode that may run one statement: what its variant earns, raised
+/// by whatever the `Query` it owns turns out to contain.
+///
+/// The second half is never optional. A `Query` in any position can carry a
+/// data-modifying CTE, so
+/// `COPY (WITH x AS (DELETE FROM t RETURNING a) SELECT a FROM x) TO STDOUT`
+/// empties a table under a variant that reads as `COPY TO`.
 fn statement_verdict(statement: &Statement) -> Verdict {
+    let verdict = variant_verdict(statement);
+    match owned_query(statement) {
+        Some(query) => verdict.max(query_verdict(query)),
+        None => verdict,
+    }
+}
+
+/// The `Query` a statement owns, if it owns one.
+///
+/// One place rather than a recursion inside each arm, so a variant added to
+/// `variant_verdict` inherits the CTE check instead of having to remember it.
+/// Four variants here already held a `Query` the classifier never looked into
+/// (spec §3.5), which is what that costs.
+fn owned_query(statement: &Statement) -> Option<&Query> {
     match statement {
-        // Not classified by its variant: a CTE can hold a DELETE. See
-        // `query_verdict`.
-        Statement::Query(query) => query_verdict(query),
+        Statement::Query(query) => Some(query),
+        Statement::Copy {
+            source: CopySource::Query(query),
+            ..
+        } => Some(query),
+        Statement::CreateTable(create) => create.query.as_deref(),
+        Statement::CreateView(create) => Some(&create.query),
+        Statement::Insert(insert) => insert.source.as_deref(),
+        _ => None,
+    }
+}
+
+/// What a statement's variant alone says. Never called directly: the fold in
+/// `statement_verdict` is the half that reads what the variant is carrying.
+fn variant_verdict(statement: &Statement) -> Verdict {
+    match statement {
+        // Read only as a variant. Everything dangerous a query can hold is
+        // inside it, and `statement_verdict` folds that in.
+        Statement::Query(_) => Verdict::READ,
 
         // `EXPLAIN ANALYZE DELETE FROM t` runs the delete -- documented in
         // Postgres, and in MySQL since 8.0.18. Slate never sends it to SQLite:
@@ -1030,6 +1067,9 @@ fn statement_verdict(statement: &Statement) -> Verdict {
         | Statement::ShowVariable { .. }
         | Statement::ShowVariables { .. }
         | Statement::ShowViews { .. }
+        // A deliberate exception to the wildcard: `USE db` repoints the session
+        // and touches no data, so refusing it in Read-only would refuse
+        // navigation, not damage.
         | Statement::Use { .. }
         | Statement::Set { .. }
         | Statement::StartTransaction { .. }
@@ -1097,6 +1137,9 @@ fn query_verdict(query: &Query) -> Verdict {
 
 fn set_expr_verdict(body: &SetExpr) -> Verdict {
     match body {
+        // `SELECT * INTO newt FROM t` is DDL wearing a select's clothes: same
+        // variant as a read, one field apart, and it creates a table.
+        SetExpr::Select(select) if select.into.is_some() => Verdict::WRITE,
         SetExpr::Select(_) | SetExpr::Values(_) | SetExpr::Table(_) => Verdict::READ,
         SetExpr::Query(query) => query_verdict(query),
         SetExpr::SetOperation { left, right, .. } => {
@@ -2256,6 +2299,45 @@ mod tests {
 
         let update = "WITH x AS (UPDATE t SET a = 1 WHERE id = 2 RETURNING *) SELECT * FROM x";
         assert_eq!(classify(Engine::Postgres, update).mode, Mode::ReadWrite);
+    }
+
+    /// Four variants own a `Query` besides `Statement::Query`, and classifying
+    /// any of them by its variant alone runs a DELETE from the mode that
+    /// forbids it. The first two were verified against a live Postgres: three
+    /// rows became zero, with no dialog. Spec §3.5.
+    #[test]
+    fn classify_sees_a_cte_wherever_the_query_hangs() {
+        let cases = [
+            "COPY (WITH x AS (DELETE FROM t RETURNING a) SELECT a FROM x) TO STDOUT",
+            "CREATE TABLE n AS WITH x AS (DELETE FROM t RETURNING a) SELECT a FROM x",
+            "CREATE VIEW v AS WITH x AS (DELETE FROM t RETURNING a) SELECT a FROM x",
+            "INSERT INTO n (a) WITH x AS (DELETE FROM t RETURNING a) SELECT a FROM x",
+        ];
+
+        for sql in cases {
+            assert_eq!(
+                classify(Engine::Postgres, sql),
+                Verdict {
+                    mode: Mode::Full,
+                    destructive: Some(Destructive::UnfilteredDelete),
+                },
+                "{sql}"
+            );
+        }
+    }
+
+    /// `SELECT … INTO` creates a table. It is `Statement::Query` over a
+    /// `SetExpr::Select`, so only `Select.into` tells it apart from a read.
+    #[test]
+    fn select_into_is_a_write() {
+        assert_eq!(
+            classify(Engine::Postgres, "SELECT * INTO newt FROM t").mode,
+            Mode::ReadWrite
+        );
+        assert_eq!(
+            classify(Engine::Postgres, "SELECT * FROM t").mode,
+            Mode::ReadOnly
+        );
     }
 
     /// One AST, three dialects. Two statements genuinely differ and are asserted as
