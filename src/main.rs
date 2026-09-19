@@ -41,7 +41,7 @@ use actions::{
     CopyCell, CycleTheme, DeleteRow, DiscardEdits, EditCell, ExplainQuery, FollowForeignKey,
     FuzzyOpen, NewConnection, NewQuery, NewRow, NextPage, NextProfile, NextTab, OpenSettings,
     PaletteNext, PalettePrevious, PreviousPage, PreviousProfile, PreviousTab, Quit, RemoveFilter,
-    ResetConfirmations, ResetEditorZoom, RunQuery, SaveQuery, SetFilterColumn, SetFilterOperator,
+    RequestWriteMode, ResetConfirmations, ResetEditorZoom, RunQuery, SaveQuery, SetFilterColumn, SetFilterOperator,
     SetFilterRaw, SetMode, SetNull, SetRowLimit, ShowEditor, SortColumn, ToggleFilterJoin,
     ToggleNextJoin, ToggleSidebar, ZoomEditorIn, ZoomEditorOut,
 };

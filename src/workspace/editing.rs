@@ -367,12 +367,10 @@ impl Workspace {
             return;
         }
 
-        // A mode refusal has an action attached -- raise the mode -- and a
-        // status-bar notice has nowhere to put it.
-        if !self.require(Mode::ReadWrite, cx) {
-            return;
-        }
-
+        // Only structure can refuse an open now: a mode too low still opens the
+        // cell, so a value can be selected and copied out of it, and refuses at
+        // the commit -- which is where the mode prompt is raised.
+        //
         // Which of the two refusals this is, read off `editable` rather than off
         // an edit target the grid deliberately does not expose: a result Slate
         // cannot trace to one table has no editable cell anywhere in the row,
@@ -394,9 +392,6 @@ impl Workspace {
     /// the `NULL` beside an open cell input — one action behind all three, so
     /// none of them can mean something different (spec §3).
     pub(crate) fn set_null(&mut self, _: &SetNull, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.require(Mode::ReadWrite, cx) {
-            return;
-        }
         let Some(profile) = self.profile() else {
             return;
         };
@@ -421,7 +416,25 @@ impl Workspace {
             results.focus_handle(cx).focus(window);
             return;
         }
+        // Asked after the attempt rather than before it, so nulling a cell the
+        // server already left NULL -- which changes nothing -- does not ask a
+        // Read-only connection to raise its mode for it.
+        if !self.require(Mode::ReadWrite, cx) {
+            return;
+        }
         self.note("This column cannot be edited.".into(), cx);
+    }
+
+    /// The grid's own commit was refused by the mode. It has nowhere to say so
+    /// and no way to offer the one thing that answers it, so the input stays
+    /// open behind this prompt and `enter` again commits what was typed.
+    pub(crate) fn request_write_mode(
+        &mut self,
+        _: &RequestWriteMode,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.require(Mode::ReadWrite, cx);
     }
 
     /// Generate the one-row `DELETE` and show it. **Nothing runs here** — Run in

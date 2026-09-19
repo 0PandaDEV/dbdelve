@@ -1,10 +1,12 @@
 use gpui::{
-    App, AppContext, Context, Entity, Focusable, InteractiveElement, IntoElement, ParentElement,
-    SharedString, StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px,
+    App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
+    MouseButton, ParentElement, SharedString, StatefulInteractiveElement, Styled, Window, div,
+    prelude::FluentBuilder, px,
 };
 use gpui_component::{
     InteractiveElementExt,
     input::{Input, InputState},
+    menu::PopupMenu,
     table::TableEvent,
     table::{Column, TableDelegate, TableState},
 };
@@ -112,6 +114,11 @@ pub struct ResultGrid {
     /// own double-click handler, which has no route back to the profile.
     /// `Workspace::set_mode` is the only thing that writes it after construction.
     mode: Mode,
+    /// The table's own focus handle, recorded by the right click that opens the
+    /// row menu. The menu dispatches its action into whatever holds focus, and
+    /// `context_menu` is handed the delegate alone -- the table is mid-update
+    /// there, so its handle cannot be read back out of the entity.
+    focus: Option<FocusHandle>,
 }
 
 /// One changed cell, held beside the fetched value rather than over it.
@@ -197,6 +204,7 @@ impl ResultGrid {
             foreign_keys: Vec::new(),
             follow_groups: Vec::new(),
             mode,
+            focus: None,
         }
     }
 
@@ -475,14 +483,10 @@ impl ResultGrid {
     /// back would be written as the text it looks like — see
     /// [`db::is_binary_type`].
     pub fn editable(&self, row: usize, col: usize) -> bool {
-        // Every write the grid can start is behind this one predicate --
-        // `begin_edit`, `set_pending`, `set_null`, `commit_edit`, and
-        // `has_editable_cell`, which hides the palette's entries. Guarding the
-        // four action handlers instead would leave the double-click, which
-        // calls `begin_edit` directly.
-        if self.mode < Mode::ReadWrite {
-            return false;
-        }
+        // Structural only: the mode lives one step further in, on `set_pending`.
+        // A Read-only connection still opens its cells, because an open input is
+        // how a value is selected and copied out of one -- what it refuses is
+        // recording the change, which is where the mode prompt belongs.
         let Some(edit) = &self.result.edit else {
             return false;
         };
@@ -553,6 +557,14 @@ impl ResultGrid {
             self.pending
                 .retain(|edit| (edit.row, edit.col) != (row, col));
             return true;
+        }
+
+        // The one mode gate behind every write the grid can start -- the input's
+        // commit, `set_null`, and the double-click that reaches both. Below the
+        // no-op above on purpose: closing an input without typing is not an edit,
+        // and a Read-only connection should not be asked to raise its mode for it.
+        if self.mode < Mode::ReadWrite {
+            return false;
         }
 
         let value: Option<SharedString> = value.map(SharedString::from);
@@ -714,19 +726,23 @@ impl ResultGrid {
         Some(input)
     }
 
-    /// Take the open input's value into the pending set.
-    fn commit_edit(&mut self, cx: &App) {
-        let Some(editing) = self.editing.take() else {
-            return;
+    /// Take the open input's value into the pending set. `false` when the mode
+    /// refused the write, and the input is left open then: the prompt its caller
+    /// raises is answered by raising the mode and pressing `enter` again.
+    fn commit_edit(&mut self, cx: &App) -> bool {
+        let Some(editing) = self.editing.as_ref() else {
+            return true;
         };
-        let Some(input) = editing.input else {
-            return;
+        let (row, col) = (editing.row, editing.col);
+        let Some(input) = editing.input.clone() else {
+            self.editing = None;
+            return true;
         };
-        self.set_pending(
-            editing.row,
-            editing.col,
-            Some(input.read(cx).value().to_string()),
-        );
+        if !self.set_pending(row, col, Some(input.read(cx).value().to_string())) {
+            return false;
+        }
+        self.editing = None;
+        true
     }
 }
 
@@ -873,6 +889,30 @@ impl TableDelegate for ResultGrid {
         }))
     }
 
+    /// The mouse's way to a `NULL`. An input cannot be typed empty into one --
+    /// the empty string is a different write (spec §3) -- so the gesture that
+    /// used to be a word beside the open input is this menu, which reaches the
+    /// same action the keystroke and the palette reach.
+    ///
+    /// Nothing for a cell that cannot be written at all; an empty menu is not
+    /// opened. A mode too low is not that: the entry is offered and the prompt
+    /// is what answers it, the same way the keystroke behaves.
+    fn context_menu(
+        &mut self,
+        _: usize,
+        menu: PopupMenu,
+        _: &mut Window,
+        _: &mut Context<TableState<Self>>,
+    ) -> PopupMenu {
+        // The right click that opened this pinned the cell on its way past
+        // `render_td`, so the column the library never records is known here.
+        if !self.active.is_some_and(|(row, col)| self.editable(row, col)) {
+            return menu;
+        }
+        menu.when_some(self.focus.clone(), PopupMenu::action_context)
+            .menu("Set Value to NULL", Box::new(crate::SetNull))
+    }
+
     fn render_td(
         &mut self,
         row_ix: usize,
@@ -898,7 +938,22 @@ impl TableDelegate for ResultGrid {
                 cell.border_color(active_ring)
             })
             .flex()
-            .items_center();
+            .items_center()
+            // The row menu is the library's, and it records the row a right
+            // click landed on and never the column, so the cell is pinned here
+            // the way the left click pins it. Focus with it: the menu dispatches
+            // its action into whatever holds focus when it is confirmed.
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |table, _, window, cx| {
+                    let handle = table.focus_handle(cx);
+                    handle.focus(window);
+                    let grid = table.delegate_mut();
+                    grid.set_active(row_ix, col_ix);
+                    grid.focus = Some(handle);
+                    cx.notify();
+                }),
+            );
 
         if let Some(input) = self.editing_input(row_ix, col_ix, window, cx) {
             return base
@@ -920,26 +975,21 @@ impl TableDelegate for ResultGrid {
                             .text_size(px(layout::TEXT_MD)),
                     ),
                 )
-                // How the action is found. It dispatches rather than nulling the
-                // cell itself, so the button and the keystroke cannot drift.
-                .child(
-                    div()
-                        .id(("null", row_ix * self.columns.len() + col_ix))
-                        .flex_shrink_0()
-                        .italic()
-                        .text_color(faint)
-                        .child(NULL_LABEL)
-                        .on_click(cx.listener(move |_, _, window, cx| {
-                            window.dispatch_action(Box::new(crate::SetNull), cx);
-                        })),
-                )
                 // The input has focus, so both keystrokes arrive here on their
                 // way out of it. Consumed rather than propagated: `escape`
                 // otherwise reaches the workspace and moves focus to the editor.
                 .on_action(cx.listener(
                     move |table, _: &gpui_component::input::Enter, window, cx| {
-                        table.delegate_mut().commit_edit(cx);
-                        table.focus_handle(cx).focus(window);
+                        match table.delegate_mut().commit_edit(cx) {
+                            true => table.focus_handle(cx).focus(window),
+                            // A mode refusal has an action attached -- raise the
+                            // mode -- and the grid has nowhere to put one. The
+                            // input stays open behind the prompt, so answering it
+                            // and pressing `enter` again commits what was typed.
+                            false => {
+                                window.dispatch_action(Box::new(crate::RequestWriteMode), cx)
+                            }
+                        }
                         cx.stop_propagation();
                         cx.notify();
                     },
@@ -1408,13 +1458,20 @@ mod tests {
         assert!(grid.editable(0, 1), "`note` is the editable column");
 
         grid.set_mode(Mode::ReadOnly);
-        assert!(!grid.editable(0, 1));
-        // The guard is in `editable`, so everything downstream of it follows.
-        assert!(!grid.begin_edit(0, 1));
+        // The cell still opens -- that is how a value is selected and copied
+        // out of one -- and refuses at the write, which is what raises the
+        // mode prompt.
+        assert!(grid.begin_edit(0, 1));
         assert!(!grid.set_pending(0, 1, Some("x".into())));
+        assert!(grid.pending_updates().is_empty());
+        // Recording nothing is not a write, so it is not asked to be one.
+        assert!(grid.set_pending(0, 1, grid.cell(0, 1).map(str::to_owned)));
+        grid.cancel_edit();
 
         grid.set_mode(Mode::ReadWrite);
-        assert!(grid.editable(0, 1), "raising the mode gives the cell back");
+        assert!(grid.set_pending(0, 1, Some("x".into())));
+        assert!(!grid.pending_updates().is_empty(), "raising the mode writes");
+        grid.discard_pending();
 
         // Not a mode question: a key column stays uneditable at every mode.
         grid.set_mode(Mode::Full);
