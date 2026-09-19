@@ -30,6 +30,13 @@ impl Workspace {
         // see `Connection::set_read_only`. `query` blocks on the connection
         // mutex, so it goes to the background executor rather than running
         // here, same as `cancel_query` (queries.rs).
+        //
+        // ponytail: nothing orders these tasks against each other, so flipping
+        // modes faster than a round trip can land them out of order and leave
+        // the session held the opposite way to the mode on screen. Survivable
+        // because `sql::gate` is the boundary and is unaffected -- what goes
+        // stale is the backstop, not the protection. Stamp each task with a
+        // per-profile counter and drop the stale ones if it ever matters.
         let Some(connection) = self.profile().and_then(Profile::connection) else {
             return;
         };
