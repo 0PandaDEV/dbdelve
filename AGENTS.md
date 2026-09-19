@@ -279,13 +279,20 @@ Three things in it are load-bearing:
 - **The font licences ship inside the bundle**, because the fonts are compiled
   into the binary and the OFL asks the licence to travel with them.
 
-**There is no notarization and no Developer ID.** The bundle is fine to build
-and run locally — a binary compiled on the machine it runs on is never
-quarantined — but it is not something to hand to anyone else: an ad-hoc
-signature fails Gatekeeper on every machine but this one. That decision is open
-and deliberate; see the release audit named in `HANDOFF.md` before revisiting
-it, and note the warning there that gpui may need `allow-jit` entitlements
-under a hardened runtime, which is untested.
+**There is still no notarization and no Developer ID**, but the app is no
+longer stuck on this machine. `dev/release.sh` builds with `dev/bundle.sh`
+(`SLATE_SIGN_ID=- SLATE_INSTALL=0`, so it stops short of the install step
+above), wraps `target/Slate.app` into `target/Slate-$VERSION.dmg` with an
+`/Applications` symlink alongside it, publishes the DMG with
+`gh release create`, and rewrites `Casks/slate.rb` in the
+`ShayanAbbas1/homebrew-slate` tap (found at `../homebrew-slate`, override with
+`SLATE_TAP`) to point at it. A release still signs ad-hoc rather than with
+`dev/identity.sh`'s certificate: that certificate is trusted only on this
+machine, and to Gatekeeper an issuer nobody trusts reads worse than no issuer
+at all. The trade is that the ad-hoc hash moves with every release, so an
+update costs one fresh Keychain prompt. Installing still means clearing
+quarantine by hand — `xattr -dr com.apple.quarantine /Applications/Slate.app`
+— since nothing here is notarized.
 
 ### Engine divergences
 

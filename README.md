@@ -129,21 +129,41 @@ rm -f dev/slate_dev.db && sqlite3 dev/slate_dev.db < dev/sqlite/001-slate-demo.s
 
 ## Installing
 
-There are no downloads. Build it:
+Apple Silicon, macOS 12 or later.
 
 ```sh
-dev/bundle.sh
+brew install --cask ShayanAbbas1/slate/slate
 ```
 
-That produces `/Applications/Slate.app` — release build, icon, signature and
-all. It is signed ad-hoc unless you give it an identity, which is fine for the
-machine that compiled it and no good on any other: there is no Developer ID and
-no notarization yet, so this is a build-it-yourself app rather than one to pass
-around.
+Or take the `.dmg` from [the latest release][releases] and drag Slate to
+Applications.
+
+Either way macOS will refuse to open it the first time. Slate is signed ad-hoc:
+there is no Developer ID behind it and nothing is notarized, so Gatekeeper has
+no name to show you and declines rather than guess. Clearing the quarantine flag
+is the whole of the fix:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/Slate.app
+```
+
+Once per install, not once per launch. A Developer ID is a matter of whether
+anyone ends up using this, not of principle.
+
+To build it yourself instead, `dev/bundle.sh` produces `/Applications/Slate.app`
+— release build, icon, signature and all — and skips the quarantine step,
+because nothing downloaded it.
+
+[releases]: https://github.com/ShayanAbbas1/slate/releases/latest
+
+## Updating
+
+`brew upgrade --cask slate`, if you installed it that way. Otherwise watch
+[the releases page][releases]; Slate does not check for its own updates.
 
 ## Planned
 
-SSH tunneling, notarized builds, and a Homebrew tap.
+SSH tunneling, notarized builds, and an in-app update check.
 
 ## Not planned
 

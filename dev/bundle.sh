@@ -67,6 +67,14 @@ fi
 codesign --force --sign "${SLATE_SIGN_ID:--}" "$APP"
 codesign --verify --strict "$APP"
 
+# dev/release.sh wants the bundle but not the install: the release is signed
+# ad-hoc, and dropping that over /Applications costs the Keychain's "Always
+# Allow" on the copy actually being used day to day.
+if [[ "${SLATE_INSTALL:-1}" != 1 ]]; then
+  echo "built $APP (v$VERSION)"
+  exit 0
+fi
+
 rm -rf "$INSTALLED"
 ditto "$APP" "$INSTALLED"
 
