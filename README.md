@@ -49,7 +49,6 @@ one row named by its primary key. Anything else is refused before it's sent.
 
 Apple Silicon, macOS 12 or later — that's what it's built and tested on. Intel
 and older macOS aren't blocked by anything in the code, they're just untested.
-Open an issue if you want one.
 
 ```sh
 brew install --cask ShayanAbbas1/dbdelve/dbdelve
@@ -60,8 +59,8 @@ Applications.
 
 Either way macOS will refuse to open it the first time. DBDelve is signed
 ad-hoc: there's no Developer ID behind it and nothing is notarized, so
-Gatekeeper has no name to show you and declines rather than guess. Clearing the
-quarantine flag is the whole of the fix:
+Gatekeeper declines. Clearing the
+quarantine flag fixes this:
 
 ```sh
 xattr -dr com.apple.quarantine /Applications/DBDelve.app
@@ -81,10 +80,6 @@ skips the quarantine step because nothing downloaded it.
 `brew upgrade --cask dbdelve`, if you installed it that way. Otherwise watch
 [the releases page][releases]. DBDelve doesn't check for its own updates.
 
-## Not planned
-
-Visual query builders, ER diagrams, migrations. DBDelve assumes you can write
-SQL. It just doesn't make you write all of it.
 
 ## License
 
