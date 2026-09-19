@@ -135,7 +135,12 @@ security-framework = "3"
 guic-gpui-assets = "=0.2.0"
 icondata_lu = "=0.1.0"
 icondata_core = "=0.1.0"
-gpui_platform = { version = "=0.3.5", package = "gpui-pre-platform" }
+# `font-kit` is not in this crate's default features, and without it the macOS
+# backend swaps the text system for `NoopTextSystem` and renders no text at all
+# -- silently, through a `log::warn!` nothing here is listening to.
+gpui_platform = { version = "=0.3.5", package = "gpui-pre-platform", features = [
+    "font-kit",
+] }
 
 # GPUI does layout, text shaping and scene building on the CPU every frame, so
 # an unoptimized gpui drops frames the moment a grid scrolls. Dependencies are
