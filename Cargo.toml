@@ -1,5 +1,5 @@
 [package]
-name = "slate"
+name = "dbdelve"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
@@ -18,14 +18,14 @@ gpui-component = { version = "=0.5.1", features = ["tree-sitter-languages"] }
 #
 # Pinned exactly, for the same reason gpui is. The grammar decides where every
 # statement boundary falls and which statements `sql.rs` refuses to splice into,
-# so a bump changes what Slate sends to the server. It is a correctness
+# so a bump changes what DBDelve sends to the server. It is a correctness
 # dependency, not a formatting one.
 tree-sitter = "=0.25.10"
 tree-sitter-sequel = "=0.3.11"
 
 # The vocabulary gpui-component's completion provider speaks, and nothing more:
 # no language server is started, and none could be -- the completions come from
-# the catalog Slate already loaded. The library re-exports `Position` but not
+# the catalog DBDelve already loaded. The library re-exports `Position` but not
 # `CompletionItem`, so this is a direct dependency on a crate already in the
 # graph. Pinned exactly to the version gpui-component resolves, so the trait we
 # implement and the types we hand it are the same crate rather than two copies.
@@ -39,7 +39,7 @@ postgres = "0.19"
 # SQLite. Blocking like the Postgres driver, and for the same reason.
 #
 # `bundled` compiles the amalgamation instead of linking whatever libsqlite3
-# macOS shipped, so the version and the compile-time options are Slate's rather
+# macOS shipped, so the version and the compile-time options are DBDelve's rather
 # than the OS release's. `column_metadata` is what makes in-grid editing
 # reachable at all: it is the only way to learn that a result column is
 # `accounts.id` and not an expression. `column_decltype` is the type tag.
@@ -78,7 +78,7 @@ hex = "=0.4.3"
 
 # TLS. The driver ships none of its own -- `Client::connect` takes a connector,
 # and `NoTls` is a real type that refuses -- so this is what makes `sslmode`
-# something Slate can honour rather than something it has to reject.
+# something DBDelve can honour rather than something it has to reject.
 #
 # rustls rather than native-tls because rustls, rustls-native-certs and
 # rustls-pemfile were already in the graph through gpui, and the trust store
@@ -133,7 +133,7 @@ icondata_core = "=0.1.0"
 
 # GPUI does layout, text shaping and scene building on the CPU every frame, so
 # an unoptimized gpui drops frames the moment a grid scrolls. Dependencies are
-# compiled optimized even in dev; Slate's own crate stays at opt-level 0, so
+# compiled optimized even in dev; DBDelve's own crate stays at opt-level 0, so
 # incremental builds and debugging are unaffected once deps are built.
 [profile.dev.package."*"]
 opt-level = 3

@@ -80,11 +80,11 @@ impl Buffer {
     }
 }
 
-/// One key of an `ORDER BY`, as Slate reads and writes it.
+/// One key of an `ORDER BY`, as dbdelve reads and writes it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SortKey {
     /// The key exactly as it appears in the statement — `"created_at"`, `3`,
-    /// `lower(name)`. Kept verbatim, so a key Slate did not write survives a
+    /// `lower(name)`. Kept verbatim, so a key dbdelve did not write survives a
     /// click on some other column.
     pub expression: String,
     pub ascending: bool,
@@ -108,7 +108,7 @@ impl SortKey {
 }
 
 /// The keys of a statement's `ORDER BY`, in order. `Some(empty)` is a statement
-/// that could carry one and does not; `None` is a statement Slate cannot read
+/// that could carry one and does not; `None` is a statement dbdelve cannot read
 /// well enough to say without guessing.
 pub fn order_by(statement: &str) -> Option<Vec<SortKey>> {
     let sql = statement;
@@ -149,7 +149,7 @@ pub fn order_by(statement: &str) -> Option<Vec<SortKey>> {
 /// a `LIMIT` is a syntax error, and a limit that applies *before* the sort
 /// would order one arbitrary page of the table instead of the table.
 ///
-/// `None` when Slate cannot see where the clause goes — a statement it cannot
+/// `None` when dbdelve cannot see where the clause goes — a statement it cannot
 /// parse cleanly, one with no `FROM`, or one that is not a query. Nothing is
 /// guessed at, because the alternative is handing the server a statement the
 /// user did not write and cannot read.
@@ -191,7 +191,7 @@ pub fn with_order_by(statement: &str, keys: &[SortKey]) -> Option<String> {
 /// Values go in as literals and are never cast. Postgres applies the target
 /// column's assignment cast, so `'123'` lands in an `int4` exactly as `123`
 /// would, and SQLite applies the column's type affinity to the same effect. A
-/// cast Slate chose for itself could only ever be the wrong one. A cleared cell
+/// cast dbdelve chose for itself could only ever be the wrong one. A cleared cell
 /// is therefore the empty string, and a `None` in `sets` is a `NULL`: the two
 /// are different writes, which is the whole point of spelling one of them as an
 /// absence.
@@ -240,7 +240,7 @@ pub fn update_row(
 /// edited.
 ///
 /// `None` on an empty list. The alternative is `INSERT INTO t DEFAULT VALUES`,
-/// a statement nobody has asked Slate for.
+/// a statement nobody has asked dbdelve for.
 pub fn insert_row(
     engine: Engine,
     schema: &str,
@@ -298,12 +298,12 @@ pub fn delete_row(
     ))
 }
 
-/// Whether `sql` is a statement Slate could have written: one or more `UPDATE`s,
+/// Whether `sql` is a statement dbdelve could have written: one or more `UPDATE`s,
 /// a single `INSERT`, or a single `DELETE` naming one row, and nothing else at
 /// all.
 ///
-/// The one gate every Slate-generated statement passes before anything runs,
-/// and the code half of hard rule 1 — Slate never writes a `DROP` or a
+/// The one gate every dbdelve-generated statement passes before anything runs,
+/// and the code half of hard rule 1 — dbdelve never writes a `DROP` or a
 /// `TRUNCATE`, whatever the user asked for, and writes a `DELETE` only as a
 /// conjunction of equalities over distinct, unqualified columns. A whitelist,
 /// because a blocklist of keywords is only a list of the spellings someone
@@ -333,7 +333,7 @@ pub fn is_generated_write(sql: &str) -> bool {
     };
 
     // Comments are tree-sitter extras and land at the root too, so anything
-    // that is not a statement here is something Slate did not generate.
+    // that is not a statement here is something dbdelve did not generate.
     let kinds: Vec<&str> = statements
         .iter()
         .map(|statement| match statement.kind() == "statement" {
@@ -343,7 +343,7 @@ pub fn is_generated_write(sql: &str) -> bool {
         .collect();
 
     // The one place a `delete` node is tolerated, and only for the shape read
-    // back out of the tree rather than trusted because Slate wrote it.
+    // back out of the tree rather than trusted because dbdelve wrote it.
     if kinds == ["delete"] {
         return delete_key_columns(sql).is_some();
     }
@@ -370,14 +370,14 @@ pub fn delete_matches_key(sql: &str, keys: &[&str]) -> bool {
     columns.len() == keys.len() && keys.iter().all(|key| columns.iter().any(|c| c == key))
 }
 
-/// Whether `sql` is a `SELECT` Slate could have written: exactly one root
+/// Whether `sql` is a `SELECT` dbdelve could have written: exactly one root
 /// statement, a query, with nothing destructive anywhere under it.
 ///
 /// The filter bar is a trust boundary. Everywhere else a statement is either
-/// wholly the user's or wholly Slate's; a filter is the user's text spliced
-/// into Slate's statement, so this is what makes `id = 1; DROP TABLE t`
+/// wholly the user's or wholly dbdelve's; a filter is the user's text spliced
+/// into dbdelve's statement, so this is what makes `id = 1; DROP TABLE t`
 /// structurally impossible rather than merely unlikely. It also guards the
-/// filters Slate writes for itself.
+/// filters dbdelve writes for itself.
 ///
 /// Not the second gate `AGENTS.md` rule 2 forbids. That rule governs the one
 /// path by which the grid writes, and `is_generated_write` remains its only
@@ -395,7 +395,7 @@ pub fn is_generated_select(sql: &str) -> bool {
     let root = tree.root_node();
     let mut cursor = root.walk();
     // Comments are tree-sitter extras and land at the root too, so anything
-    // that is not the one statement is something Slate did not generate.
+    // that is not the one statement is something dbdelve did not generate.
     let children: Vec<_> = root.named_children(&mut cursor).collect();
     let [statement] = children.as_slice() else {
         return false;
@@ -551,7 +551,7 @@ fn delete_key_columns(sql: &str) -> Option<Vec<String>> {
         return None;
     }
 
-    // A column named twice is a predicate Slate never writes, and reading it as
+    // A column named twice is a predicate dbdelve never writes, and reading it as
     // a one-column key would call a half-matched composite key a whole one.
     let distinct = columns.iter().collect::<std::collections::HashSet<_>>();
     (distinct.len() == columns.len()).then_some(columns)
@@ -790,12 +790,12 @@ fn trim_range(sql: &str, range: Range<usize>) -> Option<Range<usize>> {
 /// runs one submission as a single implicit transaction and needs nothing;
 /// MySQL and SQLite commit every statement on its own, so a batch of more than
 /// one is bracketed — in the statement text itself, where the user can read,
-/// edit and undo it, because Slate does not open a transaction behind anyone's
+/// edit and undo it, because dbdelve does not open a transaction behind anyone's
 /// back.
 ///
 /// `None` when there is nothing to apply, and `None` — rather than a shorter
 /// batch — when any one row cannot be written: a partial apply is not the change
-/// the user made, and Slate would have no way to say which part of it ran.
+/// the user made, and dbdelve would have no way to say which part of it ran.
 pub(crate) fn update_batch(engine: Engine, rows: &[PendingRow]) -> Option<String> {
     if rows.is_empty() {
         return None;
@@ -847,11 +847,11 @@ pub(crate) fn remember_statement(history: &mut Vec<String>, sql: &str) {
     history.truncate(crate::store::HISTORY_DEPTH);
 }
 
-/// Slate's statement appended to the buffer the user is writing in.
+/// dbdelve's statement appended to the buffer the user is writing in.
 ///
 /// The terminator is the whole subtlety: an unterminated statement with an
 /// `UPDATE` appended to it becomes one statement, and the next `cmd+enter`
-/// would send both as one. Slate is writing here because the user asked it to,
+/// would send both as one. dbdelve is writing here because the user asked it to,
 /// so the boundary of what they wrote has to survive the ask.
 pub(crate) fn appended_statement(buffer: &str, statement: &str) -> String {
     let text = buffer.trim_end();
@@ -920,7 +920,7 @@ pub(crate) enum Destructive {
     Drop,
     Truncate,
     UnfilteredDelete,
-    /// Slate could not parse it, so it cannot say what it does.
+    /// dbdelve could not parse it, so it cannot say what it does.
     Unreadable,
 }
 
@@ -1093,7 +1093,7 @@ fn variant_verdict(statement: &Statement) -> Verdict {
         Statement::Query(_) => Verdict::READ,
 
         // `EXPLAIN ANALYZE DELETE FROM t` runs the delete -- documented in
-        // Postgres, and in MySQL since 8.0.18. Slate never sends it to SQLite:
+        // Postgres, and in MySQL since 8.0.18. dbdelve never sends it to SQLite:
         // `Engine::explain_prefix` returns None for that pair.
         Statement::Explain {
             analyze,
@@ -1260,7 +1260,7 @@ pub(crate) enum Stop {
     /// Allowed, but it destroys something and this connection has not silenced
     /// that kind.
     Confirm(Destructive),
-    /// Slate could not read it. Runs once on confirmation and changes nothing.
+    /// dbdelve could not read it. Runs once on confirmation and changes nothing.
     RunOnce,
 }
 
@@ -1380,7 +1380,7 @@ mod tests {
     }
 
     #[test]
-    fn nothing_is_spliced_into_a_statement_slate_cannot_read_whole() {
+    fn nothing_is_spliced_into_a_statement_dbdelve_cannot_read_whole() {
         // Every one of these is valid SQL the grammar does not cover. Guessing
         // where the clause goes would corrupt a statement the user wrote.
         for sql in [
@@ -1591,7 +1591,7 @@ mod tests {
 
     #[test]
     fn a_statement_that_is_not_a_query_takes_no_sort() {
-        // A header click asks Slate to write an ORDER BY. Hard rule 1 says it
+        // A header click asks dbdelve to write an ORDER BY. Hard rule 1 says it
         // never writes a destructive statement, and the grammar gives `DELETE`
         // the same `from` child a `SELECT` has -- so the guard is the presence
         // of a `select`, not of a `from`.
@@ -1735,13 +1735,13 @@ mod tests {
         assert_eq!(
             update_row(
                 Engine::MySql,
-                "slate_dev",
+                "dbdelve_dev",
                 "measurements",
                 &[("note", None), ("depth", Some("12"))],
                 &[("id", "7")]
             )
             .unwrap(),
-            "UPDATE `slate_dev`.`measurements` SET `note` = NULL, `depth` = '12' WHERE `id` = '7'"
+            "UPDATE `dbdelve_dev`.`measurements` SET `note` = NULL, `depth` = '12' WHERE `id` = '7'"
         );
         // And the word itself, typed into a cell, is still a string.
         assert_eq!(
@@ -1794,15 +1794,15 @@ mod tests {
         assert_eq!(
             insert_row(
                 Engine::MySql,
-                "slate_dev",
+                "dbdelve_dev",
                 "me`as",
                 &[("no`te", Some(r"a\'b"))]
             )
             .unwrap(),
-            r"INSERT INTO `slate_dev`.`me``as` (`no``te`) VALUES ('a\\''b')"
+            r"INSERT INTO `dbdelve_dev`.`me``as` (`no``te`) VALUES ('a\\''b')"
         );
         // An empty form is not `INSERT INTO t DEFAULT VALUES`, which is a
-        // statement Slate has never been asked for.
+        // statement dbdelve has never been asked for.
         assert!(insert_row(Engine::Postgres, "s", "t", &[]).is_none());
     }
 
@@ -1852,9 +1852,9 @@ mod tests {
 
     #[test]
     fn the_gate_accepts_a_batch_bracketed_by_a_transaction() {
-        // What Slate writes for an engine that commits each statement on its
+        // What dbdelve writes for an engine that commits each statement on its
         // own. The brackets are part of the generated statement, so the gate
-        // has to know the shape or it would refuse Slate's own output.
+        // has to know the shape or it would refuse dbdelve's own output.
         assert!(is_generated_write(
             "BEGIN;\nUPDATE t SET a = '1' WHERE id = '2';\n\
              UPDATE t SET a = '3' WHERE id = '4';\nCOMMIT;"
@@ -1883,10 +1883,10 @@ mod tests {
     }
 
     #[test]
-    fn the_gate_refuses_everything_that_is_not_a_write_slate_writes() {
-        // Hard rule 1 in code: DROP and TRUNCATE never leave Slate, whatever
+    fn the_gate_refuses_everything_that_is_not_a_write_dbdelve_writes() {
+        // Hard rule 1 in code: DROP and TRUNCATE never leave dbdelve, whatever
         // the user asked for. SELECT is here because the gate is a whitelist --
-        // being harmless is not the test, being one of the three shapes Slate
+        // being harmless is not the test, being one of the three shapes dbdelve
         // generates is. A keyed DELETE is no longer in this list because it is
         // one of those shapes; `delete_matches_key` is what asks whether the key
         // it names is the row's.
@@ -1939,7 +1939,7 @@ mod tests {
     fn the_gate_accepts_what_update_row_writes() {
         // The one test that keeps the generator and the gate from drifting
         // apart: whatever quoting or clause order changes here, the statement
-        // Slate builds is still one the gate can read as an UPDATE.
+        // dbdelve builds is still one the gate can read as an UPDATE.
         let statement = update_row(
             Engine::Postgres,
             "public",
@@ -1973,7 +1973,7 @@ mod tests {
             r#"SELECT * FROM "public"."accounts" LIMIT 1000"#,
             r#"SELECT * FROM "public"."accounts" WHERE "state" = 'ok' LIMIT 1000"#,
             r#"SELECT * FROM "public"."accounts" WHERE "state" = 'ok' ORDER BY "id" ASC LIMIT 100 OFFSET 200"#,
-            "SELECT * FROM `slate_dev`.`accounts` WHERE `state` = 'ok' LIMIT 100",
+            "SELECT * FROM `dbdelve_dev`.`accounts` WHERE `state` = 'ok' LIMIT 100",
             r#"WITH x AS (SELECT 1 AS a) SELECT * FROM x LIMIT 10"#,
         ] {
             assert!(is_generated_select(sql), "{sql} was refused");
@@ -2057,8 +2057,14 @@ mod tests {
             r#"DELETE FROM "app"."memberships" WHERE "org_id" = '1' AND "user_id" = '2'"#
         );
         assert_eq!(
-            delete_row(Engine::MySql, "slate_dev", "measurements", &[("id", "7")]).unwrap(),
-            "DELETE FROM `slate_dev`.`measurements` WHERE `id` = '7'"
+            delete_row(
+                Engine::MySql,
+                "dbdelve_demo",
+                "measurements",
+                &[("id", "7")]
+            )
+            .unwrap(),
+            "DELETE FROM `dbdelve_demo`.`measurements` WHERE `id` = '7'"
         );
         assert_eq!(
             delete_row(Engine::Sqlite, "main", "t", &[("id", "o'hara")]).unwrap(),
@@ -2069,7 +2075,7 @@ mod tests {
     }
 
     #[test]
-    fn the_gate_admits_the_delete_slate_writes_and_reads_its_key_back() {
+    fn the_gate_admits_the_delete_dbdelve_writes_and_reads_its_key_back() {
         for engine in [Engine::Postgres, Engine::MySql, Engine::Sqlite] {
             let statement = delete_row(engine, "s", "t", &[("id", "7")]).unwrap();
             assert!(is_generated_write(&statement), "{statement} was refused");
@@ -2089,7 +2095,7 @@ mod tests {
 
         // A column name carrying one does not: `"we""ird"` is two adjacent
         // strings to this grammar and the whole statement fails to parse, so
-        // the gate refuses Slate's own output. That is the safe direction --
+        // the gate refuses dbdelve's own output. That is the safe direction --
         // the row stays -- and a gate that guessed past an unreadable tree is
         // the unsafe one.
         let odd = delete_row(Engine::Postgres, "s", "t", &[(r#"we"ird"#, "x")]).unwrap();
@@ -2191,7 +2197,7 @@ mod tests {
             "UPDATE \"public\".\"accounts\" SET \"name\" = 'Ada' WHERE \"id\" = '1';\n\
              UPDATE \"public\".\"accounts\" SET \"name\" = 'Bo' WHERE \"id\" = '2';"
         );
-        // The batch Slate builds has to pass the same gate Slate checks every
+        // The batch dbdelve builds has to pass the same gate dbdelve checks every
         // generated statement against, or the generator and the gate have
         // drifted apart.
         assert!(is_generated_write(&batch));
@@ -2356,10 +2362,14 @@ mod tests {
             // The case tree-sitter got wrong, kept as a regression test.
             ("GRANT SELECT ON t TO u", Mode::Full, None),
             ("REVOKE SELECT ON t FROM u", Mode::Full, None),
-            // Opaque bodies: Slate cannot see what these run.
+            // Opaque bodies: dbdelve cannot see what these run.
             ("CALL p()", Mode::Full, None),
             // The maximum over the statements, not the first.
-            ("SELECT 1; DROP TABLE t", Mode::Full, Some(Destructive::Drop)),
+            (
+                "SELECT 1; DROP TABLE t",
+                Mode::Full,
+                Some(Destructive::Drop),
+            ),
             ("SELCT 1", Mode::Full, Some(Destructive::Unreadable)),
             (
                 "DO $$ BEGIN NULL; END $$",
@@ -2437,7 +2447,11 @@ mod tests {
             "EXPLAIN (ANALYZE OFF) DELETE FROM t",
             "EXPLAIN (COSTS TRUE) SELECT 1",
         ] {
-            assert_eq!(classify(Engine::Postgres, sql).mode, Mode::ReadOnly, "{sql}");
+            assert_eq!(
+                classify(Engine::Postgres, sql).mode,
+                Mode::ReadOnly,
+                "{sql}"
+            );
         }
     }
 
@@ -2509,7 +2523,11 @@ mod tests {
     #[test]
     fn classify_agrees_across_engines() {
         for engine in [Engine::Postgres, Engine::MySql, Engine::Sqlite] {
-            assert_eq!(classify(engine, "SELECT 1").mode, Mode::ReadOnly, "{engine:?}");
+            assert_eq!(
+                classify(engine, "SELECT 1").mode,
+                Mode::ReadOnly,
+                "{engine:?}"
+            );
             assert_eq!(
                 classify(engine, "DROP TABLE t").destructive,
                 vec![Destructive::Drop],

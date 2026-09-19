@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::db::{Cell, RelationKind};
 
 const PROFILES_FILE: &str = "profiles.toml";
-const KEYCHAIN_SERVICE: &str = "Slate";
+const KEYCHAIN_SERVICE: &str = "dbdelve";
 /// The buffer file a build before per-tab buffers wrote. Read-only now, and
 /// only for tab 0 -- see [`read_scratch`].
 const LEGACY_SCRATCH_FILE: &str = ".scratch.sql";
@@ -41,7 +41,7 @@ pub struct StoredProfile {
     pub port: Option<u16>,
     pub database: String,
     pub user: String,
-    /// libpq's spelling, so a profile file stays readable and a mode Slate
+    /// libpq's spelling, so a profile file stays readable and a mode dbdelve
     /// stops supporting reads back as a name rather than a number. Defaulted,
     /// so profiles written before TLS existed load as `prefer` — which is what
     /// they were connecting as.
@@ -213,7 +213,7 @@ pub struct StoredGrid {
     pub last_query: Option<String>,
     #[serde(default)]
     pub limit: Option<usize>,
-    /// The relation tab's filter, so reopening Slate lands on the rows that
+    /// The relation tab's filter, so reopening dbdelve lands on the rows that
     /// were being read rather than on the whole table. Kept for the same reason
     /// [`Self::order_by`] is, and unlike the page offset, which is not part of
     /// what a tab is showing.
@@ -226,7 +226,7 @@ pub struct StoredGrid {
 }
 
 /// The three font families in use. App-level rather than per-profile: the face
-/// Slate is read in belongs to the person reading, not to the database they
+/// dbdelve is read in belongs to the person reading, not to the database they
 /// happen to be connected to. Every field is optional, so a file written before
 /// fonts were pickable reads back as the defaults -- which is what it was drawn
 /// in.
@@ -294,7 +294,7 @@ struct ProfileFile {
 /// reported, a missing `HOME` included -- `save_profiles` refuses on that too,
 /// and an empty list here is what the next save writes back.
 pub fn load_profiles() -> Result<Restored, String> {
-    let path = slate_directory()?.join(PROFILES_FILE);
+    let path = dbdelve_directory()?.join(PROFILES_FILE);
     // A file we could not read is not renamed: nothing is recovered by moving
     // it, so the overwrite hazard below technically remains. A directory we
     // cannot read is one we almost certainly cannot write either.
@@ -338,7 +338,7 @@ pub fn save_profiles(
         profiles: profiles.to_vec(),
     })
     .map_err(|error| format!("Could not encode the profile list: {error}"))?;
-    write_file(&slate_directory()?.join(PROFILES_FILE), &text)
+    write_file(&dbdelve_directory()?.join(PROFILES_FILE), &text)
 }
 
 pub fn profile_id(name: &str, existing: &[String]) -> String {
@@ -698,18 +698,18 @@ fn unsafe_component(value: &str) -> Option<&'static str> {
     }
 }
 
-fn slate_directory() -> Result<PathBuf, String> {
+fn dbdelve_directory() -> Result<PathBuf, String> {
     let home = std::env::var_os("HOME")
         .filter(|home| !home.is_empty())
         .ok_or_else(|| "HOME is not set.".to_string())?;
-    Ok(PathBuf::from(home).join("Library/Application Support/Slate"))
+    Ok(PathBuf::from(home).join("Library/Application Support/dbdelve"))
 }
 
 fn query_directory(profile_id: &str) -> Result<PathBuf, String> {
     if let Some(reason) = unsafe_component(profile_id) {
         return Err(format!("Profile id {reason}."));
     }
-    Ok(slate_directory()?.join("queries").join(profile_id))
+    Ok(dbdelve_directory()?.join("queries").join(profile_id))
 }
 
 fn scratch_file(tab: u64) -> String {
@@ -725,7 +725,7 @@ fn grids_directory(profile_id: &str) -> Result<PathBuf, String> {
     if let Some(reason) = unsafe_component(profile_id) {
         return Err(format!("Profile id {reason}."));
     }
-    Ok(slate_directory()?.join("grids").join(profile_id))
+    Ok(dbdelve_directory()?.join("grids").join(profile_id))
 }
 
 fn grid_path(profile_id: &str, key: &str) -> Result<PathBuf, String> {
@@ -785,13 +785,13 @@ mod tests {
 
     /// `HOME` is process-wide and the tests run in threads, so the ones that
     /// touch the disk take turns and each gets its own directory to be the
-    /// whole of Slate's storage for the length of the test.
+    /// whole of dbdelve's storage for the length of the test.
     fn with_home<T>(body: impl FnOnce() -> T) -> T {
         static LOCK: std::sync::Mutex<u32> = std::sync::Mutex::new(0);
 
         let mut counter = LOCK.lock().unwrap_or_else(|error| error.into_inner());
         *counter += 1;
-        let home = std::env::temp_dir().join(format!("slate-store-test-{}", *counter));
+        let home = std::env::temp_dir().join(format!("dbdelve-store-test-{}", *counter));
         let _ = fs::remove_dir_all(&home);
         fs::create_dir_all(&home).expect("the test home must be creatable");
 
@@ -830,7 +830,7 @@ host = "localhost"
 database = "postgres"
 user = "shayan"
 "#;
-            let path = slate_directory().unwrap().join(PROFILES_FILE);
+            let path = dbdelve_directory().unwrap().join(PROFILES_FILE);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(&path, toml).unwrap();
 
@@ -867,7 +867,7 @@ host = "localhost"
 database = "postgres"
 user = "shayan"
 "#;
-            let path = slate_directory().unwrap().join(PROFILES_FILE);
+            let path = dbdelve_directory().unwrap().join(PROFILES_FILE);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(&path, toml).unwrap();
 
@@ -888,8 +888,8 @@ user = "shayan"
                 name: "Dev".into(),
                 host: "127.0.0.1".into(),
                 port: Some(5432),
-                database: "slate_dev".into(),
-                user: "slate".into(),
+                database: "dbdelve_dev".into(),
+                user: "dbdelve".into(),
                 sslmode: Some("verify-full".into()),
                 root_certificate: None,
                 engine: Some("postgres".into()),
@@ -927,8 +927,8 @@ user = "shayan"
             name: "Dev".into(),
             host: "127.0.0.1".into(),
             port: Some(5432),
-            database: "slate_dev".into(),
-            user: "slate".into(),
+            database: "dbdelve_dev".into(),
+            user: "dbdelve".into(),
             sslmode: Some("verify-full".into()),
             root_certificate: Some("/etc/ssl/rds.pem".into()),
             engine: Some("postgres".into()),
@@ -981,18 +981,18 @@ user = "shayan"
     #[test]
     fn a_profile_written_before_a_field_existed_still_loads() {
         // Every field added after the first release is `serde(default)`, and this
-        // is the file already on disk for anyone who has run Slate before. A
+        // is the file already on disk for anyone who has run dbdelve before. A
         // decode error here reads as "no profiles", which is what the next save
         // would then write back.
         let (profiles, active, ..) = decode_profiles(
             "\
 [[profiles]]
-id = \"slate-dev\"
-name = \"slate_dev\"
+id = \"dbdelve-dev\"
+name = \"dbdelve_dev\"
 host = \"127.0.0.1\"
 port = 55432
-database = \"slate_dev\"
-user = \"slate\"
+database = \"dbdelve_dev\"
+user = \"dbdelve\"
 sslmode = \"prefer\"
 open_objects = []
 ",
@@ -1020,8 +1020,8 @@ open_objects = []
             name: "Dev".into(),
             host: "127.0.0.1".into(),
             port: Some(5432),
-            database: "slate_dev".into(),
-            user: "slate".into(),
+            database: "dbdelve_dev".into(),
+            user: "dbdelve".into(),
             sslmode: None,
             root_certificate: None,
             engine: Some("postgres".into()),
@@ -1066,7 +1066,7 @@ open_objects = []
     }
 
     #[test]
-    fn a_slug_slate_cannot_read_is_no_colour() {
+    fn a_slug_dbdelve_cannot_read_is_no_colour() {
         assert_eq!(ConnectionColor::from_slug("chartreuse"), None);
         assert_eq!(ConnectionColor::from_slug(""), None);
     }
@@ -1086,7 +1086,7 @@ open_objects = []
             sslmode: None,
             root_certificate: None,
             engine: Some("sqlite".into()),
-            path: Some("/Users/dev/slate_dev.db".into()),
+            path: Some("/Users/dev/dbdelve_dev.db".into()),
             editor_font_size: Some(14.0),
             statement_timeout: None,
             next_query_id: Some(7),
@@ -1126,11 +1126,11 @@ open_objects = []
         let (profiles, ..) = decode_profiles(
             "\
 [[profiles]]
-id = \"slate-dev\"
-name = \"slate_dev\"
+id = \"dbdelve-dev\"
+name = \"dbdelve_dev\"
 host = \"127.0.0.1\"
-database = \"slate_dev\"
-user = \"slate\"
+database = \"dbdelve_dev\"
+user = \"dbdelve\"
 
 [[profiles.open_objects]]
 schema = \"public\"
@@ -1158,12 +1158,12 @@ active = true
         let (profiles, ..) = decode_profiles(
             "\
 [[profiles]]
-id = \"slate-dev\"
-name = \"slate_dev\"
+id = \"dbdelve-dev\"
+name = \"dbdelve_dev\"
 host = \"127.0.0.1\"
 port = 55432
-database = \"slate_dev\"
-user = \"slate\"
+database = \"dbdelve_dev\"
+user = \"dbdelve\"
 sslmode = \"prefer\"
 open_objects = []
 ",
@@ -1274,7 +1274,7 @@ open_objects = []
                     host: "localhost".into(),
                     port: Some(5432),
                     database: "dev".into(),
-                    user: "slate".into(),
+                    user: "dbdelve".into(),
                     sslmode: Some("prefer".into()),
                     root_certificate: None,
                     engine: Some("postgres".into()),
@@ -1321,7 +1321,7 @@ open_objects = []
         );
 
         // A file written before `settings` existed has no `[settings]` table
-        // at all, and that is what is on disk for everyone running Slate
+        // at all, and that is what is on disk for everyone running dbdelve
         // today -- it has to keep reading as `None`, not as the defaults.
         let (.., missing) =
             decode_profiles("active = \"dev\"\n").expect("a file predating settings must load");
@@ -1389,7 +1389,7 @@ open_objects = []
         // Profiles, saved queries and the scratch buffer all hold connection
         // settings and go through this one function, so this is the one place
         // that has to prove the permission rather than every caller.
-        let path = std::env::temp_dir().join("slate-store-permissions-test.toml");
+        let path = std::env::temp_dir().join("dbdelve-store-permissions-test.toml");
         let _ = fs::remove_file(&path);
 
         write_file(&path, "host = \"example\"").expect("file must write");
@@ -1484,17 +1484,17 @@ open_objects = []
 
     #[test]
     fn a_profile_written_before_open_queries_existed_keeps_its_open_query() {
-        // The file on disk for anyone running Slate today: one buffer, named in
+        // The file on disk for anyone running dbdelve today: one buffer, named in
         // `open_query`. Dropping either the field or the decode loses it.
         let (profiles, ..) = decode_profiles(
             "\
 [[profiles]]
-id = \"slate-dev\"
-name = \"slate_dev\"
+id = \"dbdelve-dev\"
+name = \"dbdelve_dev\"
 host = \"127.0.0.1\"
 port = 55432
-database = \"slate_dev\"
-user = \"slate\"
+database = \"dbdelve_dev\"
+user = \"dbdelve\"
 sslmode = \"prefer\"
 open_query = \"daily\"
 open_objects = []
@@ -1518,8 +1518,8 @@ open_objects = []
             name: "Dev".into(),
             host: "127.0.0.1".into(),
             port: Some(5432),
-            database: "slate_dev".into(),
-            user: "slate".into(),
+            database: "dbdelve_dev".into(),
+            user: "dbdelve".into(),
             sslmode: None,
             root_certificate: None,
             engine: Some("postgres".into()),
@@ -1741,12 +1741,12 @@ open_objects = []
         let (profiles, ..) = decode_profiles(
             "\
 [[profiles]]
-id = \"slate-dev\"
-name = \"slate_dev\"
+id = \"dbdelve-dev\"
+name = \"dbdelve_dev\"
 host = \"127.0.0.1\"
 port = 55432
-database = \"slate_dev\"
-user = \"slate\"
+database = \"dbdelve_dev\"
+user = \"dbdelve\"
 
 [[profiles.open_objects]]
 schema = \"public\"
@@ -1774,8 +1774,8 @@ name = \"accounts\"
             name: "Dev".into(),
             host: "127.0.0.1".into(),
             port: Some(5432),
-            database: "slate_dev".into(),
-            user: "slate".into(),
+            database: "dbdelve_dev".into(),
+            user: "dbdelve".into(),
             sslmode: None,
             root_certificate: None,
             engine: Some("postgres".into()),
@@ -1865,8 +1865,8 @@ name = \"accounts\"
             name: "Dev".into(),
             host: "127.0.0.1".into(),
             port: Some(5432),
-            database: "slate_dev".into(),
-            user: "slate".into(),
+            database: "dbdelve_dev".into(),
+            user: "dbdelve".into(),
             sslmode: None,
             root_certificate: None,
             engine: Some("postgres".into()),

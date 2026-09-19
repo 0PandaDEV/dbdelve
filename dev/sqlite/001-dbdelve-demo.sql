@@ -146,7 +146,7 @@ INSERT INTO documents
 SELECT
     2,
     'Large values',
-    replace(hex(zeroblob(2048)), '00', 'Slate keeps the complete value while the grid clips visually. '),
+    replace(hex(zeroblob(2048)), '00', 'DBDelve keeps the complete value while the grid clips visually. '),
     json_object(
         'kind', 'large',
         'values', json_group_array(json_object('index', value, 'square', value * value))

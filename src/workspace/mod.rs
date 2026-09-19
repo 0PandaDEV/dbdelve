@@ -264,7 +264,7 @@ impl Workspace {
         self.profiles.get_mut(self.active)
     }
 
-    /// The engine every statement Slate generates is written for. With no
+    /// The engine every statement dbdelve generates is written for. With no
     /// profile there is nothing to run it against, so the default is only ever
     /// used to build a string nobody sends.
     pub(crate) fn engine(&self) -> Engine {
@@ -285,7 +285,7 @@ impl Workspace {
     /// session.
     ///
     /// Called from the gestures that run SQL rather than from
-    /// `execute_and_then`, because a statement Slate runs on its own — restoring
+    /// `execute_and_then`, because a statement dbdelve runs on its own — restoring
     /// a tab at startup — would otherwise clear a notice nobody has read yet,
     /// and one of those says the connection came up weaker than it asked for.
     pub(crate) fn clear_notice(&mut self) {
@@ -691,7 +691,7 @@ impl Render for Workspace {
                     .text_size(px(layout::TEXT_SM))
                     // The dot carries the state and the text carries the words.
                     // A whole status line in green shouts about being connected,
-                    // which is the least interesting thing Slate can tell you.
+                    // which is the least interesting thing dbdelve can tell you.
                     .child(
                         div()
                             .size(px(layout::SPACE_XS + 2.))

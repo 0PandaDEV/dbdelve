@@ -126,7 +126,7 @@ registry! {
     ("set_null", "Set Cell to NULL", Some("Table"), ["ctrl-shift-n"], SetNull),
     ("accept_completion", "Accept Completion", Some("Editor > Input"), ["tab"], AcceptCompletion),
     ("toggle_sidebar", "Toggle Sidebar", None, ["cmd-shift-s"], ToggleSidebar),
-    ("quit", "Quit Slate", None, ["cmd-q"], Quit),
+    ("quit", "Quit dbdelve", None, ["cmd-q"], Quit),
     // Click or command-palette only today; listed so they can be given a
     // chord for the first time.
     ("cancel_query", "Cancel Query", None, [], CancelQuery),
@@ -217,7 +217,7 @@ mod tests {
         overrides.insert("quit".to_string(), "cmd-enter".to_string());
         assert_eq!(
             conflict("cmd-enter", None, "run_query", &overrides),
-            Some("Quit Slate")
+            Some("Quit dbdelve")
         );
     }
 

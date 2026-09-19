@@ -146,7 +146,7 @@ impl Workspace {
     /// `change` means nothing moved, and nothing runs.
     ///
     /// Every path that re-queries a relation comes through here. The statement
-    /// is Slate's own, so it is regenerated from whatever the tab is now set to
+    /// is dbdelve's own, so it is regenerated from whatever the tab is now set to
     /// rather than edited — the row limit and the quoting cannot drift out of
     /// one place — and `QueryState::Idle` is what makes a preview willing to run
     /// again, so no caller can forget it.
@@ -186,7 +186,7 @@ impl Workspace {
         // the bars as they stand, so it can be corrected rather than retyped.
         if !sql::is_generated_select(&sql) {
             self.note(
-                "Slate will not run a filter it cannot read as one SELECT.".into(),
+                "dbdelve will not run a filter it cannot read as one SELECT.".into(),
                 cx,
             );
             return;
@@ -360,7 +360,7 @@ impl Workspace {
         let Some((_, col)) = grid.active() else {
             return;
         };
-        // The column's own name: the preview is Slate's `SELECT *`, so the
+        // The column's own name: the preview is dbdelve's `SELECT *`, so the
         // header is the server's word for the column rather than an alias.
         let Some(name) = grid.columns().get(col).map(|column| column.name.clone()) else {
             return;

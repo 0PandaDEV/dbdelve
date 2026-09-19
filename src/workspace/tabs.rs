@@ -49,7 +49,7 @@ impl Workspace {
         self.cycle_tab(-1, cx);
     }
 
-    /// Swap to the next registered theme. Every colour Slate paints is read
+    /// Swap to the next registered theme. Every colour dbdelve paints is read
     /// from the global at render time, so repainting is the whole change — and
     /// side-by-side comparison is the only honest way to pick between palettes.
     pub(crate) fn cycle_theme(
@@ -127,9 +127,9 @@ impl Workspace {
             return;
         }
         if matches!(profile.session.active, Tab::Query(_)) {
-            // Nothing of Slate's is stacked over the editor, so the keystroke
+            // Nothing of dbdelve's is stacked over the editor, so the keystroke
             // is not ours. Handing it on is what lets the completion popup --
-            // which is the input's, not Slate's -- close on `escape`; this
+            // which is the input's, not dbdelve's -- close on `escape`; this
             // binding is unscoped and would otherwise win it at every depth.
             cx.propagate();
             return;

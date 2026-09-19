@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Slate is a native macOS database client in Rust on GPUI, speaking Postgres,
+DBDelve is a native macOS database client in Rust on GPUI, speaking Postgres,
 MySQL and SQLite. A data browser and a SQL editor as equals: open a table and
 browse it — page, sort, filter, edit — or write the statement yourself.
 
@@ -9,11 +9,11 @@ browser" framing, and supersedes the spec wherever the spec leans on it:
 browsing surfaces are first-class, not an editor accessory. The split that
 survives the change is between *whose SQL it is*. An editor buffer is the
 user's and is never touched uninvited; a browsing surface (an object tab's
-preview) runs SQL Slate generates, regenerated from visible controls and
+preview) runs SQL DBDelve generates, regenerated from visible controls and
 inspectable, never spliced into anyone's buffer.
 
 **Read this file before doing anything.** It is the source of truth for how
-Slate is built and why.
+DBDelve is built and why.
 
 The design documents behind it live in `docs/specs/` and are deliberately not
 version-controlled — the reasoning and the rejected alternatives are working
@@ -34,16 +34,16 @@ require it, stop and raise it instead.
 
 1. **Never rewrite SQL behind the user's back.** No silent `LIMIT` injection, no
    column projection, no reformatting on execute, and nothing at all on a
-   statement the user did not ask Slate to change. Row limits apply to
-   Slate-generated preview queries only, and they are visible in the UI.
+   statement the user did not ask DBDelve to change. Row limits apply to
+   DBDelve-generated preview queries only, and they are visible in the UI.
 
-   Slate _does_ write SQL when the user asks it to, and only then. A header
+   DBDelve _does_ write SQL when the user asks it to, and only then. A header
    click asking for a sort is such an ask: the `ORDER BY` is spliced into the
    statement in the buffer, where the user can read it, edit it and undo it,
    and the statement that runs is the statement on screen. The same will hold
    for in-place row editing.
 
-   Two limits on what Slate may write. It never writes `DROP` or `TRUNCATE`,
+   Two limits on what DBDelve may write. It never writes `DROP` or `TRUNCATE`,
    whatever the user asked for; and `DELETE` only as the explicit deletion of
    named rows — by primary key, from a direct ask on a browsing surface, with
    the statement shown before it runs. (That deletion flow is `sql::delete_row`:
@@ -95,17 +95,17 @@ require it, stop and raise it instead.
    already use — one `DELETE` per row, each naming its own key, never one
    statement with a predicate covering several.
 
-   A cell is editable only when Slate can name its row by primary key. An
+   A cell is editable only when DBDelve can name its row by primary key. An
    `INSERT` is the one write that needs no key — it has no existing row to name
    yet — so a table without a primary key can be inserted into and not edited.
    That asymmetry is deliberate and belongs in anything that documents either
    feature.
 
-   When Slate cannot name a row, the grid stays read-only and says why; it
+   When DBDelve cannot name a row, the grid stays read-only and says why; it
    never guesses at a predicate.
 3. **No environment-specific behaviour.** No vendor binary names in error
    strings, no assumption that a loopback host means plaintext, no hardcoded
-   ports or hostnames. Slate is a generic client.
+   ports or hostnames. DBDelve is a generic client.
 4. **Driver types do not reach the UI layer.** The grid receives rendered
    strings and type tags, never a `postgres::Row`, a `mysql::Value`, a
    `rusqlite::ValueRef`, an OID or a storage class. Engine dispatch is a closed enum inside `src/db/`
@@ -122,7 +122,7 @@ require it, stop and raise it instead.
    enumerate, instead of an open extension point.
 
    The one thing that legitimately crosses out is `db::Engine`, and only
-   because Slate writes SQL: `explorer::preview_sql` and `sql::update_row` have
+   because DBDelve writes SQL: `explorer::preview_sql` and `sql::update_row` have
    to quote an identifier the way the server will read it. It answers three
    questions and holds no connection.
 5. **Blank passwords are valid.** Never warn about them. Usernames containing `@`
@@ -181,11 +181,11 @@ url = "2"
 **The two tree-sitter pins are correctness, not formatting.** The grammar
 decides where every statement boundary falls, which statements `sql.rs` will
 splice an `ORDER BY` into, and what `is_generated_write` accepts as a closed
-transaction. A bump changes what Slate sends to the server. Treat them like the
+transaction. A bump changes what DBDelve sends to the server. Treat them like the
 driver pins.
 
 **Build profiles are deliberate.** `[profile.dev.package."*"] opt-level = 3`
-builds dependencies optimized so a debug Slate is usable on real data; deleting
+builds dependencies optimized so a debug DBDelve is usable on real data; deleting
 it makes the grid crawl. `[profile.release]` sets `lto = "thin"` and
 `codegen-units = 1`.
 
@@ -224,7 +224,7 @@ is blocking by construction and has no runtime at all.
 the TLS handshake is a future belonging to the connection, so it runs inside the
 runtime the blocking client already owns, on the same thread as the connect it
 is part of. Nothing tokio-shaped reaches GPUI's executor. Adding a tokio future
-anywhere Slate spawns one still panics.
+anywhere DBDelve spawns one still panics.
 
 **Do not fork gpui.** Decided in the spec, §7.1.
 
@@ -240,8 +240,8 @@ The app opens the connection form when no `PG*` environment is configured. The
 repository-owned development databases accept:
 
 ```text
-postgresql://slate:slate@127.0.0.1:55432/slate_dev
-mysql://slate:slate@127.0.0.1:53306/slate_dev
+postgresql://dbdelve:dbdelve@127.0.0.1:55432/dbdelve_dev
+mysql://dbdelve:dbdelve@127.0.0.1:53306/dbdelve_dev
 ```
 
 Pick the engine on the form's chip row first — it decides which fields exist.
@@ -252,7 +252,7 @@ SQLite has no server to connect to. Build the file once, then give the form its
 absolute path:
 
 ```sh
-sqlite3 dev/slate_dev.db < dev/sqlite/001-slate-demo.sql
+sqlite3 dev/dbdelve_dev.db < dev/sqlite/001-dbdelve-demo.sql
 ```
 
 **The MySQL container reports itself healthy when its init script failed.**
@@ -263,17 +263,17 @@ database looks exactly like a good one. Check a row count, not the status —
 ### Bundling
 
 `dev/bundle.sh` builds `--release`, generates the icon, writes `Info.plist`,
-signs, and installs to `/Applications/Slate.app`. It is the only way to get a
+signs, and installs to `/Applications/DBDelve.app`. It is the only way to get a
 real app rather than a binary, and it replaces what is installed and restarts
 the Dock, so do not run it while someone is using the app.
 
 Three things in it are load-bearing:
 
 - **`CFBundleIdentifier` scopes the Keychain.** Every saved profile password
-  belongs to `com.shayanabbas.slate`. Changing it orphans all of them.
+  belongs to `com.shayanabbas.dbdelve`. Changing it orphans all of them.
 - **The signature is not optional on arm64.** An unsigned arm64 binary will not
   launch, and copying the binary into the bundle invalidates the signature
-  rustc left. `SLATE_SIGN_ID` takes a real identity; `dev/identity.sh`'s
+  rustc left. `DBDELVE_SIGN_ID` takes a real identity; `dev/identity.sh`'s
   self-signed one is what stops the Keychain re-prompting after every rebuild;
   ad-hoc is the fallback and runs, but prompts.
 - **The font licences ship inside the bundle**, because the fonts are compiled
@@ -281,17 +281,17 @@ Three things in it are load-bearing:
 
 **There is still no notarization and no Developer ID**, but the app is no
 longer stuck on this machine. `dev/release.sh` builds with `dev/bundle.sh`
-(`SLATE_SIGN_ID=- SLATE_INSTALL=0`, so it stops short of the install step
-above), wraps `target/Slate.app` into `target/Slate-$VERSION.dmg` with an
+(`DBDELVE_SIGN_ID=- DBDELVE_INSTALL=0`, so it stops short of the install step
+above), wraps `target/DBDelve.app` into `target/DBDelve-$VERSION.dmg` with an
 `/Applications` symlink alongside it, publishes the DMG with
-`gh release create`, and rewrites `Casks/slate.rb` in the
-`ShayanAbbas1/homebrew-slate` tap (found at `../homebrew-slate`, override with
-`SLATE_TAP`) to point at it. A release still signs ad-hoc rather than with
+`gh release create`, and rewrites `Casks/dbdelve.rb` in the
+`ShayanAbbas1/homebrew-dbdelve` tap (found at `../homebrew-dbdelve`, override with
+`DBDELVE_TAP`) to point at it. A release still signs ad-hoc rather than with
 `dev/identity.sh`'s certificate: that certificate is trusted only on this
 machine, and to Gatekeeper an issuer nobody trusts reads worse than no issuer
 at all. The trade is that the ad-hoc hash moves with every release, so an
 update costs one fresh Keychain prompt. Installing still means clearing
-quarantine by hand — `xattr -dr com.apple.quarantine /Applications/Slate.app`
+quarantine by hand — `xattr -dr com.apple.quarantine /Applications/DBDelve.app`
 — since nothing here is notarized.
 
 ### Engine divergences
@@ -299,7 +299,7 @@ quarantine by hand — `xattr -dr com.apple.quarantine /Applications/Slate.app`
 Decided, recorded in the multi-engine spec, and not to be re-litigated:
 
 - **`Engine` is the only engine-shaped thing above `src/db/`**, and only because
-  Slate writes SQL. It answers three questions — quote an identifier, quote a
+  DBDelve writes SQL. It answers three questions — quote an identifier, quote a
   literal, qualify a name — plus the inverse used to read a sort key back.
   There are **seven** call sites that generate SQL:
   `explorer::preview_sql`, `sql::with_order_by`, `sql::update_row`,
@@ -320,7 +320,7 @@ Decided, recorded in the multi-engine spec, and not to be re-litigated:
   are decided by the grammar rather than by any server.**
   `sql::is_generated_select` refuses whatever `tree_sitter_sequel` cannot parse
   whole, and that pin does not move — so a predicate the grammar does not know
-  is one Slate cannot run, however valid the server would find it. It has **no
+  is one DBDelve cannot run, however valid the server would find it. It has **no
   `ESCAPE` clause and no infix `REGEXP`**. So the pattern operators lean on the
   engine's default `LIKE` escape, which is the backslash on Postgres and MySQL,
   and `like_pattern` escapes `%`, `_` and the backslash itself with it;
@@ -359,7 +359,7 @@ Decided, recorded in the multi-engine spec, and not to be re-litigated:
   the same as scanning. It goes in at connect and never into the user's
   submission — hard rule 1, and on Postgres a `SET` inside their submission
   would be scoped to the implicit transaction around it. It therefore bounds
-  Slate's own catalog and structure queries too, which is intended.
+  DBDelve's own catalog and structure queries too, which is intended.
 - **Cancel reaches the running statement and nothing queued behind it.** The
   handle it needs — Postgres's `CancelToken`, MySQL's connection id, SQLite's
   `InterruptHandle` — is captured in each engine's `open`, before the client
@@ -411,7 +411,7 @@ to gpui-component (see below).
 **Columns are not in the catalog, and must not be put there.** The first
 implementation fetched every column of every relation at connect, and that is
 unbounded: on a large schema it is a multi-million-row result the driver
-buffers whole before Slate sees a row, held for the life of the connection and
+buffers whole before DBDelve sees a row, held for the life of the connection and
 duplicated into the provider's snapshot — all of it paid before anyone has
 asked a question. A relation's columns are fetched when a statement first names
 it, through `Connection::structure`, which the Structure tab already runs; so
@@ -428,7 +428,7 @@ makes exactly the call completion would make; dropping that line costs a
 duplicate round trip per relation the user both opened and wrote about. And **a
 failed fetch is retried, but only `FETCH_ATTEMPTS` times.** Neither extreme
 works: never retrying lets one blip — or one statement timeout, which bounds
-Slate's own catalog queries too — kill completion for a relation silently for
+DBDelve's own catalog queries too — kill completion for a relation silently for
 the rest of the connection, and always retrying puts a describe on the wire per
 keystroke, each queued behind the last on the connection mutex, which freezes
 the profile rather than degrading it.
@@ -475,9 +475,9 @@ Do not hand-roll a popup beside it. The caret's pixel position it would need --
 anchored overlay of our own is fork-only, and forking is out (spec §7.1).
 
 One consequence worth knowing before writing an `escape` handler: the library
-binds `escape` scoped to `Input`, Slate binds it unscoped, and an unscoped
+binds `escape` scoped to `Input`, DBDelve binds it unscoped, and an unscoped
 binding ties at every depth and wins on registration order. `show_editor` must
-therefore `cx.propagate()` on the paths where Slate has nothing stacked to
+therefore `cx.propagate()` on the paths where DBDelve has nothing stacked to
 close, or the completion popup cannot be dismissed.
 
 It does **not** provide a fuzzy matcher or a command palette. Those are ours —
@@ -489,7 +489,7 @@ routes every one of them into the method its button or keystroke already calls,
 so the palette is never a second implementation of anything.
 
 It also does **not** ship the icons its `IconName` names: those are Lucide file
-paths with no files behind them. `src/icons.rs` is Slate's `AssetSource` — it
+paths with no files behind them. `src/icons.rs` is DBDelve's `AssetSource` — it
 serves the same paths from `icondata_lu` in memory, so nothing is vendored into
 the repository and the library's own widgets get their icons from it too. Add a
 row to `ICONS` when something needs one; an unlisted path draws nothing.
@@ -516,7 +516,7 @@ Hard-won and easy to rediscover. Read before writing any animated element.
 - **A repeating `with_animation` element requests a redraw every display frame
   while mounted.** One spinner has been measured pinning a window at 120Hz and
   36% CPU. The remedy is a single shared throttled clock with per-view leases,
-  reaping stale leases and parking when the list empties. **Slate does not have
+  reaping stale leases and parking when the list empties. **DBDelve does not have
   one**, and the shipped query spinner is subject to this — see "Animation" at
   the end of this file before adding a second animated element.
 - **`with_animation` replays from zero on remount.** Anything that must survive
@@ -549,7 +549,7 @@ Two more that are not about animation, and cost a round each to find:
   element beats the container's, which is why the palette's arrows are bound
   against `Palette > Input`: a descendant predicate matches at the leaf, which
   is the only depth that takes them back from gpui-component's input. Ties are
-  broken by registration order, and Slate's `cx.bind_keys` runs after
+  broken by registration order, and DBDelve's `cx.bind_keys` runs after
   `gpui_component::init`.
 
 ---
@@ -577,7 +577,7 @@ Two more that are not about animation, and cost a round each to find:
 **This section said "no animation in v1" until 2026-09-09, and that had been
 wrong since `40f3c11`.** Read it before adding anything else that moves.
 
-There is still no motion system of Slate's own: no transitions, no easing
+There is still no motion system of DBDelve's own: no transitions, no easing
 curves, no `with_animation` anywhere in `src/`, and hover states are instant.
 Spec §7.4 is otherwise intact.
 

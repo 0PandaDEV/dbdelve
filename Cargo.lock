@@ -1341,6 +1341,36 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be1e0bca6c3637f992fc1cc7cbc52a78c1ef6db076dbf1059c4323d6a2048376"
 
 [[package]]
+name = "dbdelve"
+version = "0.1.0"
+dependencies = [
+ "geozero",
+ "gpui",
+ "gpui-component",
+ "guic-gpui-assets",
+ "hex",
+ "icondata_core",
+ "icondata_lu",
+ "lsp-types",
+ "mysql",
+ "nucleo-matcher",
+ "postgres",
+ "rusqlite",
+ "rustls",
+ "rustls-native-certs",
+ "rustls-pemfile",
+ "security-framework",
+ "serde",
+ "serde_json",
+ "sqlparser",
+ "tokio-postgres-rustls",
+ "toml 0.9.12+spec-1.1.0",
+ "tree-sitter",
+ "tree-sitter-sequel",
+ "url",
+]
+
+[[package]]
 name = "deflate64"
 version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5729,36 +5759,6 @@ name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
-
-[[package]]
-name = "slate"
-version = "0.1.0"
-dependencies = [
- "geozero",
- "gpui",
- "gpui-component",
- "guic-gpui-assets",
- "hex",
- "icondata_core",
- "icondata_lu",
- "lsp-types",
- "mysql",
- "nucleo-matcher",
- "postgres",
- "rusqlite",
- "rustls",
- "rustls-native-certs",
- "rustls-pemfile",
- "security-framework",
- "serde",
- "serde_json",
- "sqlparser",
- "tokio-postgres-rustls",
- "toml 0.9.12+spec-1.1.0",
- "tree-sitter",
- "tree-sitter-sequel",
- "url",
-]
 
 [[package]]
 name = "slotmap"

@@ -1,6 +1,6 @@
 # Third-Party Licenses
 
-Slate redistributes the following third-party font families, embedded within the binary through the `guic-gpui-assets` crate and registered at startup.
+DBDelve redistributes the following third-party font families, embedded within the binary through the `guic-gpui-assets` crate and registered at startup.
 
 ## IBM Plex Sans
 

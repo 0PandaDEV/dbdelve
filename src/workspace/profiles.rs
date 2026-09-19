@@ -46,7 +46,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // No mode at all is a profile written before Slate had TLS, and
+        // No mode at all is a profile written before dbdelve had TLS, and
         // `prefer` is exactly what it was connecting as. A mode this build
         // cannot read is the other case, and it fails closed: whatever was
         // asked for, it was not something weaker than the strictest rung.
@@ -57,7 +57,7 @@ impl Workspace {
                 Err(message) => (SslMode::VerifyFull, Some(message)),
             },
         };
-        // No engine at all is a profile written before Slate had a second one,
+        // No engine at all is a profile written before dbdelve had a second one,
         // and Postgres is what it was. An engine this build cannot read is a
         // profile written by a build that has one this one does not, so it is
         // read as Postgres and says so rather than connecting somewhere the
@@ -497,7 +497,7 @@ impl Workspace {
 
         if reconnect {
             // The rows on an object tab are the old database's. Their statement
-            // is Slate's own, so it re-runs the moment the tab is looked at
+            // is dbdelve's own, so it re-runs the moment the tab is looked at
             // again -- a query tab holds SQL the user wrote and is theirs to
             // re-run.
             for tab in &mut self.profiles[index].session.objects {

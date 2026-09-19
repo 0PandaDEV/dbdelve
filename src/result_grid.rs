@@ -72,7 +72,7 @@ pub struct ResultGrid {
     /// Whether a header click can sort this result at all. A control that does
     /// nothing is worse than no control.
     sortable: bool,
-    /// The cell a keystroke acts on. Slate's, not the library's: gpui-component
+    /// The cell a keystroke acts on. dbdelve's, not the library's: gpui-component
     /// tracks a selected row *or* a selected column as mutually exclusive
     /// modes and never a cell, so a coordinate has to be assembled here or
     /// `Enter` has no target. A click sets it outright; the library's arrow
@@ -183,7 +183,7 @@ impl ResultGrid {
                     .width(fitted_width(&column.name, &display, index))
                     .resizable(true)
                     .movable(false)
-                    // The cell padding is Slate's, applied in `render_td` and
+                    // The cell padding is dbdelve's, applied in `render_td` and
                     // `render_th`. Taking the library's as well indents every
                     // value twice and leaves a column's width unknowable here.
                     .p_0()
@@ -632,7 +632,7 @@ impl ResultGrid {
     ///
     /// A row whose key is not fully readable is dropped rather than guessed at:
     /// a `NULL` in a key column, or a key column the result set does not carry,
-    /// leaves Slate unable to name the row.
+    /// leaves dbdelve unable to name the row.
     pub fn pending_updates(&self) -> Vec<PendingRow> {
         let Some(edit) = &self.result.edit else {
             return Vec::new();
@@ -749,7 +749,7 @@ impl ResultGrid {
 /// One column of one row, for the inspector panel.
 pub struct Field {
     pub name: SharedString,
-    /// The server's own name for the column's type, when Slate could learn it
+    /// The server's own name for the column's type, when dbdelve could learn it
     /// without running the statement twice.
     pub data_type: Option<SharedString>,
     pub value: Option<SharedString>,
@@ -906,7 +906,10 @@ impl TableDelegate for ResultGrid {
     ) -> PopupMenu {
         // The right click that opened this pinned the cell on its way past
         // `render_td`, so the column the library never records is known here.
-        if !self.active.is_some_and(|(row, col)| self.editable(row, col)) {
+        if !self
+            .active
+            .is_some_and(|(row, col)| self.editable(row, col))
+        {
             return menu;
         }
         menu.when_some(self.focus.clone(), PopupMenu::action_context)
@@ -986,9 +989,7 @@ impl TableDelegate for ResultGrid {
                             // mode -- and the grid has nowhere to put one. The
                             // input stays open behind the prompt, so answering it
                             // and pressing `enter` again commits what was typed.
-                            false => {
-                                window.dispatch_action(Box::new(crate::RequestWriteMode), cx)
-                            }
+                            false => window.dispatch_action(Box::new(crate::RequestWriteMode), cx),
                         }
                         cx.stop_propagation();
                         cx.notify();
@@ -1112,7 +1113,7 @@ pub(crate) fn new_grid(
 
     // The library's arrow keys move its own selection, which is a row or a
     // column and never a cell. Folded into the active cell here, they move the
-    // ring instead -- so every grid is navigable by keyboard, and Slate needs
+    // ring instead -- so every grid is navigable by keyboard, and dbdelve needs
     // no arrow binding competing with the library's own actions.
     //
     // Hooked in the constructor because every relation tab builds its grid
@@ -1238,7 +1239,7 @@ mod tests {
     #[test]
     fn a_row_offers_its_whole_key_or_nothing_at_all() {
         // The same condition that makes a cell editable, because it is the same
-        // question: can Slate name this row.
+        // question: can dbdelve name this row.
         let grid = editable_grid();
         assert_eq!(
             grid.row_key(1),
@@ -1250,7 +1251,7 @@ mod tests {
         );
         // A row index can outlive the rows it was taken from.
         assert_eq!(grid.row_key(9), None);
-        // And a result Slate cannot trace to one table has no key anywhere.
+        // And a result dbdelve cannot trace to one table has no key anywhere.
         assert_eq!(grid_of(&[Some("x")]).row_key(0), None);
     }
 
@@ -1430,7 +1431,7 @@ mod tests {
     }
 
     #[test]
-    fn a_row_slate_cannot_name_produces_no_statement() {
+    fn a_row_dbdelve_cannot_name_produces_no_statement() {
         // A NULL key value leaves no predicate to write, and a row updated by
         // guesswork is the failure this whole feature is built to avoid.
         let mut grid = ResultGrid::new(
@@ -1470,7 +1471,10 @@ mod tests {
 
         grid.set_mode(Mode::ReadWrite);
         assert!(grid.set_pending(0, 1, Some("x".into())));
-        assert!(!grid.pending_updates().is_empty(), "raising the mode writes");
+        assert!(
+            !grid.pending_updates().is_empty(),
+            "raising the mode writes"
+        );
         grid.discard_pending();
 
         // Not a mode question: a key column stays uneditable at every mode.
@@ -1987,7 +1991,7 @@ mod tests {
         );
         // A NULL has to stay absent rather than becoming the word for one.
         assert!(fields[1].value.is_none());
-        // A type Slate could not learn is shown as nothing, never as a guess.
+        // A type dbdelve could not learn is shown as nothing, never as a guess.
         assert!(fields[1].data_type.is_none());
         // A selection can outlive the rows it was made against.
         assert!(grid.fields(4).is_empty());

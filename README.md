@@ -1,4 +1,4 @@
-# Slate
+# DBDelve
 
 A native macOS database client, speaking Postgres, MySQL and SQLite. Rust,
 GPUI, no Electron.
@@ -15,32 +15,32 @@ The repository includes a disposable database per engine, all carrying the same
 demo objects with deterministic data for editor, result-grid and large-value
 testing: enum, UUID, numeric, array, JSON, `NULL`, Unicode, binary, large text
 and 5,000 measurement rows. Geometry is Postgres-only — PostGIS has no
-equivalent in the other two, and Slate does not pretend otherwise.
+equivalent in the other two, and DBDelve does not pretend otherwise.
 
 ```sh
-docker compose up -d                                       # postgres + mysql
-sqlite3 dev/slate_dev.db < dev/sqlite/001-slate-demo.sql    # a file, not a service
+docker compose up -d                                           # postgres + mysql
+sqlite3 dev/dbdelve_dev.db < dev/sqlite/001-dbdelve-demo.sql    # a file, not a service
 cargo run
 ```
 
 Pick the engine in the connection form, then paste a URL or fill in the fields:
 
 ```text
-postgresql://slate:slate@127.0.0.1:55432/slate_dev
-mysql://slate:slate@127.0.0.1:53306/slate_dev
-/absolute/path/to/slate/dev/slate_dev.db
+postgresql://dbdelve:dbdelve@127.0.0.1:55432/dbdelve_dev
+mysql://dbdelve:dbdelve@127.0.0.1:53306/dbdelve_dev
+/absolute/path/to/dbdelve/dev/dbdelve_dev.db
 ```
 
 `PG*` environment variables still configure a Postgres profile at startup and
-are not generalised — Slate is a generic client, not a generic environment
+are not generalised — DBDelve is a generic client, not a generic environment
 reader, and the other two engines have no such convention to read.
 `PGPASSWORD` is used for that session and nothing more: a profile the
 environment made gets no Keychain entry, because a variable set in a shell is
-not a credential anyone asked Slate to keep.
+not a credential anyone asked DBDelve to keep.
 
 ```sh
-PGHOST=127.0.0.1 PGPORT=55432 PGDATABASE=slate_dev \
-PGUSER=slate PGPASSWORD=slate cargo run
+PGHOST=127.0.0.1 PGPORT=55432 PGDATABASE=dbdelve_dev \
+PGUSER=dbdelve PGPASSWORD=dbdelve cargo run
 ```
 
 The official PostGIS image is currently `amd64`-only. Docker Desktop runs it
@@ -53,7 +53,7 @@ init script failed, so check the row count rather than the status:
 
 ```sh
 docker compose down --volumes && docker compose up -d
-rm -f dev/slate_dev.db && sqlite3 dev/slate_dev.db < dev/sqlite/001-slate-demo.sql
+rm -f dev/dbdelve_dev.db && sqlite3 dev/dbdelve_dev.db < dev/sqlite/001-dbdelve-demo.sql
 ```
 
 ## What works
@@ -92,7 +92,7 @@ rm -f dev/slate_dev.db && sqlite3 dev/slate_dev.db < dev/sqlite/001-slate-demo.s
   statement on screen, and you can edit or undo it.
 - **In-grid editing.** Click or arrow to a cell, `Enter` to edit, `cmd+c` to copy
   the whole value. Apply writes one `UPDATE` per changed row into the buffer and
-  runs it. A cell is editable only when Slate can identify its row by primary
+  runs it. A cell is editable only when DBDelve can identify its row by primary
   key; joins, aggregates, views and keyless tables stay read-only and say why.
 - **Schema explorer** over schemas, tables, views, functions and procedures, with
   an inline filter and a structure view for columns, indexes and constraints.
@@ -101,7 +101,7 @@ rm -f dev/slate_dev.db && sqlite3 dev/slate_dev.db < dev/sqlite/001-slate-demo.s
   to what is on screen. Every row runs the same code the buttons do.
 - **Cancel, and a statement timeout.** A running query has a Cancel button that
   reaches the statement itself, and each profile can carry a timeout applied at
-  connect. What each engine buys with that differs and Slate does not pretend
+  connect. What each engine buys with that differs and DBDelve does not pretend
   otherwise: on MySQL the timeout bounds read-only `SELECT`s only, and SQLite's
   is wall clock rather than work done.
 - **Export** the result set in front of you to CSV or JSON. It writes what the
@@ -123,7 +123,7 @@ rm -f dev/slate_dev.db && sqlite3 dev/slate_dev.db < dev/sqlite/001-slate-demo.s
   both server engines. `verify-full` checks the certificate against the macOS
   trust store on Postgres, or against a root certificate you name, which
   replaces that store rather than adding to it. A mode is never quietly
-  downgraded: ask for encryption and Slate either gets it or tells you which
+  downgraded: ask for encryption and DBDelve either gets it or tells you which
   certificate failed and why. SQLite has no transport to secure, so it has no
   such setting.
 
@@ -132,34 +132,34 @@ rm -f dev/slate_dev.db && sqlite3 dev/slate_dev.db < dev/sqlite/001-slate-demo.s
 Apple Silicon, macOS 12 or later.
 
 ```sh
-brew install --cask ShayanAbbas1/slate/slate
+brew install --cask ShayanAbbas1/dbdelve/dbdelve
 ```
 
-Or take the `.dmg` from [the latest release][releases] and drag Slate to
+Or take the `.dmg` from [the latest release][releases] and drag DBDelve to
 Applications.
 
-Either way macOS will refuse to open it the first time. Slate is signed ad-hoc:
-there is no Developer ID behind it and nothing is notarized, so Gatekeeper has
-no name to show you and declines rather than guess. Clearing the quarantine flag
-is the whole of the fix:
+Either way macOS will refuse to open it the first time. DBDelve is signed
+ad-hoc: there is no Developer ID behind it and nothing is notarized, so
+Gatekeeper has no name to show you and declines rather than guess. Clearing
+the quarantine flag is the whole of the fix:
 
 ```sh
-xattr -dr com.apple.quarantine /Applications/Slate.app
+xattr -dr com.apple.quarantine /Applications/DBDelve.app
 ```
 
 Once per install, not once per launch. A Developer ID is a matter of whether
 anyone ends up using this, not of principle.
 
-To build it yourself instead, `dev/bundle.sh` produces `/Applications/Slate.app`
+To build it yourself instead, `dev/bundle.sh` produces `/Applications/DBDelve.app`
 — release build, icon, signature and all — and skips the quarantine step,
 because nothing downloaded it.
 
-[releases]: https://github.com/ShayanAbbas1/slate/releases/latest
+[releases]: https://github.com/ShayanAbbas1/dbdelve/releases/latest
 
 ## Updating
 
-`brew upgrade --cask slate`, if you installed it that way. Otherwise watch
-[the releases page][releases]; Slate does not check for its own updates.
+`brew upgrade --cask dbdelve`, if you installed it that way. Otherwise watch
+[the releases page][releases]; DBDelve does not check for its own updates.
 
 ## Planned
 
@@ -167,17 +167,17 @@ SSH tunneling, notarized builds, and an in-app update check.
 
 ## Not planned
 
-Visual query builders, ER diagrams, migrations. Slate assumes you can write
+Visual query builders, ER diagrams, migrations. DBDelve assumes you can write
 SQL; it just does not make you write all of it.
 
-**Slate never writes a `DROP` or `TRUNCATE`** — not on request, not by
+**DBDelve never writes a `DROP` or `TRUNCATE`** — not on request, not by
 accident. Generated statements pass a whitelist gate that admits three shapes
 and nothing else — an `UPDATE`, a single-row `INSERT`, and a `DELETE` of one row
 named by its primary key — so the guarantee is structural rather than a list of
 names someone remembered to check. The `DELETE` is generated only from an
-explicit ask and shown before it runs, never from a predicate Slate guessed at
+explicit ask and shown before it runs, never from a predicate DBDelve guessed at
 and never more than one row per statement; and its shape is read back out of the
-parse tree rather than trusted because Slate wrote it, since a gate that trusts
+parse tree rather than trusted because DBDelve wrote it, since a gate that trusts
 its caller is a comment. On MySQL and SQLite, where each statement commits on its own, a
 multi-row edit is bracketed with `BEGIN`/`COMMIT` — written into the buffer
 where you can read it, never opened behind your back. A batch that fails part

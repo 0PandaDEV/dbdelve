@@ -1,11 +1,11 @@
-// Generates Slate's app icon as a .iconset directory.
+// Generates DBDelve's app icon as a .iconset directory.
 //
-// The mark is an S built from three table rows, offset along the letter's
-// diagonal -- the letter and the result grid are the same shape.
+// The mark is three even rows standing for a result grid -- rows of returned
+// data, the thing the app exists to show.
 //
 // It is code rather than a checked-in binary so it stays editable: the row
-// weight, the stagger and the tile colour are numbers here, not pixels nobody
-// can reopen.
+// weight, spacing and tile colour are numbers here, not pixels nobody can
+// reopen.
 //
 // Usage: swift dev/icon.swift <out.iconset>
 
@@ -55,13 +55,16 @@ func render(_ size: Int) -> CGImage {
     ctx.fillPath()
 
     let t = tile.width
-    let h = t * 0.145, gap = t * 0.085, w = t * 0.50, off = t * 0.11
+    let h = t * 0.145, gap = t * 0.085, w = t * 0.50
     let total = h * 3 + gap * 2
     ctx.setFillColor(CGColor(gray: 1, alpha: 1))
-    for (i, dx) in [off, 0, -off].enumerated() {
-        let rect = CGRect(x: tile.midX - w / 2 + dx,
+    // The last row stops short. Three rows of equal length is the hamburger
+    // menu glyph and reads as one everywhere; a run of rows that ends partway
+    // reads as data that ran out, which is what the app shows.
+    for (i, fraction) in [1.0, 1.0, 0.62].enumerated() {
+        let rect = CGRect(x: tile.midX - w / 2,
                           y: tile.midY + total / 2 - h - CGFloat(i) * (h + gap),
-                          width: w, height: h)
+                          width: w * fraction, height: h)
         ctx.addPath(CGPath(roundedRect: rect, cornerWidth: h / 2, cornerHeight: h / 2,
                            transform: nil))
         ctx.fillPath()

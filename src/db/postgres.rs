@@ -176,7 +176,7 @@ SELECT
     CASE WHEN attribute.attnum = ANY (index_entry.indkey) THEN 'yes' ELSE 'no' END
         AS in_primary_key
 -- An inner join on the primary index is what makes a table without one
--- return nothing, which is the same answer as a table Slate cannot identify
+-- return nothing, which is the same answer as a table DBDelve cannot identify
 -- rows in.
 FROM pg_catalog.pg_index AS index_entry
 JOIN pg_catalog.pg_class AS class
@@ -201,11 +201,11 @@ pub fn config_from_url(url: &str) -> Result<ServerConfig, String> {
         || url_parts
             .query_pairs()
             .any(|(key, _)| key.as_ref() == "port");
-    // The two keys Slate owns come out of the URL before the driver sees
+    // The two keys dbdelve owns come out of the URL before the driver sees
     // it. Its parser has a fixed key list and refuses anything outside it,
     // so `sslrootcert` would die as "invalid connection string" and so
     // would `sslmode=verify-full` — naming neither the option nor the
-    // reason. Slate carries both itself and re-emits an `sslmode` the
+    // reason. dbdelve carries both itself and re-emits an `sslmode` the
     // driver does know.
     let mut sslmode = tls::SslMode::default();
     let mut root_certificate = None;
@@ -292,7 +292,7 @@ fn connection_string(server: &ServerConfig) -> String {
     if !server.password.is_empty() {
         parts.push(format!("password={}", quote(&server.password)));
     }
-    // The driver's three rungs, not Slate's five. Verification above
+    // The driver's three rungs, not dbdelve's five. Verification above
     // `require` belongs to the connector `tls::connector` builds, and
     // handing the driver a word it does not know fails the whole parse.
     parts.push(format!("sslmode={}", server.sslmode.driver_mode()));
@@ -304,7 +304,7 @@ fn connection_string(server: &ServerConfig) -> String {
         // A session default set once, here, rather than a `SET` prepended to
         // the user's submission -- see `ServerConfig::statement_timeout`. It
         // rides in as a startup option because `options` is the only channel
-        // libpq has for one, and nothing collides with it: Slate's URL parser
+        // libpq has for one, and nothing collides with it: dbdelve's URL parser
         // has no `options` field, so a user-supplied one never reaches here.
         // `statement_timeout` counts milliseconds when given a bare number.
         parts.push(format!(
@@ -371,7 +371,7 @@ impl Connection {
     /// server reports nothing about whether the request landed, and it may
     /// arrive after the statement has already finished. So `Ok` here means the
     /// request was delivered, never that anything stopped -- what the query
-    /// eventually returned is the only account Slate gives of that.
+    /// eventually returned is the only account dbdelve gives of that.
     pub fn cancel(&self) -> Result<(), DbError> {
         match &self.connector {
             None => self.cancel.cancel_query(NoTls),
@@ -392,7 +392,7 @@ impl Connection {
         self.run(sql, true)
     }
 
-    /// Slate's own SQL. Its column types are never shown, so it does not pay
+    /// dbdelve's own SQL. Its column types are never shown, so it does not pay
     /// for the extra round trip that learns them.
     fn internal_query(&self, sql: &str) -> Result<QueryResult, DbError> {
         self.run(sql, false)
@@ -417,7 +417,7 @@ impl Connection {
         // Types are learned after the statement ran, and only from a single
         // statement that returned columns. A refused `Parse` is an error
         // inside the session's open transaction and aborts it, so describing
-        // first meant Slate's own probe ended the user's transaction and every
+        // first meant dbdelve's own probe ended the user's transaction and every
         // later failure reported "current transaction is aborted" instead of
         // its cause. Postgres refuses to prepare more than one statement at a
         // time, which is exactly the case that used to do the damage.
@@ -878,7 +878,7 @@ mod tests {
         ServerConfig {
             host: "db.example.test".into(),
             port: Some(8432),
-            database: "slate_test".into(),
+            database: "dbdelve_test".into(),
             user: "someone".into(),
             password: String::new(),
             sslmode: SslMode::default(),
@@ -953,7 +953,7 @@ mod tests {
         let config = config();
         assert_eq!(
             connection_string(&config),
-            "host='db.example.test' dbname='slate_test' user='someone' port=8432 \
+            "host='db.example.test' dbname='dbdelve_test' user='someone' port=8432 \
              sslmode=prefer connect_timeout=10"
         );
     }
@@ -1029,7 +1029,7 @@ mod tests {
     #[test]
     fn url_populates_fields_without_inventing_a_port() {
         let config =
-            config_from_url("postgresql://person%40example.com@db.example.test/slate_test")
+            config_from_url("postgresql://person%40example.com@db.example.test/dbdelve_test")
                 .unwrap();
 
         assert_eq!(
@@ -1037,7 +1037,7 @@ mod tests {
             ServerConfig {
                 host: "db.example.test".into(),
                 port: None,
-                database: "slate_test".into(),
+                database: "dbdelve_test".into(),
                 user: "person@example.com".into(),
                 password: String::new(),
                 sslmode: SslMode::default(),
@@ -1050,7 +1050,8 @@ mod tests {
     #[test]
     fn url_preserves_an_explicit_port_and_password() {
         let config =
-            config_from_url("postgres://someone:pa%20ss@db.example.test:8432/slate_test").unwrap();
+            config_from_url("postgres://someone:pa%20ss@db.example.test:8432/dbdelve_demo")
+                .unwrap();
 
         assert_eq!(config.port, Some(8432));
         assert_eq!(config.password, "pa ss");
@@ -1070,20 +1071,20 @@ mod tests {
             ("verify-ca", SslMode::VerifyCa),
             ("verify-full", SslMode::VerifyFull),
         ] {
-            let url = format!("postgresql://someone@db.example.test/slate_test?sslmode={mode}");
+            let url = format!("postgresql://someone@db.example.test/dbdelve_test?sslmode={mode}");
             assert_eq!(config_from_url(&url).unwrap().sslmode, expected, "{url}");
         }
     }
 
     #[test]
-    fn the_two_keys_slate_owns_are_kept_away_from_the_drivers_parser() {
+    fn the_two_keys_dbdelve_owns_are_kept_away_from_the_drivers_parser() {
         // The driver knows neither `verify-full` nor `sslrootcert` and refuses
         // the whole string for either, naming nothing useful. Both have to be
         // taken out of the URL before it reaches that parser, and everything
         // else has to survive the round trip.
         let config = config_from_url(
-            "postgresql://someone@db.example.test:5433/slate_test\
-             ?sslmode=verify-full&sslrootcert=/tmp/rds.pem&application_name=slate",
+            "postgresql://someone@db.example.test:5433/dbdelve_test\
+             ?sslmode=verify-full&sslrootcert=/tmp/rds.pem&application_name=dbdelve",
         )
         .unwrap();
 
@@ -1094,9 +1095,9 @@ mod tests {
     }
 
     #[test]
-    fn a_url_asking_for_a_mode_slate_cannot_honour_says_so() {
+    fn a_url_asking_for_a_mode_dbdelve_cannot_honour_says_so() {
         assert!(
-            config_from_url("postgresql://someone@db.example.test/slate_test?sslmode=allow")
+            config_from_url("postgresql://someone@db.example.test/dbdelve_test?sslmode=allow")
                 .unwrap_err()
                 .contains("allow")
         );
@@ -1108,17 +1109,17 @@ mod tests {
         // there is none -- and pushes `?port=` after it, so reading the first
         // entry connected to a different server than the URL named.
         for (url, expected) in [
-            ("postgresql://someone@db.example.test/slate_test", None),
+            ("postgresql://someone@db.example.test/dbdelve_test", None),
             (
-                "postgresql://someone@db.example.test:5433/slate_test",
+                "postgresql://someone@db.example.test:5433/dbdelve_test",
                 Some(5433),
             ),
             (
-                "postgresql://someone@db.example.test/slate_test?port=6000",
+                "postgresql://someone@db.example.test/dbdelve_test?port=6000",
                 Some(6000),
             ),
             (
-                "postgresql://someone@db.example.test:5433/slate_test?port=6000",
+                "postgresql://someone@db.example.test:5433/dbdelve_test?port=6000",
                 Some(6000),
             ),
         ] {
@@ -1128,7 +1129,7 @@ mod tests {
 
     #[test]
     fn the_driver_is_only_ever_handed_a_mode_it_knows() {
-        // Slate's five rungs collapse to the driver's three on the wire; the
+        // dbdelve's five rungs collapse to the driver's three on the wire; the
         // rest is the verifier's job. A word the driver does not know fails
         // its parse and takes the whole connection with it.
         for (mode, expected) in [
@@ -1565,7 +1566,7 @@ mod tests {
     #[ignore = "requires the repository development database configured through PG*"]
     fn live_a_join_or_an_aggregate_is_not_editable() {
         // Two tables, or no table: either way the row on screen is not a row
-        // of anything Slate could write back to.
+        // of anything dbdelve could write back to.
         let connection = Connection::open(&live_config()).expect("connection should open");
 
         for sql in [
@@ -1603,11 +1604,11 @@ mod tests {
         // There is no predicate that names one of two identical rows.
         let connection = Connection::open(&live_config()).expect("connection should open");
         connection
-            .query("CREATE TEMP TABLE slate_unkeyed (value integer, label text)")
+            .query("CREATE TEMP TABLE dbdelve_unkeyed (value integer, label text)")
             .expect("the temporary table should be created");
 
         let result = connection
-            .query("SELECT value, label FROM slate_unkeyed")
+            .query("SELECT value, label FROM dbdelve_unkeyed")
             .expect("query should succeed");
 
         assert!(result.edit.is_none());
@@ -1619,7 +1620,7 @@ mod tests {
         let connection = Connection::open(&live_config()).expect("connection should open");
         connection
             .query(
-                "CREATE TEMP TABLE slate_composite (
+                "CREATE TEMP TABLE dbdelve_composite (
                     left_id integer,
                     right_id integer,
                     label text,
@@ -1629,12 +1630,12 @@ mod tests {
             .expect("the temporary table should be created");
 
         let edit = connection
-            .query("SELECT label, right_id, left_id FROM slate_composite")
+            .query("SELECT label, right_id, left_id FROM dbdelve_composite")
             .expect("query should succeed")
             .edit
             .expect("both key columns are in the result set");
 
-        assert_eq!(edit.table, "slate_composite");
+        assert_eq!(edit.table, "dbdelve_composite");
         assert!(
             edit.schema.starts_with("pg_temp"),
             "a temporary table lives in a per-session schema: {}",

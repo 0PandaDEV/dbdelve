@@ -216,12 +216,12 @@ WHERE TABLE_SCHEMA = {schema}
 ORDER BY SEQ_IN_INDEX
 ";
 
-/// A `mysql://` URL, read by Slate rather than by the driver.
+/// A `mysql://` URL, read by dbdelve rather than by the driver.
 ///
 /// The driver has its own URL parser with a fixed key list, and it would refuse
 /// the whole string over an `sslmode` it does not know — naming neither the
 /// option nor the reason, which is the same trap the Postgres side documents.
-/// Slate owns both TLS keys and builds the driver's options from fields.
+/// dbdelve owns both TLS keys and builds the driver's options from fields.
 pub fn config_from_url(url: &str) -> Result<ServerConfig, String> {
     let parsed =
         url::Url::parse(url).map_err(|error| format!("Connection URL is invalid: {error}"))?;
@@ -249,12 +249,12 @@ pub fn config_from_url(url: &str) -> Result<ServerConfig, String> {
                 root_certificate = Some(value.trim().to_string()).filter(|path| !path.is_empty());
             }
             // Refused rather than dropped. The driver's options are built from
-            // fields here, so a parameter Slate does not carry has nowhere to
+            // fields here, so a parameter dbdelve does not carry has nowhere to
             // go, and silently ignoring one is how a connection ends up not
             // being the connection that was asked for.
             other => {
                 return Err(format!(
-                    "Connection URL parameter {other} is not one Slate can pass to MySQL."
+                    "Connection URL parameter {other} is not one dbdelve can pass to MySQL."
                 ));
             }
         }
@@ -396,7 +396,7 @@ impl Connection {
         self.run(sql, true)
     }
 
-    /// Slate's own SQL. Its rows are never editable, so it does not pay for the
+    /// dbdelve's own SQL. Its rows are never editable, so it does not pay for the
     /// round trip that reads a primary key.
     fn internal_query(&self, sql: &str) -> Result<QueryResult, DbError> {
         self.run(sql, false)
@@ -752,7 +752,7 @@ fn column_of(result: &QueryResult, column: &str) -> Result<Vec<String>, DbError>
         .collect()
 }
 
-/// Slate's five rungs as the driver's options.
+/// dbdelve's five rungs as the driver's options.
 ///
 /// The driver verifies certificates itself, so `tls::connector`'s verifiers are
 /// not reusable here — see the multi-engine spec, section 4.3, for the trust
@@ -811,7 +811,7 @@ fn query_error(error: &::mysql::Error) -> DbError {
 /// End the transaction a failed batch left open, and say so in the error.
 ///
 /// MySQL stops a multi-statement submission at the failing statement, so the
-/// `COMMIT` Slate wrote into the text never runs and the transaction stays open
+/// `COMMIT` dbdelve wrote into the text never runs and the transaction stays open
 /// on a connection that outlives it — the refresh that follows would read the
 /// uncommitted rows back as though the apply had succeeded, and every statement
 /// after it would join a transaction nobody closes.
@@ -819,7 +819,7 @@ fn query_error(error: &::mysql::Error) -> DbError {
 /// Only a transaction *this* submission opened is rolled back, so one the user
 /// began in an earlier run is theirs to finish. Unlike SQLite, MySQL cannot be
 /// asked: the driver keeps the server's `SERVER_STATUS_IN_TRANS` flag private,
-/// so the submitted text is what there is to read, and it is the text Slate
+/// so the submitted text is what there is to read, and it is the text dbdelve
 /// wrote or the user can see.
 fn rolled_back(connection: &mut Conn, sql: &str, error: DbError) -> DbError {
     let Some(start) = Engine::MySql.transaction_start() else {
@@ -862,10 +862,10 @@ mod tests {
     use super::*;
     use crate::db::{ColumnDefinition, ForeignKey, RelationKind, RoutineKind};
 
-    /// The server the `live_` tests talk to, from `SLATE_MYSQL_URL`.
+    /// The server the `live_` tests talk to, from `dbdelve_MYSQL_URL`.
     fn live() -> Connection {
-        let url = std::env::var("SLATE_MYSQL_URL").expect("SLATE_MYSQL_URL is required");
-        let config = config_from_url(&url).expect("SLATE_MYSQL_URL should parse");
+        let url = std::env::var("dbdelve_MYSQL_URL").expect("dbdelve_MYSQL_URL is required");
+        let config = config_from_url(&url).expect("dbdelve_MYSQL_URL should parse");
         Connection::open(&ServerConfig {
             // The compose database speaks no TLS, and these tests are the one
             // place a plaintext connection is the point.
@@ -897,7 +897,7 @@ mod tests {
             .map(|(table, column)| ProbedColumn {
                 name: column.unwrap_or("?").to_string(),
                 type_name: "int".to_string(),
-                schema: table.map(|_| "slate_dev".to_string()),
+                schema: table.map(|_| "dbdelve_dev".to_string()),
                 table: table.map(str::to_string),
                 column: column.map(str::to_string),
                 binary: false,
@@ -908,7 +908,7 @@ mod tests {
     #[test]
     fn a_url_fills_the_fields_without_inventing_a_port() {
         let config =
-            config_from_url("mysql://person%40example.com:pa%20ss@db.example.test/slate_test")
+            config_from_url("mysql://person%40example.com:pa%20ss@db.example.test/dbdelve_test")
                 .unwrap();
 
         assert_eq!(
@@ -916,7 +916,7 @@ mod tests {
             ServerConfig {
                 host: "db.example.test".into(),
                 port: None,
-                database: "slate_test".into(),
+                database: "dbdelve_test".into(),
                 // Cloud IAM usernames are email addresses, and a password may
                 // contain anything a URL can encode.
                 user: "person@example.com".into(),
@@ -927,7 +927,7 @@ mod tests {
             }
         );
         assert_eq!(
-            config_from_url("mysql://someone@db.example.test:3307/slate_test")
+            config_from_url("mysql://someone@db.example.test:3307/dbdelve_test")
                 .unwrap()
                 .port,
             Some(3307)
@@ -935,9 +935,9 @@ mod tests {
     }
 
     #[test]
-    fn a_url_carries_the_two_keys_slate_owns() {
+    fn a_url_carries_the_two_keys_dbdelve_owns() {
         let config = config_from_url(
-            "mysql://someone@db.example.test/slate_test\
+            "mysql://someone@db.example.test/dbdelve_test\
              ?sslmode=verify-full&sslrootcert=/tmp/rds.pem",
         )
         .unwrap();
@@ -949,14 +949,14 @@ mod tests {
     #[test]
     fn a_url_missing_a_part_or_carrying_an_unknown_one_says_which() {
         for (url, expected) in [
-            ("mysql://db.example.test/slate_test", "username"),
+            ("mysql://db.example.test/dbdelve_test", "username"),
             ("mysql://someone@db.example.test/", "database"),
             (
-                "mysql://someone@db.example.test/slate_test?charset=utf8",
+                "mysql://someone@db.example.test/dbdelve_test?charset=utf8",
                 "charset",
             ),
             (
-                "mysql://someone@db.example.test/slate_test?sslmode=allow",
+                "mysql://someone@db.example.test/dbdelve_test?sslmode=allow",
                 "allow",
             ),
         ] {
@@ -997,7 +997,7 @@ mod tests {
     fn sole_table_needs_one_table_and_at_least_one() {
         assert_eq!(
             sole_table(&probed(&[(Some("accounts"), Some("id")), (None, None)])),
-            Some(("slate_dev".into(), "accounts".into()))
+            Some(("dbdelve_dev".into(), "accounts".into()))
         );
         assert_eq!(
             sole_table(&probed(&[
@@ -1020,13 +1020,13 @@ mod tests {
                 (None, None),
                 (Some("accounts"), Some("name")),
             ]),
-            "slate_dev",
+            "dbdelve_dev",
             "accounts",
             &["id".to_string()],
         )
         .expect("one table with its key present is editable");
 
-        assert_eq!(target.schema, "slate_dev");
+        assert_eq!(target.schema, "dbdelve_dev");
         assert_eq!(
             target.columns,
             vec![Some("id".to_string()), None, Some("name".to_string())]
@@ -1046,7 +1046,7 @@ mod tests {
                     (Some("accounts"), Some("name")),
                     (Some("accounts"), Some("name")),
                 ]),
-                "slate_dev",
+                "dbdelve_dev",
                 "accounts",
                 &["id".to_string()],
             ),
@@ -1061,7 +1061,7 @@ mod tests {
         assert_eq!(
             resolve_edit_target(
                 &probed(&[(Some("t"), Some("left_id")), (Some("t"), Some("label"))]),
-                "slate_dev",
+                "dbdelve_dev",
                 "t",
                 &["left_id".to_string(), "right_id".to_string()],
             ),
@@ -1070,7 +1070,7 @@ mod tests {
         assert_eq!(
             resolve_edit_target(
                 &probed(&[(Some("t"), Some("label"))]),
-                "slate_dev",
+                "dbdelve_dev",
                 "t",
                 &[],
             ),
@@ -1100,10 +1100,10 @@ mod tests {
         assert_eq!(
             structure_sql(
                 "WHERE TABLE_SCHEMA = {schema} AND TABLE_NAME = {relation}",
-                "slate_dev",
+                "dbdelve_dev",
                 "odd'name",
             ),
-            "WHERE TABLE_SCHEMA = 'slate_dev' AND TABLE_NAME = 'odd''name'"
+            "WHERE TABLE_SCHEMA = 'dbdelve_dev' AND TABLE_NAME = 'odd''name'"
         );
     }
 
@@ -1125,7 +1125,7 @@ mod tests {
         "SELECT MAX(SHA2(CONCAT(a.id, b.id), 512)) FROM measurements a JOIN measurements b";
 
     #[test]
-    #[ignore = "requires the repository development database configured through SLATE_MYSQL_URL"]
+    #[ignore = "requires the repository development database configured through dbdelve_MYSQL_URL"]
     fn live_a_cancel_stops_a_running_statement_without_closing_the_session() {
         // The connection id has to have been read in `open`: asking the live
         // connection for it here would want the mutex the sleeping statement is
@@ -1150,10 +1150,10 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires the repository development database configured through SLATE_MYSQL_URL"]
+    #[ignore = "requires the repository development database configured through dbdelve_MYSQL_URL"]
     fn live_a_statement_timeout_bounds_a_select_and_nothing_else() {
-        let url = std::env::var("SLATE_MYSQL_URL").expect("SLATE_MYSQL_URL is required");
-        let config = config_from_url(&url).expect("SLATE_MYSQL_URL should parse");
+        let url = std::env::var("dbdelve_MYSQL_URL").expect("dbdelve_MYSQL_URL is required");
+        let config = config_from_url(&url).expect("dbdelve_MYSQL_URL should parse");
         let connection = Connection::open(&ServerConfig {
             sslmode: SslMode::Disable,
             statement_timeout: 1,
@@ -1187,10 +1187,10 @@ mod tests {
     /// rungs refuse it and say TLS was the reason, rather than quietly
     /// connecting anyway.
     #[test]
-    #[ignore = "requires the repository development database configured through SLATE_MYSQL_URL"]
+    #[ignore = "requires the repository development database configured through dbdelve_MYSQL_URL"]
     fn live_only_the_modes_that_tolerate_an_unchecked_certificate_connect() {
-        let url = std::env::var("SLATE_MYSQL_URL").expect("SLATE_MYSQL_URL is required");
-        let base = config_from_url(&url).expect("SLATE_MYSQL_URL should parse");
+        let url = std::env::var("dbdelve_MYSQL_URL").expect("dbdelve_MYSQL_URL is required");
+        let base = config_from_url(&url).expect("dbdelve_MYSQL_URL should parse");
         let connect = |sslmode| {
             Connection::open(&ServerConfig {
                 sslmode,
@@ -1216,7 +1216,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires the repository development database configured through SLATE_MYSQL_URL"]
+    #[ignore = "requires the repository development database configured through dbdelve_MYSQL_URL"]
     fn live_the_development_database_is_fully_seeded() {
         // The seed is applied by a tool outside this test suite, and a seed that
         // half-applied still leaves something to connect to -- the MySQL
@@ -1230,7 +1230,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires the repository development database configured through SLATE_MYSQL_URL"]
+    #[ignore = "requires the repository development database configured through dbdelve_MYSQL_URL"]
     fn live_query_round_trip() {
         let result = live()
             .query("SELECT 1 AS id, 'alpha' AS label UNION ALL SELECT 2, NULL")
@@ -1249,7 +1249,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires the repository development database configured through SLATE_MYSQL_URL"]
+    #[ignore = "requires the repository development database configured through dbdelve_MYSQL_URL"]
     fn live_a_multi_statement_selection_keeps_one_result_shape() {
         let connection = live();
 
@@ -1276,7 +1276,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires the repository development database configured through SLATE_MYSQL_URL"]
+    #[ignore = "requires the repository development database configured through dbdelve_MYSQL_URL"]
     fn live_a_column_is_tagged_with_the_type_the_server_would_name() {
         let result = live()
             .query("SELECT id, name, email FROM accounts")
@@ -1292,14 +1292,14 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires the repository development database configured through SLATE_MYSQL_URL"]
+    #[ignore = "requires the repository development database configured through dbdelve_MYSQL_URL"]
     fn live_catalog_round_trip() {
         let catalog = live().catalog().expect("catalog should load");
         let schema = catalog
             .schemas
             .iter()
-            .find(|schema| schema.name == "slate_dev")
-            .expect("slate_dev should exist");
+            .find(|schema| schema.name == "dbdelve_dev")
+            .expect("dbdelve_dev should exist");
 
         assert!(
             schema
@@ -1327,10 +1327,10 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires the repository development database configured through SLATE_MYSQL_URL"]
+    #[ignore = "requires the repository development database configured through dbdelve_MYSQL_URL"]
     fn live_structure_round_trip() {
         let structure = live()
-            .structure("slate_dev", "accounts")
+            .structure("dbdelve_dev", "accounts")
             .expect("structure should load");
 
         assert!(structure.columns.contains(&ColumnDefinition {
@@ -1358,7 +1358,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires the repository development database configured through SLATE_MYSQL_URL"]
+    #[ignore = "requires the repository development database configured through dbdelve_MYSQL_URL"]
     fn live_a_single_table_select_is_editable_by_its_primary_key() {
         let edit = live()
             .query("SELECT name, id FROM accounts")
@@ -1366,7 +1366,7 @@ mod tests {
             .edit
             .expect("accounts has a primary key");
 
-        assert_eq!(edit.schema, "slate_dev");
+        assert_eq!(edit.schema, "dbdelve_dev");
         assert_eq!(edit.table, "accounts");
         assert_eq!(
             edit.columns,
@@ -1376,7 +1376,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires the repository development database configured through SLATE_MYSQL_URL"]
+    #[ignore = "requires the repository development database configured through dbdelve_MYSQL_URL"]
     fn live_an_aliased_or_computed_column_reports_what_the_table_calls_it() {
         let edit = live()
             .query("SELECT id AS ident, upper(name) AS shouted, name FROM accounts")
@@ -1392,7 +1392,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires the repository development database configured through SLATE_MYSQL_URL"]
+    #[ignore = "requires the repository development database configured through dbdelve_MYSQL_URL"]
     fn live_a_join_an_aggregate_or_a_missing_key_is_not_editable() {
         let connection = live();
 
@@ -1416,10 +1416,10 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires the repository development database configured through SLATE_MYSQL_URL"]
+    #[ignore = "requires the repository development database configured through dbdelve_MYSQL_URL"]
     fn live_the_foreign_key_fixtures_are_seeded() {
         // The foreign-key tests have nothing to read unless the reseed that
-        // added `orders`, `order_items` and the `slate_archive` database has
+        // added `orders`, `order_items` and the `dbdelve_archive` database has
         // actually been applied.
         let connection = live();
 
@@ -1429,16 +1429,16 @@ mod tests {
         assert_eq!(items.rows[0][0].as_deref(), Some("3"));
 
         let closed = connection
-            .query("SELECT count(*) AS rows_seeded FROM slate_archive.closed_accounts")
+            .query("SELECT count(*) AS rows_seeded FROM dbdelve_archive.closed_accounts")
             .expect("query should succeed");
         assert_eq!(closed.rows[0][0].as_deref(), Some("2"));
     }
 
     #[test]
-    #[ignore = "requires the repository development database configured through SLATE_MYSQL_URL"]
+    #[ignore = "requires the repository development database configured through dbdelve_MYSQL_URL"]
     fn live_a_composite_foreign_key_arrives_as_one_key_per_column_in_key_order() {
         let structure = live()
-            .structure("slate_dev", "order_items")
+            .structure("dbdelve_dev", "order_items")
             .expect("structure should load");
 
         assert_eq!(
@@ -1446,13 +1446,13 @@ mod tests {
             vec![
                 ForeignKey {
                     column: "order_account_id".into(),
-                    referenced_schema: "slate_dev".into(),
+                    referenced_schema: "dbdelve_dev".into(),
                     referenced_table: "orders".into(),
                     referenced_column: "account_id".into(),
                 },
                 ForeignKey {
                     column: "order_number".into(),
-                    referenced_schema: "slate_dev".into(),
+                    referenced_schema: "dbdelve_dev".into(),
                     referenced_table: "orders".into(),
                     referenced_column: "number".into(),
                 },
@@ -1461,17 +1461,17 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires the repository development database configured through SLATE_MYSQL_URL"]
+    #[ignore = "requires the repository development database configured through dbdelve_MYSQL_URL"]
     fn live_a_foreign_key_across_databases_names_the_database_it_references() {
         let structure = live()
-            .structure("slate_archive", "closed_accounts")
+            .structure("dbdelve_archive", "closed_accounts")
             .expect("structure should load");
 
         assert_eq!(
             structure.foreign_keys,
             vec![ForeignKey {
                 column: "account_id".into(),
-                referenced_schema: "slate_dev".into(),
+                referenced_schema: "dbdelve_dev".into(),
                 referenced_table: "accounts".into(),
                 referenced_column: "id".into(),
             }]
@@ -1479,20 +1479,20 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires the repository development database configured through SLATE_MYSQL_URL"]
+    #[ignore = "requires the repository development database configured through dbdelve_MYSQL_URL"]
     fn live_a_table_referencing_nothing_reports_no_foreign_keys() {
         let structure = live()
-            .structure("slate_dev", "accounts")
+            .structure("dbdelve_dev", "accounts")
             .expect("structure should load");
 
         assert!(structure.foreign_keys.is_empty());
     }
 
     #[test]
-    #[ignore = "requires the repository development database configured through SLATE_MYSQL_URL"]
+    #[ignore = "requires the repository development database configured through dbdelve_MYSQL_URL"]
     fn live_the_rendered_foreign_key_ddl_survives_beside_the_structured_form() {
         let structure = live()
-            .structure("slate_dev", "order_items")
+            .structure("dbdelve_dev", "order_items")
             .expect("structure should load");
 
         assert!(

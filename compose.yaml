@@ -3,16 +3,16 @@ services:
     image: postgis/postgis:15-3.5
     platform: linux/amd64
     environment:
-      POSTGRES_DB: slate_dev
-      POSTGRES_USER: slate
-      POSTGRES_PASSWORD: slate
+      POSTGRES_DB: dbdelve_dev
+      POSTGRES_USER: dbdelve
+      POSTGRES_PASSWORD: dbdelve
     ports:
-      - "${SLATE_POSTGRES_PORT:-55432}:5432"
+      - "${DBDELVE_POSTGRES_PORT:-55432}:5432"
     volumes:
-      - slate-postgres-data:/var/lib/postgresql/data
+      - dbdelve-postgres-data:/var/lib/postgresql/data
       - ./dev/postgres/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U slate -d slate_dev"]
+      test: ["CMD-SHELL", "pg_isready -U dbdelve -d dbdelve_dev"]
       interval: 2s
       timeout: 3s
       retries: 30
@@ -20,21 +20,21 @@ services:
   mysql:
     image: mysql:8.4
     environment:
-      MYSQL_DATABASE: slate_dev
-      MYSQL_USER: slate
-      MYSQL_PASSWORD: slate
-      MYSQL_ROOT_PASSWORD: slate
+      MYSQL_DATABASE: dbdelve_dev
+      MYSQL_USER: dbdelve
+      MYSQL_PASSWORD: dbdelve
+      MYSQL_ROOT_PASSWORD: dbdelve
     ports:
-      - "${SLATE_MYSQL_PORT:-53306}:3306"
+      - "${DBDELVE_MYSQL_PORT:-53306}:3306"
     volumes:
-      - slate-mysql-data:/var/lib/mysql
+      - dbdelve-mysql-data:/var/lib/mysql
       - ./dev/mysql/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -pslate"]
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -pdbdelve"]
       interval: 2s
       timeout: 3s
       retries: 30
 
 volumes:
-  slate-postgres-data:
-  slate-mysql-data:
+  dbdelve-postgres-data:
+  dbdelve-mysql-data:

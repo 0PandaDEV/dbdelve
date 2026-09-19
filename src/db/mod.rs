@@ -25,7 +25,7 @@ mod sqlite;
 
 /// Which engine a profile talks to.
 ///
-/// Also the answer to the only three questions Slate's own generated SQL asks
+/// Also the answer to the only three questions dbdelve's own generated SQL asks
 /// about dialect. There being three is why there is no `Dialect` type: an
 /// engine quotes an identifier, quotes a literal, and qualifies a name.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -42,7 +42,7 @@ pub enum Engine {
 /// The distinction is not a detail of presentation: `Plan` only plans, while
 /// `Analyze` *runs the statement* to report what it really cost. Explaining a
 /// `DELETE` under `Analyze` deletes. That is why the two are a choice the user
-/// makes in front of the button rather than a mode Slate picks for them.
+/// makes in front of the button rather than a mode dbdelve picks for them.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize)]
 pub enum ExplainMode {
     /// Plan only. Never executes the statement.
@@ -103,7 +103,7 @@ impl Engine {
             "postgres" | "postgresql" => Ok(Self::Postgres),
             "mysql" | "mariadb" => Ok(Self::MySql),
             "sqlite" | "sqlite3" | "file" => Ok(Self::Sqlite),
-            other => Err(format!("{other} is not a database engine Slate speaks.")),
+            other => Err(format!("{other} is not a database engine dbdelve speaks.")),
         }
     }
 
@@ -142,10 +142,10 @@ impl Engine {
     /// opening word is the whole of the difference.
     ///
     /// MySQL's own spelling is `START TRANSACTION`, and `BEGIN` is its
-    /// documented alias outside a stored program. The alias is what Slate
+    /// documented alias outside a stored program. The alias is what dbdelve
     /// writes because the brackets go into the statement text, where
     /// `sql::is_generated_write` has to read them back: the tree-sitter
-    /// grammar has no `START TRANSACTION`, so the gate would refuse Slate's own
+    /// grammar has no `START TRANSACTION`, so the gate would refuse dbdelve's own
     /// batch.
     pub fn transaction_start(self) -> Option<&'static str> {
         match self {
@@ -175,7 +175,7 @@ impl Engine {
         )
     }
 
-    /// The inverse, for reading back a name Slate wrote — matching a sort key in
+    /// The inverse, for reading back a name dbdelve wrote — matching a sort key in
     /// a statement to the column header it belongs to, say.
     ///
     /// Anything that is not a quoted identifier comes back unchanged: a bare
@@ -196,7 +196,7 @@ impl Engine {
     /// SQLite reads a backslash as an escape, the first because
     /// `standard_conforming_strings` is on by default and the second because it
     /// has no such notion at all. MySQL does, unless `NO_BACKSLASH_ESCAPES` is
-    /// set — which is again not Slate's to set — so a literal backslash has to
+    /// set — which is again not dbdelve's to set — so a literal backslash has to
     /// survive as two.
     pub fn quote_literal(self, value: &str) -> String {
         match self {
@@ -330,7 +330,7 @@ impl ConnectionConfig {
         }
     }
 
-    /// The scheme picks the engine, and the engine parses the rest. Slate never
+    /// The scheme picks the engine, and the engine parses the rest. dbdelve never
     /// guesses from the shape of a URL: a host-looking string is a host to
     /// three different drivers.
     pub fn from_url(url: &str) -> Result<Self, String> {
@@ -345,7 +345,7 @@ impl ConnectionConfig {
             })?;
 
         match Engine::parse(scheme).map_err(|_| {
-            format!("Connection URL scheme {scheme}:// is not a database Slate speaks.")
+            format!("Connection URL scheme {scheme}:// is not a database dbdelve speaks.")
         })? {
             Engine::Postgres => postgres::config_from_url(url).map(Self::Postgres),
             Engine::MySql => mysql::config_from_url(url).map(Self::MySql),
@@ -459,13 +459,13 @@ impl Connection {
     ///
     /// There is no cancelled state anywhere above this: a stopped statement
     /// comes back out of [`Connection::query`] as an ordinary `Err` carrying the
-    /// server's own words, which is a truer account than Slate could write.
+    /// server's own words, which is a truer account than dbdelve could write.
     ///
     /// What it cannot do. It reaches only the statement running on *this*
     /// connection, so a catalog or structure load queued behind it on the same
     /// mutex is untouched -- the profile is still frozen until the running
     /// statement lets go. And it is the *slow* runaway it helps with, not the
-    /// fat one: Postgres buffers a whole result set before Slate sees a row, so
+    /// fat one: Postgres buffers a whole result set before dbdelve sees a row, so
     /// a query already returning gigabytes is past the point where stopping the
     /// server helps.
     pub fn cancel(&self) -> Result<(), DbError> {
@@ -482,7 +482,7 @@ impl Connection {
 pub struct Column {
     pub name: String,
     /// The server's own name for the column's type — `int4`, `jsonb`,
-    /// `timestamptz` — as a Slate-owned string, never a driver type.
+    /// `timestamptz` — as a dbdelve-owned string, never a driver type.
     ///
     /// Absent rather than guessed. The simple query protocol carries no type
     /// information at all, so this is learned by describing the statement, and
@@ -625,7 +625,7 @@ pub struct QueryResult {
     /// count, so callers must not infer the command kind from this value.
     pub rows_affected: Option<u64>,
     /// Where these rows can be written back to, when they can be at all.
-    /// `None` is the answer for every result set Slate cannot address a single
+    /// `None` is the answer for every result set dbdelve cannot address a single
     /// row of, and it is not an error — see [`Connection::edit_target`].
     pub edit: Option<EditTarget>,
 }
@@ -748,11 +748,11 @@ pub(super) fn assemble_structure(
     Ok(structure)
 }
 
-/// Reads foreign keys out of a result whose columns are named the way Slate
+/// Reads foreign keys out of a result whose columns are named the way dbdelve
 /// names them: `column_name`, `referenced_schema`, `referenced_table`,
 /// `referenced_column`.
 ///
-/// This is shared *parsing of a Slate-named result shape*, not shared dispatch.
+/// This is shared *parsing of a dbdelve-named result shape*, not shared dispatch.
 /// Postgres and MySQL each write their own catalog query and each choose these
 /// four aliases, so the row-to-struct step is the same work twice; SQLite does
 /// not use this at all, because `PRAGMA foreign_key_list` reports a different
@@ -858,31 +858,31 @@ mod tests {
     #[test]
     fn a_url_scheme_picks_the_engine_and_an_unknown_one_is_named() {
         assert_eq!(
-            ConnectionConfig::from_url("postgresql://someone@db.example.test/slate_test")
+            ConnectionConfig::from_url("postgresql://someone@db.example.test/dbdelve_test")
                 .unwrap()
                 .engine(),
             Engine::Postgres
         );
         assert_eq!(
-            ConnectionConfig::from_url("sqlite:///tmp/slate.db").unwrap(),
+            ConnectionConfig::from_url("sqlite:///tmp/dbdelve.db").unwrap(),
             ConnectionConfig::Sqlite {
-                path: "/tmp/slate.db".into(),
+                path: "/tmp/dbdelve.db".into(),
                 statement_timeout: 0
             }
         );
 
         // Named, not merely rejected: "invalid URL" leaves the user guessing
-        // which part of it Slate objected to.
-        let error = ConnectionConfig::from_url("mongodb://db.example.test/slate").unwrap_err();
+        // which part of it dbdelve objected to.
+        let error = ConnectionConfig::from_url("mongodb://db.example.test/dbdelve").unwrap_err();
         assert!(error.contains("mongodb"), "{error}");
-        assert!(ConnectionConfig::from_url("db.example.test/slate").is_err());
+        assert!(ConnectionConfig::from_url("db.example.test/dbdelve").is_err());
     }
 
     #[test]
     fn a_sqlite_profile_has_no_server_half_and_a_postgres_one_does() {
         assert!(
             ConnectionConfig::Sqlite {
-                path: "/tmp/slate.db".into(),
+                path: "/tmp/dbdelve.db".into(),
                 statement_timeout: 0
             }
             .server()
@@ -899,11 +899,11 @@ mod tests {
     fn an_endpoint_names_whatever_was_being_talked_to() {
         assert_eq!(
             ConnectionConfig::Sqlite {
-                path: "/tmp/slate.db".into(),
+                path: "/tmp/dbdelve.db".into(),
                 statement_timeout: 0
             }
             .endpoint(),
-            "/tmp/slate.db"
+            "/tmp/dbdelve.db"
         );
         assert_eq!(
             ServerConfig {
@@ -930,7 +930,7 @@ mod tests {
         let stored = ConnectionConfig::Postgres(ServerConfig {
             host: "db.example.test".into(),
             port: Some(5432),
-            database: "slate".into(),
+            database: "dbdelve".into(),
             user: "someone".into(),
             password: "secret".into(),
             ..ServerConfig::default()
@@ -952,7 +952,7 @@ mod tests {
         assert!(stored.needs_reconnect(&edited(|server| server.password = "typed".into())));
         assert!(stored.needs_reconnect(&ConnectionConfig::MySql(stored.server().unwrap().clone())));
         assert!(stored.needs_reconnect(&ConnectionConfig::Sqlite {
-            path: "/tmp/slate.db".into(),
+            path: "/tmp/dbdelve.db".into(),
             statement_timeout: 0
         }));
     }
@@ -971,7 +971,7 @@ mod tests {
     #[test]
     fn each_engine_quotes_the_way_its_own_server_reads() {
         // An identifier and a literal are both user data, and both reach a
-        // statement Slate generates. The escape is what stops a table called
+        // statement dbdelve generates. The escape is what stops a table called
         // `odd"name` from ending the identifier early.
         assert_eq!(
             Engine::Postgres.quote_identifier("odd\"name"),
@@ -1007,14 +1007,14 @@ mod tests {
             "\"odd\"\"schema\".\"table\""
         );
         assert_eq!(
-            Engine::MySql.qualified("slate_dev", "table"),
-            "`slate_dev`.`table`"
+            Engine::MySql.qualified("dbdelve_dev", "table"),
+            "`dbdelve_dev`.`table`"
         );
     }
 
     #[test]
     fn a_quoted_identifier_reads_back_as_the_name_it_was() {
-        // The two halves have to agree or Slate cannot recognise its own
+        // The two halves have to agree or dbdelve cannot recognise its own
         // output: a sort key it wrote would not match the header it came from.
         for engine in Engine::ALL {
             for name in ["id", "odd\"name", "odd`name", "spaced name", ""] {

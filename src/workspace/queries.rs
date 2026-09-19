@@ -115,7 +115,7 @@ impl Workspace {
         };
         let tab = profile.session.active;
         // An object tab has no buffer of its own: running it again is a refresh
-        // of the rows Slate fetched, which is the only thing there is to run.
+        // of the rows dbdelve fetched, which is the only thing there is to run.
         if let Tab::Object(id) = tab {
             self.refresh_relation(id, cx);
             return;
@@ -158,7 +158,7 @@ impl Workspace {
             return;
         };
         let tab = profile.session.active;
-        // An object tab's rows come from SQL Slate wrote, and its surface has no
+        // An object tab's rows come from SQL dbdelve wrote, and its surface has no
         // buffer to point at. Nobody has asked to explain a preview.
         let Tab::Query(_) = tab else {
             return;
@@ -269,7 +269,7 @@ impl Workspace {
 
     /// Whether the visible buffer already has a name — which is what makes the
     /// difference between saving it and renaming it. A relation's tab never
-    /// does: it holds SQL Slate wrote, not a file the user opened.
+    /// does: it holds SQL dbdelve wrote, not a file the user opened.
     pub(crate) fn named(&self) -> bool {
         self.profile().is_some_and(|profile| {
             matches!(profile.session.active, Tab::Query(_))
@@ -768,18 +768,18 @@ impl Workspace {
         cx.notify();
 
         // Read from the statement that is about to run, so the headers say what
-        // the rows on screen are actually ordered by rather than what Slate
+        // the rows on screen are actually ordered by rather than what dbdelve
         // last intended to ask for.
         let keys = sql::order_by(&sql);
         let sortable = keys.is_some();
         let keys = keys.unwrap_or_default();
         // Kept only where it is read back: the query tab's grid has to be able
         // to say which statement produced it. An `EXPLAIN` produces no rows to
-        // describe and belongs in nobody's history -- it is Slate's prefix over
+        // describe and belongs in nobody's history -- it is dbdelve's prefix over
         // the user's statement, and the statement itself is already there.
         let statement = (matches!(tab, Tab::Query(_)) && explain.is_none()).then(|| sql.clone());
         // What the plan pane says it is a plan of: the user's statement, without
-        // the prefix Slate put in front of it.
+        // the prefix dbdelve put in front of it.
         let explained = explain.map(|mode| {
             let prefix = engine.explain_prefix(mode).unwrap_or_default();
             sql.strip_prefix(prefix).unwrap_or(&sql).to_string()
@@ -787,7 +787,7 @@ impl Workspace {
         // Recorded on the way out rather than on the way back: the history is
         // what the user ran, and a statement that failed is exactly the one
         // worth getting back. Only the buffer's — a relation's preview is SQL
-        // Slate wrote, and nobody asked to keep it.
+        // dbdelve wrote, and nobody asked to keep it.
         if let Some(statement) = &statement
             && let Some(profile) = self.profile_mut()
         {

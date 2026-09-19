@@ -888,14 +888,14 @@ pub(crate) enum ObjectBody {
     ///
     /// No editor. A generated `SELECT` shown above the grid read as a query the
     /// user had written and invited edits to a buffer that then stopped being a
-    /// view of the relation at all. The SQL Slate runs here is its own, and the
+    /// view of the relation at all. The SQL dbdelve runs here is its own, and the
     /// only thing the user changes about it is the sort.
     Relation {
         showing_structure: bool,
         structure: StructureState,
         results: Entity<TableState<ResultGrid>>,
         query: QueryState,
-        /// The `ORDER BY` the header clicks have built up. Slate owns this
+        /// The `ORDER BY` the header clicks have built up. dbdelve owns this
         /// statement, so sorting regenerates it rather than editing text.
         sort: Vec<SortKey>,
         /// The `WHERE` expression this preview narrows the relation by, without

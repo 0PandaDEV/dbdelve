@@ -1,4 +1,4 @@
-//! Slate's theme.
+//! dbdelve's theme.
 //!
 //! Two rules hold this module together:
 //!
@@ -51,7 +51,7 @@ pub mod layout {
     pub const TEXT_LG: f32 = 16.0;
 
     /// One icon size everywhere. Icons here label rows and buttons; nothing in
-    /// Slate is an illustration, so a second size would only be decoration.
+    /// dbdelve is an illustration, so a second size would only be decoration.
     pub const ICON_SIZE: f32 = 14.0;
 
     pub const RADIUS_CONTROL: f32 = 6.0;
@@ -134,7 +134,7 @@ pub fn theme(cx: &gpui::App) -> &Theme {
     cx.global::<Theme>()
 }
 
-/// Which of the three faces a family is being set for. Slate's type does three
+/// Which of the three faces a family is being set for. dbdelve's type does three
 /// different jobs: chrome labels itself, the editor is code, and the grid is
 /// columns of values that only line up in a monospaced face.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -150,7 +150,7 @@ pub enum FontSlot {
 /// The three families in use.
 ///
 /// A global of its own rather than fields on [`Theme`]: a theme is a palette
-/// Slate ships and a font is the user's pick, so cycling one must not reset the
+/// dbdelve ships and a font is the user's pick, so cycling one must not reset the
 /// other.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Fonts {
@@ -367,7 +367,7 @@ const SWATCH_LIGHTNESS: f32 = 0.65;
 /// 8-level floor a plane has to clear to be seen at all.
 const PILL_ALPHA: f32 = 0.22;
 
-/// Every colour Slate paints. Flat fields, not nested groups — a token you have
+/// Every colour dbdelve paints. Flat fields, not nested groups — a token you have
 /// to go looking for gets duplicated instead of reused.
 ///
 /// A new theme is one constructor returning this struct plus one entry in
@@ -383,7 +383,7 @@ pub struct Theme {
     pub is_glass: bool,
 
     /// The content plane, and the brightest tone: the results. The data is
-    /// what Slate exists to show, so it gets the most light.
+    /// what dbdelve exists to show, so it gets the most light.
     pub bg: Srgb,
     /// One step behind `bg`: the editor's page and the active tab — the
     /// prompt, not the answer. Three planes rather than two because an editor
@@ -438,7 +438,7 @@ pub struct Theme {
 }
 
 impl Theme {
-    /// Every theme Slate ships, in the order the switcher cycles them. The
+    /// Every theme dbdelve ships, in the order the switcher cycles them. The
     /// first is the default.
     pub fn all() -> [Self; 3] {
         [Self::glass(), Self::dark(), Self::light()]
@@ -513,7 +513,7 @@ impl Theme {
         component.radius_lg = gpui::px(layout::RADIUS_LARGE);
         // `Root` feeds this to `window.set_rem_size`, so it is the unit for
         // every `rems()` dimension inside gpui-component -- not just a text
-        // size. Slate's own tree never reads it: every `text_size` here is an
+        // size. dbdelve's own tree never reads it: every `text_size` here is an
         // absolute `layout::TEXT_*`. Left at the library's 16 so the widgets it
         // draws for us keep the proportions they were designed at; the
         // completion popup in particular hardcodes `text_xs()`, which at 13
@@ -522,11 +522,11 @@ impl Theme {
         component.mono_font_size = gpui::px(layout::TEXT_MD);
         component.font_family = fonts.chrome;
         // Kept on the editor's family so that whatever inside gpui-component
-        // reads the mono slot renders in the face Slate is already using for
+        // reads the mono slot renders in the face dbdelve is already using for
         // code, rather than in a third one nobody picked.
         component.mono_font_family = fonts.editor;
 
-        // The one plane painted below Slate's own tree, by `Root`. It is the
+        // The one plane painted below dbdelve's own tree, by `Root`. It is the
         // frost, so removing a `bg` from a chrome element uncovers glass rather
         // than a hole.
         component.colors.background = self.frost().into();
@@ -538,13 +538,13 @@ impl Theme {
         component.colors.ring = self.accent.into();
         // Only the completion popup reads this, for the matched prefix of a
         // suggestion. Left at the library default it is a blue belonging to no
-        // palette Slate ships.
+        // palette dbdelve ships.
         component.colors.blue = self.accent.into();
         component.colors.muted = self.surface.into();
         component.colors.muted_foreground = self.text_muted.into();
         component.colors.popover = self.overlay.into();
         component.colors.popover_foreground = self.text.into();
-        // Both button variants are the same neutral: a Slate button is a grey
+        // Both button variants are the same neutral: a dbdelve button is a grey
         // that steps visibly brighter under the pointer, never a colour.
         // Colour is reserved for state (selection, danger), not for controls.
         let control_hover = self.element_active.flatten(self.control);
@@ -564,14 +564,14 @@ impl Theme {
         // surfaces paint on `overlay`. A selected suggestion was therefore
         // indistinguishable from an unselected one. `selection` is what a
         // selected row already wears in the explorer tree and the result grid,
-        // so autocomplete now agrees with the rest of Slate.
+        // so autocomplete now agrees with the rest of dbdelve.
         //
         // A tint rather than the accent at full strength, deliberately: the
         // popup paints a suggestion's matched prefix in `blue` and its detail
         // in `muted_foreground` whatever the selection state, so a saturated
         // fill behind them would win the row and lose the text.
         // Half strength, and the prefix is what sets it: the popup paints a
-        // suggestion's matched characters in `blue` -- Slate's accent, just
+        // suggestion's matched characters in `blue` -- dbdelve's accent, just
         // above -- so an accent wash behind them is accent on accent. At full
         // `selection` that prefix measures 2.65 against the fill in the dark
         // theme, under the 3.0 floor for UI text; halved it reaches 3.25 while
@@ -668,7 +668,7 @@ impl Theme {
         .unwrap_or_default();
 
         Arc::new(HighlightTheme {
-            name: "Slate".into(),
+            name: "dbdelve".into(),
             appearance: match self.appearance {
                 Appearance::Dark => ThemeMode::Dark,
                 Appearance::Light => ThemeMode::Light,
@@ -707,7 +707,7 @@ impl Theme {
     /// planes here is mostly how much they let through — see [`FROST_ALPHA`].
     pub fn glass() -> Self {
         Self {
-            name: "Slate Glass",
+            name: "dbdelve Glass",
             is_glass: true,
 
             // Chrome goes near-black and stays there — it is the plane with
@@ -738,7 +738,7 @@ impl Theme {
     /// gets to ignore.
     pub fn dark() -> Self {
         Self {
-            name: "Slate Dark",
+            name: "dbdelve Dark",
             appearance: Appearance::Dark,
             is_glass: false,
 
@@ -784,7 +784,7 @@ impl Theme {
 
     pub fn light() -> Self {
         Self {
-            name: "Slate Light",
+            name: "dbdelve Light",
             appearance: Appearance::Light,
             is_glass: false,
 
@@ -878,7 +878,7 @@ mod tests {
     use super::*;
 
     /// WCAG AA: 4.5 for body text, 3.0 for large text and UI components.
-    /// AAA: 7.0. Slate holds body text to AAA because a result grid is dense.
+    /// AAA: 7.0. dbdelve holds body text to AAA because a result grid is dense.
     const AAA_TEXT: f32 = 7.0;
     const AA_TEXT: f32 = 4.5;
     const AA_LARGE: f32 = 3.0;
@@ -912,7 +912,7 @@ mod tests {
     }
 
     #[test]
-    fn every_highlighter_category_has_a_slate_style() {
+    fn every_highlighter_category_has_a_dbdelve_style() {
         for theme in Theme::all() {
             let syntax = serde_json::to_value(&theme.highlight_theme().style.syntax).unwrap();
             let styles = syntax.as_object().unwrap();

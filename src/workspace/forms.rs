@@ -538,7 +538,10 @@ impl Workspace {
         let (title, message, confirm, tone) = match stop {
             Stop::Upgrade(needed) => (
                 "Mode",
-                format!("{name} is in {current_mode} mode. This needs {}.", needed.label()),
+                format!(
+                    "{name} is in {current_mode} mode. This needs {}.",
+                    needed.label()
+                ),
                 if sql.is_some() {
                     format!("Switch to {} and run", needed.label())
                 } else {
@@ -554,7 +557,7 @@ impl Workspace {
             ),
             Stop::RunOnce => (
                 "Unreadable statement",
-                "Slate can't parse this, so it can't tell what it does or whether \
+                "dbdelve can't parse this, so it can't tell what it does or whether \
                  this connection's mode covers it."
                     .to_string(),
                 "Run once".to_string(),
@@ -636,12 +639,20 @@ impl Workspace {
                                     ),
                                 )
                                 .child(
-                                    button("approve-pending-run", confirm, tone, Control::Standard, t)
-                                        .on_click(move |_, _, cx| {
+                                    button(
+                                        "approve-pending-run",
+                                        confirm,
+                                        tone,
+                                        Control::Standard,
+                                        t,
+                                    )
+                                    .on_click(
+                                        move |_, _, cx| {
                                             _ = approve.update(cx, |workspace, cx| {
                                                 workspace.approve_pending_run(cx);
                                             });
-                                        }),
+                                        },
+                                    ),
                                 ),
                         ),
                 )
@@ -1058,7 +1069,7 @@ impl Workspace {
                             .mx(px(layout::SPACE_XS))
                             .rounded(px(layout::RADIUS_CONTROL))
                             // `ListItem` sizes its text in `rems`, which tracks
-                            // the library's 16 rather than Slate's body size.
+                            // the library's 16 rather than dbdelve's body size.
                             .text_size(px(layout::TEXT_MD))
                             .pl(px(
                                 layout::SPACE_SM + entry.depth() as f32 * layout::SPACE_MD

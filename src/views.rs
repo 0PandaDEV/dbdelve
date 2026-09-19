@@ -375,7 +375,7 @@ fn render_plan(explained: &Explained, cx: &mut Context<Workspace>) -> AnyElement
                 .gap(px(2.))
                 // A server that answered with nothing a plan could be read out
                 // of still said something, and its own words are better than
-                // Slate's guess at what it meant.
+                // dbdelve's guess at what it meant.
                 .when(plan.nodes.is_empty(), |body| {
                     body.child(
                         div()
@@ -515,7 +515,7 @@ fn render_filter_bar(
                             .text_color(t.text_faint),
                     )
                     // The grid's own column names, because the preview is
-                    // Slate's `SELECT *` and a header is the server's word for
+                    // dbdelve's `SELECT *` and a header is the server's word for
                     // the column rather than an alias.
                     .dropdown_menu({
                         let names = names.clone();
@@ -873,7 +873,7 @@ fn render_results(
             .child(line)
             .into_any_element()
     };
-    // The default `Loader` icon names a file Slate's asset source does not
+    // The default `Loader` icon names a file dbdelve's asset source does not
     // serve, so the spinner has to be pointed at the one it does.
     let spinner = || {
         Spinner::new()
@@ -1029,7 +1029,7 @@ fn render_results(
 /// has room for a value the column had to clip, which is what makes this
 /// the value inspector the spec asks for in §4.4.
 ///
-/// Nothing here is state of Slate's own: the selected row belongs to the
+/// Nothing here is state of dbdelve's own: the selected row belongs to the
 /// grid, so the panel cannot disagree with the highlight in the grid, and
 /// arrow keys move both.
 fn render_row_inspector(
@@ -1127,7 +1127,7 @@ fn render_row_inspector(
                                             .child(field.name),
                                     )
                                     // Absent rather than guessed: a type
-                                    // Slate could not learn is not shown as
+                                    // dbdelve could not learn is not shown as
                                     // one it inferred from the text.
                                     .children(field.data_type.map(|data_type| {
                                         div()

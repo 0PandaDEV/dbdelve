@@ -211,7 +211,7 @@ impl ListDelegate for Palette {
             ListItem::new(ix.row)
                 .rounded(px(layout::RADIUS_CONTROL))
                 // As in the explorer tree: `ListItem`'s own text size is in
-                // `rems` and would otherwise ignore Slate's type scale.
+                // `rems` and would otherwise ignore dbdelve's type scale.
                 .text_size(px(layout::TEXT_MD))
                 .child(
                     div()
@@ -517,7 +517,7 @@ fn command_items(workspace: &Workspace, profile: &Profile, cx: &App) -> Vec<Item
                     ));
                 }
                 items.push(Item::command("New row…", "", icon::PLUS, Command::NewRow));
-                // Only on a row Slate can name by its primary key -- the same
+                // Only on a row dbdelve can name by its primary key -- the same
                 // condition that makes a cell of it editable.
                 if workspace.has_nameable_row(cx) {
                     items.push(Item::command(

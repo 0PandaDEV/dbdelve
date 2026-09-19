@@ -10,7 +10,7 @@
 # Usage: dev/identity.sh
 set -euo pipefail
 
-NAME="Slate Dev Signing"
+NAME="DBDelve Dev Signing"
 KEYCHAIN="$HOME/Library/Keychains/login.keychain-db"
 
 if security find-certificate -c "$NAME" "$KEYCHAIN" >/dev/null 2>&1; then

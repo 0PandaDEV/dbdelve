@@ -41,9 +41,9 @@ use actions::{
     CopyCell, CycleTheme, DeleteRow, DiscardEdits, EditCell, ExplainQuery, FollowForeignKey,
     FuzzyOpen, NewConnection, NewQuery, NewRow, NextPage, NextProfile, NextTab, OpenSettings,
     PaletteNext, PalettePrevious, PreviousPage, PreviousProfile, PreviousTab, Quit, RemoveFilter,
-    RequestWriteMode, ResetConfirmations, ResetEditorZoom, RunQuery, SaveQuery, SetFilterColumn, SetFilterOperator,
-    SetFilterRaw, SetMode, SetNull, SetRowLimit, ShowEditor, SortColumn, ToggleFilterJoin,
-    ToggleNextJoin, ToggleSidebar, ZoomEditorIn, ZoomEditorOut,
+    RequestWriteMode, ResetConfirmations, ResetEditorZoom, RunQuery, SaveQuery, SetFilterColumn,
+    SetFilterOperator, SetFilterRaw, SetMode, SetNull, SetRowLimit, ShowEditor, SortColumn,
+    ToggleFilterJoin, ToggleNextJoin, ToggleSidebar, ZoomEditorIn, ZoomEditorOut,
 };
 use completion::SchemaCompletions;
 use connection_form::{ConnectionForm, default_profile_name};
@@ -75,7 +75,7 @@ use ui::{
 };
 use workspace::{Settings, Workspace};
 
-/// The platform's window buttons, which Slate positions but does not draw.
+/// The platform's window buttons, which dbdelve positions but does not draw.
 const TRAFFIC_LIGHT_DIAMETER: f32 = 14.0;
 
 fn connection_config_from_environment() -> Result<Option<ConnectionConfig>, String> {
@@ -126,7 +126,7 @@ fn connection_config_from_environment() -> Result<Option<ConnectionConfig>, Stri
         .transpose()?;
 
     // The `PG*` variables configure a Postgres profile and are not generalised.
-    // Slate is a generic client, not a generic environment reader, and there is
+    // dbdelve is a generic client, not a generic environment reader, and there is
     // no convention for the other engines to read.
     Ok(Some(ConnectionConfig::Postgres(ServerConfig {
         host,
@@ -136,7 +136,7 @@ fn connection_config_from_environment() -> Result<Option<ConnectionConfig>, Stri
         password: std::env::var("PGPASSWORD").unwrap_or_default(),
         sslmode,
         root_certificate,
-        // No `PG*` variable means it, and Slate is not inventing one.
+        // No `PG*` variable means it, and dbdelve is not inventing one.
         statement_timeout: 0,
     })))
 }
@@ -154,7 +154,7 @@ fn install_panic_log() {
     let Some(home) = std::env::var_os("HOME").filter(|home| !home.is_empty()) else {
         return;
     };
-    let directory = PathBuf::from(home).join("Library/Logs/Slate");
+    let directory = PathBuf::from(home).join("Library/Logs/dbdelve");
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         // Nothing in here may panic: a panic inside the hook aborts with less
@@ -221,18 +221,18 @@ fn main() {
         // back out of the keymap.
         //
         // The rest of the bar is there for the same reason in reverse: every
-        // item names an action Slate already dispatches, so the menu is a way
+        // item names an action dbdelve already dispatches, so the menu is a way
         // to discover the keystroke rather than a second path to the work. No
-        // Edit menu -- Slate does not own cut, copy and paste, the focused
+        // Edit menu -- dbdelve does not own cut, copy and paste, the focused
         // field does, and a menu claiming them would take them from it.
         cx.on_action(|_: &Quit, cx: &mut App| cx.quit());
         cx.set_menus(vec![
             Menu {
-                name: "Slate".into(),
+                name: "dbdelve".into(),
                 items: vec![
                     MenuItem::action("Settings…", OpenSettings),
                     MenuItem::separator(),
-                    MenuItem::action("Quit Slate", Quit),
+                    MenuItem::action("Quit dbdelve", Quit),
                 ],
             },
             Menu {
@@ -268,12 +268,12 @@ fn main() {
         ]);
 
         // The platform titlebar is kept only for its window buttons: a system
-        // bar in its own grey above Slate's chrome is the seam every native app
-        // avoids. Slate paints that strip itself, and the buttons sit over it.
+        // bar in its own grey above dbdelve's chrome is the seam every native app
+        // avoids. dbdelve paints that strip itself, and the buttons sit over it.
         let options = WindowOptions {
             window_background: theme.window_background(),
             titlebar: Some(TitlebarOptions {
-                title: Some("Slate".into()),
+                title: Some("dbdelve".into()),
                 appears_transparent: true,
                 traffic_light_position: Some(point(
                     px(layout::SPACE_MD),
@@ -291,10 +291,10 @@ fn main() {
         })
         .expect("failed to open window");
 
-        // Slate has one window and no way to open a second: with it closed the
+        // dbdelve has one window and no way to open a second: with it closed the
         // Dock icon is inert and the menu offers only Quit, which is an
         // application nobody can get back into. Quitting is the way back --
-        // clicking the dead icon then launches Slate again, restoring the
+        // clicking the dead icon then launches dbdelve again, restoring the
         // profiles and the buffers `Workspace::on_release` has just written.
         // Reopening a window here would have to rebuild that same state anyway,
         // and would keep a process alive that is holding nothing.

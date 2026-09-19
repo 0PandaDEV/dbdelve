@@ -321,7 +321,7 @@ pub(crate) fn bar_predicate(engine: Engine, bar: &FilterBar) -> Option<String> {
     let value = bar.value.trim();
     if bar.raw {
         // Verbatim, and checked as a whole statement by `is_generated_select`
-        // rather than inspected here: a filter Slate does not understand is
+        // rather than inspected here: a filter dbdelve does not understand is
         // exactly what the gate is for (spec §2.3).
         return (!value.is_empty()).then(|| value.to_string());
     }
@@ -565,7 +565,7 @@ pub(crate) fn stored_bars(stored: &store::StoredObject) -> Vec<FilterBar> {
         .collect()
 }
 
-/// Slate's statement for a relation's tab, carrying the filter and the sort the
+/// dbdelve's statement for a relation's tab, carrying the filter and the sort the
 /// controls asked for. Regenerated rather than edited, so the row limit and the
 /// quoting stay in one place.
 pub(crate) fn relation_sql(
@@ -1000,7 +1000,7 @@ mod tests {
 
     #[test]
     fn the_filter_a_followed_key_writes_passes_the_generated_select_gate() {
-        // §6.2: the filter Slate writes for itself goes out through the same
+        // §6.2: the filter dbdelve writes for itself goes out through the same
         // check as one the user typed, and this is that check run on it.
         let key = account_key();
         for engine in [Engine::Postgres, Engine::MySql, Engine::Sqlite] {
@@ -1536,7 +1536,7 @@ mod tests {
             sorted,
             r#"SELECT * FROM "public"."accounts" ORDER BY "id" DESC LIMIT 1000"#
         );
-        // And the sort Slate wrote is the sort its headers show.
+        // And the sort dbdelve wrote is the sort its headers show.
         assert_eq!(
             sort_columns(
                 Engine::Postgres,

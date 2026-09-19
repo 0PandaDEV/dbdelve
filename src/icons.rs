@@ -1,8 +1,8 @@
-//! Slate's icon set.
+//! dbdelve's icon set.
 //!
 //! GPUI renders an SVG by asking the application's [`AssetSource`] for a file,
 //! and gpui-component names Lucide files without shipping any. Rather than
-//! vendoring another project's artwork into the repository, Slate depends on
+//! vendoring another project's artwork into the repository, dbdelve depends on
 //! `icondata_lu` — Lucide as Rust data — and serves the documents from memory
 //! at the paths GPUI asks for. Nothing is read from disk, so this works the
 //! same from `cargo run` and from a bundled `.app`.
@@ -17,7 +17,7 @@ use gpui::{AssetSource, Result, SharedString};
 use gpui_component::Icon;
 use icondata_core::IconData;
 
-/// The icons Slate can draw, by the path GPUI asks for.
+/// The icons dbdelve can draw, by the path GPUI asks for.
 ///
 /// The gpui-component widgets ask for their own paths — those are Lucide names
 /// too, so they resolve here as well. Add a row when something asks for one;
@@ -64,7 +64,7 @@ const ICONS: [(&str, &IconData); 36] = [
     ("icons/arrow-up-right.svg", icondata_lu::LuArrowUpRight),
 ];
 
-/// Slate's own names for the icons it draws, so a call site names a thing
+/// dbdelve's own names for the icons it draws, so a call site names a thing
 /// rather than a file.
 pub mod icon {
     pub const CHEVRON_DOWN: &str = "icons/chevron-down.svg";
@@ -197,7 +197,7 @@ mod tests {
     #[test]
     fn every_listed_icon_draws_something() {
         // The paths the library's own widgets ask for are never named in
-        // Slate, so nothing above would notice a row here going bad.
+        // dbdelve, so nothing above would notice a row here going bad.
         for (path, _) in ICONS {
             assert_draws(path);
         }

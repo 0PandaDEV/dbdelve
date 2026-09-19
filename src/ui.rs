@@ -83,7 +83,7 @@ pub(crate) fn mode_pill(t: Theme, mode: Mode) -> Button {
     })
 }
 
-/// Slate's own titlebar, drawn where the platform's would be.
+/// dbdelve's own titlebar, drawn where the platform's would be.
 ///
 /// The system titlebar is transparent (see `main`), so this row is what runs to
 /// the top of the window and the window buttons are drawn over its leading
@@ -162,7 +162,7 @@ pub(crate) fn dialog(t: Theme) -> gpui::Div {
         .shadow_lg()
 }
 
-/// What a button's fill says. Colour is state here as everywhere else: a Slate
+/// What a button's fill says. Colour is state here as everywhere else: a dbdelve
 /// button is the neutral control tone unless it is the one action its surface
 /// exists to take, or the one that destroys something.
 #[derive(Clone, Copy, PartialEq)]
@@ -212,12 +212,12 @@ impl Control {
     }
 }
 
-/// A Slate button.
+/// A dbdelve button.
 ///
 /// gpui-component supplies the mechanism — the tooltip and the keybinding in
 /// it, the focus ring, the disabled gate — and none of the appearance survives
 /// contact with it. Its size scale bottoms out at a 20px box with 4px of
-/// padding, its label comes out at the library's 16px body rather than Slate's
+/// padding, its label comes out at the library's 16px body rather than dbdelve's
 /// 13, and 0.5.1 tints button content `red_400` on hover from a hardcoded
 /// colour no theme token reaches.
 ///

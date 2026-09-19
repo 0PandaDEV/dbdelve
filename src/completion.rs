@@ -4,7 +4,7 @@
 //! popup under the caret, its scroll, the arrow keys, `enter` to accept and
 //! `escape` to dismiss — behind one trait with two required methods. None of
 //! it needs a language server; `lsp_types` is only the vocabulary. So this
-//! module is the part that is Slate's: which identifiers are worth offering
+//! module is the part that is dbdelve's: which identifiers are worth offering
 //! for the text in front of the cursor.
 //!
 //! Everything offered comes from the catalog the explorer already loaded, so
@@ -45,7 +45,7 @@ use crate::{
 /// The catalog does not carry them. Fetching every column of every relation at
 /// connect was the first implementation and it does not scale: on a large
 /// schema that is a multi-million-row result, buffered whole by the driver
-/// before Slate sees a row, then held for the life of the connection and
+/// before dbdelve sees a row, then held for the life of the connection and
 /// duplicated into this provider's snapshot -- all of it paid before the user
 /// has typed anything, and most of it for relations they will never mention.
 ///
@@ -62,7 +62,7 @@ pub enum ColumnState {
     /// [`FETCH_ATTEMPTS`], and then not again for this connection.
     ///
     /// Neither extreme is right here. Never retrying means one blip -- or one
-    /// statement timeout, which bounds Slate's own catalog queries too -- kills
+    /// statement timeout, which bounds dbdelve's own catalog queries too -- kills
     /// completion for that relation silently, for the rest of the session.
     /// Always retrying means a describe per keystroke, and every one of them
     /// queues on the connection mutex behind the last, so a slow failure would
@@ -70,7 +70,7 @@ pub enum ColumnState {
     Failed(u8),
 }
 
-/// How many times a relation's columns are asked for before Slate stops.
+/// How many times a relation's columns are asked for before dbdelve stops.
 const FETCH_ATTEMPTS: u8 = 3;
 
 /// Columns by schema and relation, shared between the provider that reads them
@@ -1008,7 +1008,7 @@ mod tests {
 
     #[test]
     fn a_failure_is_retried_until_the_budget_runs_out() {
-        // One blip -- or one statement timeout, which bounds Slate's own
+        // One blip -- or one statement timeout, which bounds dbdelve's own
         // catalog queries too -- must not silently kill completion for a
         // relation for the rest of the connection.
         let completions = detached(schemas(), &[]);

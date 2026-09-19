@@ -128,7 +128,7 @@ INSERT INTO documents VALUES
     (
         2,
         'Large values',
-        repeat('Slate keeps the complete value while the grid clips visually. ', 2048),
+        repeat('DBDelve keeps the complete value while the grid clips visually. ', 2048),
         jsonb_build_object(
             'kind', 'large',
             'values', (
