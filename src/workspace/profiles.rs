@@ -545,6 +545,7 @@ impl Workspace {
 
         let id = profile.id.clone();
         let mut config = profile.config.clone();
+        let mode = profile.mode;
         cx.notify();
 
         let connection_task = cx.background_executor().spawn({
@@ -563,7 +564,20 @@ impl Workspace {
                         Err(message) => return Err(message),
                     }
                 }
-                Connection::open(config).map_err(|error| error.message)
+                let connection = Connection::open(config).map_err(|error| error.message)?;
+                // Only Read-only asks the server for anything here: the
+                // servers already default to read-write, and a redundant
+                // switch to it risks a pooler or proxy that rejects the
+                // statement outright. A connect that fails to establish the
+                // hold it promised is worse than one that never opened --
+                // handing back a connection that looks Read-only but isn't is
+                // the one outcome worse than failing to connect.
+                if mode == Mode::ReadOnly {
+                    connection
+                        .set_read_only(true)
+                        .map_err(|error| error.message)?;
+                }
+                Ok(connection)
             }
         });
 

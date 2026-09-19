@@ -475,6 +475,26 @@ impl Connection {
             Self::Sqlite(connection) => connection.cancel(),
         }
     }
+
+    /// Ask the server to hold this session to reads, or let go of that hold.
+    ///
+    /// Defence in depth, not a privilege boundary: this is a session setting,
+    /// the same user can flip it back with a statement of their own, and it is
+    /// only ever sent from inside dbdelve. A role without write grants is the
+    /// only thing that actually stops a write -- this exists so a bug in
+    /// `sql::gate` (src/sql.rs:1268), the real boundary, is not the only thing
+    /// standing between Read-only and a write reaching the server.
+    pub fn set_read_only(&self, read_only: bool) -> Result<(), DbError> {
+        let engine = match self {
+            Self::Postgres(_) => Engine::Postgres,
+            Self::MySql(_) => Engine::MySql,
+            Self::Sqlite(_) => Engine::Sqlite,
+        };
+        let Some(statement) = read_only_statement(engine, read_only) else {
+            return Ok(());
+        };
+        self.query(statement).map(|_| ())
+    }
 }
 
 /// One column of a result set.
@@ -818,6 +838,29 @@ pub(super) fn plain_error(message: String) -> DbError {
     DbError {
         message,
         position: None,
+    }
+}
+
+/// The statement that asks the server to hold this session to reads, or to
+/// let go of that hold -- the server-side backstop behind `sql::gate`'s
+/// client-side one. `None` where the engine has no session-level switch to
+/// send it to.
+///
+/// SQLite has none: `OpenFlags::SQLITE_OPEN_READ_WRITE` (sqlite.rs:91) fixes
+/// read/write at open time, and `Connection::set_read_only` is a live flip
+/// with no reconnect behind it.
+///
+/// ponytail: SQLite stays open-mode-only rather than reopening the file on a
+/// mode change. Upgrade path if SQLite read-only ever needs enforcing:
+/// reopen the file under `SQLITE_OPEN_READ_ONLY` when the mode lands on
+/// `ReadOnly`.
+fn read_only_statement(engine: Engine, read_only: bool) -> Option<&'static str> {
+    match (engine, read_only) {
+        (Engine::Postgres, true) => Some("SET default_transaction_read_only = on"),
+        (Engine::Postgres, false) => Some("SET default_transaction_read_only = off"),
+        (Engine::MySql, true) => Some("SET SESSION TRANSACTION READ ONLY"),
+        (Engine::MySql, false) => Some("SET SESSION TRANSACTION READ WRITE"),
+        (Engine::Sqlite, _) => None,
     }
 }
 
@@ -1230,5 +1273,27 @@ mod tests {
             error.message,
             "Catalog query returned unknown relation kind unknown."
         );
+    }
+
+    #[test]
+    fn only_sqlite_has_no_read_only_statement() {
+        assert_eq!(
+            read_only_statement(Engine::Postgres, true),
+            Some("SET default_transaction_read_only = on")
+        );
+        assert_eq!(
+            read_only_statement(Engine::Postgres, false),
+            Some("SET default_transaction_read_only = off")
+        );
+        assert_eq!(
+            read_only_statement(Engine::MySql, true),
+            Some("SET SESSION TRANSACTION READ ONLY")
+        );
+        assert_eq!(
+            read_only_statement(Engine::MySql, false),
+            Some("SET SESSION TRANSACTION READ WRITE")
+        );
+        assert_eq!(read_only_statement(Engine::Sqlite, true), None);
+        assert_eq!(read_only_statement(Engine::Sqlite, false), None);
     }
 }
