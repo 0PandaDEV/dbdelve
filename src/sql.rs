@@ -18,7 +18,9 @@ use std::ops::Range;
 use serde::Deserialize;
 // Aliased: `tree_sitter::Parser` already owns the name `Parser` in this file,
 // and the two parsers are never interchangeable -- see `classify`'s doc.
-use sqlparser::ast::{AlterTableOperation, CopySource, Query, SetExpr, Statement};
+use sqlparser::ast::{
+    AlterTableOperation, CopySource, CopyTarget, Query, SetExpr, Statement, UtilityOption,
+};
 use sqlparser::dialect::{Dialect, MySqlDialect, PostgreSqlDialect, SQLiteDialect};
 use sqlparser::parser::Parser as SqlParser;
 use tree_sitter::{Node, Parser, Tree};
@@ -1094,9 +1096,17 @@ fn variant_verdict(statement: &Statement) -> Verdict {
         // Postgres, and in MySQL since 8.0.18. Slate never sends it to SQLite:
         // `Engine::explain_prefix` returns None for that pair.
         Statement::Explain {
-            analyze, statement, ..
+            analyze,
+            options,
+            statement,
+            ..
         } => {
-            if *analyze {
+            let analyze = *analyze
+                || options
+                    .iter()
+                    .flatten()
+                    .any(analyze_option_is_on);
+            if analyze {
                 statement_verdict(statement)
             } else {
                 Verdict::READ
@@ -1126,16 +1136,20 @@ fn variant_verdict(statement: &Statement) -> Verdict {
         | Statement::Set { .. }
         | Statement::StartTransaction { .. }
         | Statement::Commit { .. }
-        | Statement::Rollback { .. } => Verdict::READ,
+        | Statement::Rollback { .. }
+        // Savepoints touch no data, and `ROLLBACK TO` above is already a read.
+        | Statement::Savepoint { .. }
+        | Statement::ReleaseSavepoint { .. } => Verdict::READ,
 
-        // COPY TO reads a table out to a file; COPY FROM loads rows in.
-        Statement::Copy { to, .. } => {
-            if *to {
-                Verdict::READ
-            } else {
-                Verdict::WRITE
-            }
-        }
+        // COPY TO reads a table out to a file; COPY FROM loads rows in. Either
+        // direction against a `PROGRAM` or a file runs on the *server*: a shell
+        // command, or a read/write of the server's filesystem. Only the standard
+        // streams stay inside the database.
+        Statement::Copy { to, target, .. } => match target {
+            CopyTarget::File { .. } | CopyTarget::Program { .. } => Verdict::FULL,
+            _ if *to => Verdict::READ,
+            _ => Verdict::WRITE,
+        },
 
         Statement::Insert { .. }
         | Statement::Update { .. }
@@ -1166,11 +1180,33 @@ fn variant_verdict(statement: &Statement) -> Verdict {
             .map(alter_verdict)
             .fold(Verdict::WRITE, Verdict::max),
 
-        // Everything else needs Full, and this arm is the point of matching
-        // exhaustively: when the crate adds a statement type, the build breaks
-        // here and someone decides where it belongs, instead of it inheriting a
-        // default nobody chose.
+        // Everything else needs Full: a statement this function has not been
+        // taught about is one nobody has decided is safe. A statement type added
+        // by a later crate version lands here silently, so the arm has to be the
+        // conservative one -- `Statement` is not `#[non_exhaustive]`, and the
+        // build will not break to ask.
         _ => Verdict::FULL,
+    }
+}
+
+/// Whether an `EXPLAIN (…)` option turns ANALYZE on -- which runs the statement
+/// for real.
+///
+/// sqlparser only sets the `analyze` flag for the keyword form
+/// (`EXPLAIN ANALYZE …`); the parenthesized form lands in `options` untouched,
+/// so `EXPLAIN (ANALYZE TRUE) DELETE FROM t` read as a plain EXPLAIN and
+/// deleted the rows. Anything but an explicit off counts as on: an argument
+/// this does not recognise is not a reason to call a write a read.
+fn analyze_option_is_on(option: &UtilityOption) -> bool {
+    if !option.name.value.eq_ignore_ascii_case("analyze") {
+        return false;
+    }
+    match &option.arg {
+        Some(arg) => !matches!(
+            arg.to_string().to_ascii_lowercase().as_str(),
+            "false" | "off" | "0"
+        ),
+        None => true,
     }
 }
 
@@ -2371,6 +2407,62 @@ mod tests {
 
         let update = "WITH x AS (UPDATE t SET a = 1 WHERE id = 2 RETURNING *) SELECT * FROM x";
         assert_eq!(classify(Engine::Postgres, update).mode, Mode::ReadWrite);
+    }
+
+    /// The parenthesized option list is a second spelling of ANALYZE, and it
+    /// runs the statement just as the keyword does: live-verified on Postgres
+    /// 18.6, where the row was gone after a classification of ReadOnly.
+    #[test]
+    fn classify_reads_analyze_from_the_explain_option_list() {
+        let cases = [
+            "EXPLAIN (ANALYZE) DELETE FROM t",
+            "EXPLAIN (ANALYZE TRUE, COSTS FALSE) DELETE FROM t",
+            "EXPLAIN (COSTS FALSE, ANALYZE ON) DELETE FROM t",
+            "EXPLAIN (analyze true) DELETE FROM t",
+        ];
+
+        for sql in cases {
+            assert_eq!(
+                classify(Engine::Postgres, sql),
+                Verdict {
+                    mode: Mode::Full,
+                    destructive: vec![Destructive::UnfilteredDelete],
+                },
+                "{sql}"
+            );
+        }
+
+        for sql in [
+            "EXPLAIN (ANALYZE FALSE) DELETE FROM t",
+            "EXPLAIN (ANALYZE OFF) DELETE FROM t",
+            "EXPLAIN (COSTS TRUE) SELECT 1",
+        ] {
+            assert_eq!(classify(Engine::Postgres, sql).mode, Mode::ReadOnly, "{sql}");
+        }
+    }
+
+    /// `TO STDOUT` hands rows to the client; a `PROGRAM` or file target runs a
+    /// shell command or touches the server's filesystem. Live-verified on
+    /// Postgres 18.6: both wrote a file on the server while classifying ReadOnly.
+    #[test]
+    fn classify_treats_server_side_copy_targets_as_full() {
+        assert_eq!(
+            classify(Engine::Postgres, "COPY (SELECT 1) TO STDOUT").mode,
+            Mode::ReadOnly
+        );
+        assert_eq!(
+            classify(Engine::Postgres, "COPY t FROM STDIN").mode,
+            Mode::ReadWrite
+        );
+
+        for sql in [
+            "COPY (SELECT 1) TO PROGRAM 'touch /tmp/x'",
+            "COPY (SELECT 1) TO '/tmp/x'",
+            "COPY t FROM PROGRAM 'cat /etc/passwd'",
+            "COPY t FROM '/tmp/x'",
+        ] {
+            assert_eq!(classify(Engine::Postgres, sql).mode, Mode::Full, "{sql}");
+        }
     }
 
     /// Four variants own a `Query` besides `Statement::Query`, and classifying
