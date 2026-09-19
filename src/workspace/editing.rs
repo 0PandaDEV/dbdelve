@@ -416,7 +416,7 @@ impl Workspace {
         }) {
             // The input this just closed had focus, and a window with nothing
             // focused has no dispatch path at all.
-            results.focus_handle(cx).focus(window);
+            results.focus_handle(cx).focus(window, cx);
             return;
         }
         // Asked after the attempt rather than before it, so nulling a cell the

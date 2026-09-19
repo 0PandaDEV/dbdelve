@@ -23,14 +23,17 @@ mod ui;
 use std::{borrow::Cow, path::PathBuf, rc::Rc, sync::Arc};
 
 use gpui::{
-    AnyElement, App, AppContext, Application, ClickEvent, ClipboardItem, Context, Entity,
-    EntityInputHandler, FocusHandle, Focusable, FontWeight, InteractiveElement, IntoElement, Menu,
-    MenuItem, ParentElement, Render, StatefulInteractiveElement, Styled, TitlebarOptions, Window,
+    AnyElement, App, AppContext, ClickEvent, ClipboardItem, Context, Entity, EntityInputHandler,
+    FocusHandle, Focusable, FontWeight, InteractiveElement, IntoElement, Menu, MenuItem,
+    ParentElement, Render, StatefulInteractiveElement, Styled, TitlebarOptions, Window,
     WindowOptions, deferred, div, point, prelude::FluentBuilder, px,
 };
 use gpui_component::{
     Disableable, IndexPath, Root,
-    input::{CompletionProvider, Enter, IndentInline, Input, InputEvent, InputState, Position},
+    input::{
+        CompletionProvider, EditorMode, EditorState, Enter, IndentInline, Input, InputEvent,
+        InputModeKind, InputState, Position,
+    },
     list::{List, ListEvent, ListItem, ListState},
     resizable::{h_resizable, resizable_panel},
     tree::tree as render_tree,
@@ -183,128 +186,134 @@ fn install_panic_log() {
 
 fn main() {
     install_panic_log();
-    Application::new().with_assets(Icons).run(|cx: &mut App| {
-        cx.text_system()
-            .add_fonts(
-                guic_gpui_assets::BUNDLED_FONTS
-                    .iter()
-                    .map(|font| Cow::Borrowed(*font))
-                    .collect(),
-            )
-            .expect("bundled fonts must be loadable");
-        gpui_component::init(cx);
-        // The defaults stand in until `Workspace::new` has read the file; the
-        // theme is applied through them, and `apply_to_components` reads the
-        // global rather than naming a family itself.
-        cx.set_global(Fonts::default());
-        let theme = Theme::default();
-        theme.apply_to_components(cx);
-        cx.set_global(theme);
-        // The keymap is built from `keybindings::REGISTRY` plus whatever
-        // overrides are on disk, so a chord shown here is a default rather
-        // than gospel -- see `src/keybindings.rs` for the full list and
-        // `Settings > Keybindings` for where a user changes one. Read once,
-        // here, rather than reused from `Workspace::new`'s own read of the
-        // same file: nothing here can wait for a window and an entity to
-        // exist first.
-        let overrides = store::load_profiles()
-            .ok()
-            .and_then(|(_, _, _, settings)| settings)
-            .and_then(|settings| settings.custom_keybindings)
-            .unwrap_or_default();
-        cx.bind_keys(keybindings::build_bindings(&overrides));
+    gpui_platform::application()
+        .with_assets(Icons)
+        .run(|cx: &mut App| {
+            cx.text_system()
+                .add_fonts(
+                    guic_gpui_assets::BUNDLED_FONTS
+                        .iter()
+                        .map(|font| Cow::Borrowed(*font))
+                        .collect(),
+                )
+                .expect("bundled fonts must be loadable");
+            gpui_component::init(cx);
+            // The defaults stand in until `Workspace::new` has read the file; the
+            // theme is applied through them, and `apply_to_components` reads the
+            // global rather than naming a family itself.
+            cx.set_global(Fonts::default());
+            let theme = Theme::default();
+            theme.apply_to_components(cx);
+            cx.set_global(theme);
+            // The keymap is built from `keybindings::REGISTRY` plus whatever
+            // overrides are on disk, so a chord shown here is a default rather
+            // than gospel -- see `src/keybindings.rs` for the full list and
+            // `Settings > Keybindings` for where a user changes one. Read once,
+            // here, rather than reused from `Workspace::new`'s own read of the
+            // same file: nothing here can wait for a window and an entity to
+            // exist first.
+            let overrides = store::load_profiles()
+                .ok()
+                .and_then(|(_, _, _, settings)| settings)
+                .and_then(|settings| settings.custom_keybindings)
+                .unwrap_or_default();
+            cx.bind_keys(keybindings::build_bindings(&overrides));
 
-        // An application menu is what actually makes `cmd+q` quit: the menu bar
-        // owns the keystroke at the AppKit level, so it fires whatever has
-        // focus, including a native text field that swallows the rest. Set
-        // after the bindings, because the shortcut the item displays is read
-        // back out of the keymap.
-        //
-        // The rest of the bar is there for the same reason in reverse: every
-        // item names an action dbdelve already dispatches, so the menu is a way
-        // to discover the keystroke rather than a second path to the work. No
-        // Edit menu -- dbdelve does not own cut, copy and paste, the focused
-        // field does, and a menu claiming them would take them from it.
-        cx.on_action(|_: &Quit, cx: &mut App| cx.quit());
-        cx.set_menus(vec![
-            Menu {
-                name: "dbdelve".into(),
-                items: vec![
-                    MenuItem::action("Settings…", OpenSettings),
-                    MenuItem::separator(),
-                    MenuItem::action("Quit dbdelve", Quit),
-                ],
-            },
-            Menu {
-                name: "File".into(),
-                items: vec![
-                    MenuItem::action("New Query", NewQuery),
-                    MenuItem::action("New Connection", NewConnection),
-                    MenuItem::separator(),
-                    MenuItem::action("Save Query", SaveQuery),
-                    MenuItem::separator(),
-                    MenuItem::action("Close Tab", CloseTab),
-                ],
-            },
-            Menu {
-                name: "Query".into(),
-                items: vec![
-                    MenuItem::action("Run", RunQuery),
-                    MenuItem::action("Cancel", CancelQuery),
-                ],
-            },
-            Menu {
-                name: "View".into(),
-                items: vec![
-                    MenuItem::action("Toggle Sidebar", ToggleSidebar),
-                    MenuItem::separator(),
-                    MenuItem::action("Zoom In", ZoomEditorIn),
-                    MenuItem::action("Zoom Out", ZoomEditorOut),
-                    MenuItem::action("Reset Zoom", ResetEditorZoom),
-                    MenuItem::separator(),
-                    MenuItem::action("Cycle Theme", CycleTheme),
-                ],
-            },
-        ]);
+            // An application menu is what actually makes `cmd+q` quit: the menu bar
+            // owns the keystroke at the AppKit level, so it fires whatever has
+            // focus, including a native text field that swallows the rest. Set
+            // after the bindings, because the shortcut the item displays is read
+            // back out of the keymap.
+            //
+            // The rest of the bar is there for the same reason in reverse: every
+            // item names an action dbdelve already dispatches, so the menu is a way
+            // to discover the keystroke rather than a second path to the work. No
+            // Edit menu -- dbdelve does not own cut, copy and paste, the focused
+            // field does, and a menu claiming them would take them from it.
+            cx.on_action(|_: &Quit, cx: &mut App| cx.quit());
+            cx.set_menus(vec![
+                Menu {
+                    name: "dbdelve".into(),
+                    disabled: false,
+                    items: vec![
+                        MenuItem::action("Settings…", OpenSettings),
+                        MenuItem::separator(),
+                        MenuItem::action("Quit dbdelve", Quit),
+                    ],
+                },
+                Menu {
+                    name: "File".into(),
+                    disabled: false,
+                    items: vec![
+                        MenuItem::action("New Query", NewQuery),
+                        MenuItem::action("New Connection", NewConnection),
+                        MenuItem::separator(),
+                        MenuItem::action("Save Query", SaveQuery),
+                        MenuItem::separator(),
+                        MenuItem::action("Close Tab", CloseTab),
+                    ],
+                },
+                Menu {
+                    name: "Query".into(),
+                    disabled: false,
+                    items: vec![
+                        MenuItem::action("Run", RunQuery),
+                        MenuItem::action("Cancel", CancelQuery),
+                    ],
+                },
+                Menu {
+                    name: "View".into(),
+                    disabled: false,
+                    items: vec![
+                        MenuItem::action("Toggle Sidebar", ToggleSidebar),
+                        MenuItem::separator(),
+                        MenuItem::action("Zoom In", ZoomEditorIn),
+                        MenuItem::action("Zoom Out", ZoomEditorOut),
+                        MenuItem::action("Reset Zoom", ResetEditorZoom),
+                        MenuItem::separator(),
+                        MenuItem::action("Cycle Theme", CycleTheme),
+                    ],
+                },
+            ]);
 
-        // The platform titlebar is kept only for its window buttons: a system
-        // bar in its own grey above dbdelve's chrome is the seam every native app
-        // avoids. dbdelve paints that strip itself, and the buttons sit over it.
-        let options = WindowOptions {
-            window_background: theme.window_background(),
-            titlebar: Some(TitlebarOptions {
-                title: Some("dbdelve".into()),
-                appears_transparent: true,
-                traffic_light_position: Some(point(
-                    px(layout::SPACE_MD),
-                    px((layout::TITLEBAR_HEIGHT - TRAFFIC_LIGHT_DIAMETER) / 2.),
-                )),
-            }),
-            ..Default::default()
-        };
+            // The platform titlebar is kept only for its window buttons: a system
+            // bar in its own grey above dbdelve's chrome is the seam every native app
+            // avoids. dbdelve paints that strip itself, and the buttons sit over it.
+            let options = WindowOptions {
+                window_background: theme.window_background(),
+                titlebar: Some(TitlebarOptions {
+                    title: Some("dbdelve".into()),
+                    appears_transparent: true,
+                    traffic_light_position: Some(point(
+                        px(layout::SPACE_MD),
+                        px((layout::TITLEBAR_HEIGHT - TRAFFIC_LIGHT_DIAMETER) / 2.),
+                    )),
+                }),
+                ..Default::default()
+            };
 
-        // Root must be the window's first layer or dialog and notification
-        // layers panic when they look for it.
-        cx.open_window(options, |window, cx| {
-            let workspace = cx.new(|cx| Workspace::new(window, cx));
-            cx.new(|cx| Root::new(workspace, window, cx))
-        })
-        .expect("failed to open window");
+            // Root must be the window's first layer or dialog and notification
+            // layers panic when they look for it.
+            cx.open_window(options, |window, cx| {
+                let workspace = cx.new(|cx| Workspace::new(window, cx));
+                cx.new(|cx| Root::new(workspace, window, cx))
+            })
+            .expect("failed to open window");
 
-        // dbdelve has one window and no way to open a second: with it closed the
-        // Dock icon is inert and the menu offers only Quit, which is an
-        // application nobody can get back into. Quitting is the way back --
-        // clicking the dead icon then launches dbdelve again, restoring the
-        // profiles and the buffers `Workspace::on_release` has just written.
-        // Reopening a window here would have to rebuild that same state anyway,
-        // and would keep a process alive that is holding nothing.
-        cx.on_window_closed(|cx| {
-            if cx.windows().is_empty() {
-                cx.quit();
-            }
-        })
-        .detach();
+            // dbdelve has one window and no way to open a second: with it closed the
+            // Dock icon is inert and the menu offers only Quit, which is an
+            // application nobody can get back into. Quitting is the way back --
+            // clicking the dead icon then launches dbdelve again, restoring the
+            // profiles and the buffers `Workspace::on_release` has just written.
+            // Reopening a window here would have to rebuild that same state anyway,
+            // and would keep a process alive that is holding nothing.
+            cx.on_window_closed(|cx, _| {
+                if cx.windows().is_empty() {
+                    cx.quit();
+                }
+            })
+            .detach();
 
-        cx.activate(true);
-    });
+            cx.activate(true);
+        });
 }

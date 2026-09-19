@@ -13,7 +13,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use gpui::{App, AppContext, Context, Entity, Window};
 use gpui_component::{
-    input::{InputEvent, InputState},
+    input::{EditorState, InputEvent, InputState},
     table::TableState,
     tree::TreeState,
 };
@@ -455,7 +455,7 @@ impl Session {
 
     /// The buffer a run reads from, which only the query tab has. An object tab
     /// shows an object: there is no SQL in front of the user to run.
-    pub(crate) fn editor(&self, tab: Tab) -> Option<Entity<InputState>> {
+    pub(crate) fn editor(&self, tab: Tab) -> Option<Entity<EditorState>> {
         match tab {
             Tab::Query(id) => self.query_tab(id).map(|tab| tab.editor.clone()),
             Tab::Object(_) => None,
@@ -529,10 +529,13 @@ impl Session {
     }
 }
 
-/// What takes focus when a surface comes to the front. A buffer and a grid are
-/// both focusable and neither is the other's type.
+/// What takes focus when a surface comes to the front. A buffer, a field and a
+/// grid are all focusable and no two of them share a type.
 pub(crate) enum Focus {
-    Buffer(Entity<InputState>),
+    Buffer(Entity<EditorState>),
+    /// A single-line field — the save-name prompt. Not an [`EditorState`]:
+    /// 0.6.4 splits the code editor off from the plain input.
+    Field(Entity<InputState>),
     Grid(Entity<TableState<ResultGrid>>),
     /// The window itself, for a surface with nothing in it to type into. Not a
     /// no-op: a keystroke only reaches the workspace along the focused
@@ -609,7 +612,7 @@ pub(crate) fn close_target(
 /// another's result in its grid.
 pub(crate) struct QueryTab {
     pub(crate) id: u64,
-    pub(crate) editor: Entity<InputState>,
+    pub(crate) editor: Entity<EditorState>,
     pub(crate) results: Entity<TableState<ResultGrid>>,
     pub(crate) query: QueryState,
     /// The saved query this buffer holds, or `None` while it is unsaved.
@@ -678,8 +681,8 @@ impl QueryTab {
         let tab = Self {
             id: stored.id,
             editor: cx.new(|cx| {
-                InputState::new(window, cx)
-                    .code_editor("sql")
+                EditorState::new(window, cx)
+                    .language("sql")
                     .soft_wrap(false)
                     .placeholder("Write SQL…")
                     .default_value(sql)

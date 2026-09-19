@@ -238,7 +238,7 @@ impl Workspace {
             .and_then(|filters| filters.last())
             .map(|filter| filter.value.clone())
         {
-            input.focus_handle(cx).focus(window);
+            input.focus_handle(cx).focus(window, cx);
         }
         cx.notify();
     }

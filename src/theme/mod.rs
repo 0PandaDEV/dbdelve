@@ -614,6 +614,22 @@ impl Theme {
         // to give up, and two rows of haze read as one flat slab.
         component.colors.table_row_border = self.border.into();
         component.highlight_theme = self.highlight_theme();
+
+        // 0.6.4 split every colour in two: `colors`, which is what a theme is
+        // written in, and `tokens`, a `Background`-valued copy of it that the
+        // library now actually paints from — `Root`'s base plane included. Only
+        // `Theme::change` rebuilds the copy, so mutating through `global_mut`
+        // leaves all 161 token reads on the library's light defaults, and the
+        // window comes back opaque white whatever `colors.background` says.
+        component.tokens = (&component.colors).into();
+
+        // 0.6.4 keeps a second theme global, the Base projection, and that is
+        // the one the input, the editor, the scrollbars and the text views read
+        // from. Mutating through `global_mut` alone leaves it on the library's
+        // light defaults: the editor pane comes back as an opaque fill, because
+        // `editor_background` falls through to `input_background`, which is
+        // `background` for any theme the Base does not believe is dark.
+        gpui_component::Theme::sync_base(cx);
     }
 
     /// Built through serde because `ThemeStyle`'s fields are private and it has
@@ -655,6 +671,7 @@ impl Theme {
             "string.special.symbol": style(self.syntax_string),
             "tag": style(self.syntax_keyword),
             "tag.doctype": style(self.syntax_keyword),
+            "text.code.span": style(self.syntax_string),
             "text.literal": style(self.syntax_string),
             "title": style(self.syntax_function),
             "type": style(self.syntax_type),
@@ -685,6 +702,15 @@ impl Theme {
                 editor_active_line: Some(self.element_hover.into()),
                 editor_line_number: Some(self.text_faint.into()),
                 editor_active_line_number: Some(self.text_muted.into()),
+                // 0.6.4 paints the gutter opaquely from `editor_background`
+                // when this is unset, which is the fill the note above exists
+                // to refuse. Named transparent so the refusal survives a bump
+                // that changes what the fallback is.
+                editor_gutter_background: Some(TRANSPARENT.into()),
+                // Whitespace marks are scaffolding, not text: the same faint
+                // tone the line numbers get, one step behind `text_muted`,
+                // which is what this falls back to unset.
+                editor_invisible: Some(self.text_faint.into()),
                 status: Default::default(),
                 syntax,
             },
@@ -920,7 +946,7 @@ mod tests {
                 .iter()
                 .filter_map(|(name, style)| style.is_null().then_some(name.as_str()))
                 .collect::<Vec<_>>();
-            assert_eq!(styles.len(), 40);
+            assert_eq!(styles.len(), 41);
             assert!(
                 missing.is_empty(),
                 "highlighter categories fell back to the component theme: {missing:?}"

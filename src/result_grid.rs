@@ -721,7 +721,7 @@ impl ResultGrid {
         input.update(cx, |input, cx| input.set_value(seed, window, cx));
         // The keystrokes that follow belong to the value rather than to the
         // grid's selection, so the input takes focus as it appears.
-        input.focus_handle(cx).focus(window);
+        input.focus_handle(cx).focus(window, cx);
         self.editing.as_mut()?.input = Some(input.clone());
         Some(input)
     }
@@ -800,8 +800,8 @@ impl TableDelegate for ResultGrid {
         self.result.rows.len()
     }
 
-    fn column(&self, col_ix: usize, _: &App) -> &Column {
-        &self.columns[col_ix]
+    fn column(&self, col_ix: usize, _: &App) -> Column {
+        self.columns[col_ix].clone()
     }
 
     fn render_th(
@@ -950,7 +950,7 @@ impl TableDelegate for ResultGrid {
                 MouseButton::Right,
                 cx.listener(move |table, _, window, cx| {
                     let handle = table.focus_handle(cx);
-                    handle.focus(window);
+                    handle.focus(window, cx);
                     let grid = table.delegate_mut();
                     grid.set_active(row_ix, col_ix);
                     grid.focus = Some(handle);
@@ -984,7 +984,7 @@ impl TableDelegate for ResultGrid {
                 .on_action(cx.listener(
                     move |table, _: &gpui_component::input::Enter, window, cx| {
                         match table.delegate_mut().commit_edit(cx) {
-                            true => table.focus_handle(cx).focus(window),
+                            true => table.focus_handle(cx).focus(window, cx),
                             // A mode refusal has an action attached -- raise the
                             // mode -- and the grid has nowhere to put one. The
                             // input stays open behind the prompt, so answering it
@@ -998,7 +998,7 @@ impl TableDelegate for ResultGrid {
                 .on_action(cx.listener(
                     move |table, _: &gpui_component::input::Escape, window, cx| {
                         table.delegate_mut().cancel_edit();
-                        table.focus_handle(cx).focus(window);
+                        table.focus_handle(cx).focus(window, cx);
                         cx.stop_propagation();
                         cx.notify();
                     },

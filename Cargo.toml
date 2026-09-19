@@ -8,9 +8,14 @@ publish = false
 
 # Exact pins: gpui is pre-1.0 and breaks on minor bumps. See AGENTS.md before
 # touching these, and commit Cargo.lock with any change.
+#
+# `gpui-pre` rather than `gpui`: the `gpui` crate is a one-off October 2025
+# snapshot the Zed team has not republished since, while `gpui-pre` is a rolling
+# republish of zed main. gpui-component depends on it under the name `gpui`, so
+# taking it here is what keeps one copy of the framework in the graph.
 [dependencies]
-gpui = "=0.2.2"
-gpui-component = { version = "=0.5.1", features = ["tree-sitter-languages"] }
+gpui = { package = "gpui-pre", version = "=0.3.5" }
+gpui-component = { version = "=0.6.4", features = ["tree-sitter-sql"] }
 
 # gpui-component keeps its parse tree private, so we run our own parser to find
 # statement boundaries. Versions match what gpui-component pulls, to avoid
@@ -20,7 +25,7 @@ gpui-component = { version = "=0.5.1", features = ["tree-sitter-languages"] }
 # statement boundary falls and which statements `sql.rs` refuses to splice into,
 # so a bump changes what DBDelve sends to the server. It is a correctness
 # dependency, not a formatting one.
-tree-sitter = "=0.25.10"
+tree-sitter = "=0.26.13"
 tree-sitter-sequel = "=0.3.11"
 
 # The vocabulary gpui-component's completion provider speaks, and nothing more:
@@ -130,6 +135,12 @@ security-framework = "3"
 guic-gpui-assets = "=0.2.0"
 icondata_lu = "=0.1.0"
 icondata_core = "=0.1.0"
+# `font-kit` is not in this crate's default features, and without it the macOS
+# backend swaps the text system for `NoopTextSystem` and renders no text at all
+# -- silently, through a `log::warn!` nothing here is listening to.
+gpui_platform = { version = "=0.3.5", package = "gpui-pre-platform", features = [
+    "font-kit",
+] }
 
 # GPUI does layout, text shaping and scene building on the CPU every frame, so
 # an unoptimized gpui drops frames the moment a grid scrolls. Dependencies are
