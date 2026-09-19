@@ -655,6 +655,7 @@ impl Theme {
             "string.special.symbol": style(self.syntax_string),
             "tag": style(self.syntax_keyword),
             "tag.doctype": style(self.syntax_keyword),
+            "text.code.span": style(self.syntax_string),
             "text.literal": style(self.syntax_string),
             "title": style(self.syntax_function),
             "type": style(self.syntax_type),
@@ -685,6 +686,15 @@ impl Theme {
                 editor_active_line: Some(self.element_hover.into()),
                 editor_line_number: Some(self.text_faint.into()),
                 editor_active_line_number: Some(self.text_muted.into()),
+                // 0.6.4 paints the gutter opaquely from `editor_background`
+                // when this is unset, which is the fill the note above exists
+                // to refuse. Named transparent so the refusal survives a bump
+                // that changes what the fallback is.
+                editor_gutter_background: Some(TRANSPARENT.into()),
+                // Whitespace marks are scaffolding, not text: the same faint
+                // tone the line numbers get, one step behind `text_muted`,
+                // which is what this falls back to unset.
+                editor_invisible: Some(self.text_faint.into()),
                 status: Default::default(),
                 syntax,
             },
@@ -920,7 +930,7 @@ mod tests {
                 .iter()
                 .filter_map(|(name, style)| style.is_null().then_some(name.as_str()))
                 .collect::<Vec<_>>();
-            assert_eq!(styles.len(), 40);
+            assert_eq!(styles.len(), 41);
             assert!(
                 missing.is_empty(),
                 "highlighter categories fell back to the component theme: {missing:?}"

@@ -529,10 +529,13 @@ impl Session {
     }
 }
 
-/// What takes focus when a surface comes to the front. A buffer and a grid are
-/// both focusable and neither is the other's type.
+/// What takes focus when a surface comes to the front. A buffer, a field and a
+/// grid are all focusable and no two of them share a type.
 pub(crate) enum Focus {
     Buffer(Entity<EditorState>),
+    /// A single-line field — the save-name prompt. Not an [`EditorState`]:
+    /// 0.6.4 splits the code editor off from the plain input.
+    Field(Entity<InputState>),
     Grid(Entity<TableState<ResultGrid>>),
     /// The window itself, for a surface with nothing in it to type into. Not a
     /// no-op: a keystroke only reaches the workspace along the focused

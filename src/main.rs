@@ -30,7 +30,10 @@ use gpui::{
 };
 use gpui_component::{
     Disableable, IndexPath, Root,
-    input::{CompletionProvider, Enter, IndentInline, Input, InputEvent, InputState, Position},
+    input::{
+        CompletionProvider, EditorMode, EditorState, Enter, IndentInline, Input, InputEvent,
+        InputModeKind, InputState, Position,
+    },
     list::{List, ListEvent, ListItem, ListState},
     resizable::{h_resizable, resizable_panel},
     tree::tree as render_tree,
@@ -231,6 +234,7 @@ fn main() {
             cx.set_menus(vec![
                 Menu {
                     name: "dbdelve".into(),
+                    disabled: false,
                     items: vec![
                         MenuItem::action("Settings…", OpenSettings),
                         MenuItem::separator(),
@@ -239,6 +243,7 @@ fn main() {
                 },
                 Menu {
                     name: "File".into(),
+                    disabled: false,
                     items: vec![
                         MenuItem::action("New Query", NewQuery),
                         MenuItem::action("New Connection", NewConnection),
@@ -250,6 +255,7 @@ fn main() {
                 },
                 Menu {
                     name: "Query".into(),
+                    disabled: false,
                     items: vec![
                         MenuItem::action("Run", RunQuery),
                         MenuItem::action("Cancel", CancelQuery),
@@ -257,6 +263,7 @@ fn main() {
                 },
                 Menu {
                     name: "View".into(),
+                    disabled: false,
                     items: vec![
                         MenuItem::action("Toggle Sidebar", ToggleSidebar),
                         MenuItem::separator(),
@@ -300,7 +307,7 @@ fn main() {
             // profiles and the buffers `Workspace::on_release` has just written.
             // Reopening a window here would have to rebuild that same state anyway,
             // and would keep a process alive that is holding nothing.
-            cx.on_window_closed(|cx| {
+            cx.on_window_closed(|cx, _| {
                 if cx.windows().is_empty() {
                     cx.quit();
                 }

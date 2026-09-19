@@ -15,7 +15,7 @@ use gpui::{
 use gpui_component::{
     Disableable, IconName, Sizable,
     button::Button,
-    input::{Editor, EditorState, Input, InputState},
+    input::{Editor, EditorState, Input},
     menu::DropdownMenu,
     resizable::{resizable_panel, v_resizable},
     spinner::Spinner,
@@ -98,7 +98,6 @@ fn render_editor_surface(
                 .h_full()
                 .appearance(false)
                 .bordered(false)
-                .focus_bordered(false)
                 .text_size(px(font_size))
                 .line_height(px(font_size * 1.55)),
         );

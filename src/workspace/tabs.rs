@@ -157,8 +157,18 @@ impl Workspace {
         else {
             return;
         };
+        // Through the mode trait: 0.6.4 made the inherent method `pub(crate)`,
+        // and this is the only public way left to offer the menu an action.
         let accepted = editor.update(cx, |editor, cx| {
-            editor.handle_action_for_context_menu(Box::new(Enter { secondary: false }), window, cx)
+            EditorMode::handle_context_menu_action(
+                editor,
+                Box::new(Enter {
+                    secondary: false,
+                    shift: false,
+                }),
+                window,
+                cx,
+            )
         });
         if !accepted {
             window.dispatch_action(Box::new(IndentInline), cx);

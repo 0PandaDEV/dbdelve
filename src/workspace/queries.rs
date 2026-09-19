@@ -938,7 +938,7 @@ impl Workspace {
 
     pub(crate) fn sql_to_run(
         &self,
-        editor: &Entity<InputState>,
+        editor: &Entity<EditorState>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<String> {

@@ -739,7 +739,7 @@ impl Workspace {
         // moment where completion quietly stops working.
         for tab in &profile.session.queries {
             tab.editor.update(cx, |editor, _| {
-                editor.lsp.completion_provider = provider.clone();
+                editor.lsp_mut().completion_provider = provider.clone();
             });
         }
     }

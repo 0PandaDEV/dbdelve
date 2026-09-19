@@ -404,7 +404,7 @@ impl Render for Workspace {
                 let wanted = profile.session.save_name_needs_focus;
                 return wanted.then(|| {
                     profile.session.save_name_needs_focus = false;
-                    Focus::Buffer(profile.session.save_name.clone())
+                    Focus::Field(profile.session.save_name.clone())
                 });
             }
             if !profile.session.editor_needs_focus {
@@ -433,13 +433,14 @@ impl Render for Workspace {
         // its own, and a field it just unmounted took the window's only
         // dispatch path with it.
         if let Some(input) = self.form.as_mut().and_then(|form| form.needs_focus.take()) {
-            input.focus_handle(cx).focus(window);
+            input.focus_handle(cx).focus(window, cx);
         }
 
         match take_focus {
-            Some(Focus::Buffer(input)) => input.focus_handle(cx).focus(window),
-            Some(Focus::Grid(grid)) => grid.focus_handle(cx).focus(window),
-            Some(Focus::Window) => self.focus.focus(window),
+            Some(Focus::Buffer(editor)) => editor.focus_handle(cx).focus(window, cx),
+            Some(Focus::Field(input)) => input.focus_handle(cx).focus(window, cx),
+            Some(Focus::Grid(grid)) => grid.focus_handle(cx).focus(window, cx),
+            Some(Focus::Window) => self.focus.focus(window, cx),
             None => {}
         }
 
@@ -449,7 +450,7 @@ impl Render for Workspace {
         if let Some(list) = &self.palette {
             let handle = list.focus_handle(cx);
             if !handle.is_focused(window) {
-                handle.focus(window);
+                handle.focus(window, cx);
             }
         }
 

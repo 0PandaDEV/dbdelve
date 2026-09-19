@@ -23,8 +23,8 @@
 
 use std::{cell::RefCell, collections::HashMap, ops::Range, rc::Rc, sync::Arc};
 
-use gpui::{Context, Result, Task, WeakEntity, Window};
-use gpui_component::input::{CompletionProvider, InputState, Rope, RopeExt};
+use gpui::{App, Result, Task, WeakEntity, Window};
+use gpui_component::input::{CompletionProvider, Rope, RopeExt};
 use lsp_types::{
     CompletionContext, CompletionItem, CompletionItemKind, CompletionResponse, CompletionTextEdit,
     TextEdit,
@@ -427,7 +427,7 @@ impl CompletionProvider for SchemaCompletions {
     /// input only reconsiders the menu when the provider is consulted. An
     /// empty answer from `completions` hides it, so there is one place that
     /// decides whether a popup belongs and it is the one that knows.
-    fn is_completion_trigger(&self, _: usize, _: &str, _: &mut Context<InputState>) -> bool {
+    fn is_completion_trigger(&self, _: usize, _: &str, _: &mut App) -> bool {
         true
     }
 
@@ -437,7 +437,7 @@ impl CompletionProvider for SchemaCompletions {
         offset: usize,
         _: CompletionContext,
         _: &mut Window,
-        cx: &mut Context<InputState>,
+        cx: &mut App,
     ) -> Task<Result<CompletionResponse>> {
         // ponytail: the whole buffer is copied out of the rope on every
         // keystroke, and parsed once more on top of the highlighter's own
