@@ -15,11 +15,11 @@ use gpui::{
 use gpui_component::{
     Disableable, IconName, Sizable,
     button::Button,
-    input::{Input, InputState},
+    input::{Editor, EditorState, Input, InputState},
     menu::DropdownMenu,
     resizable::{resizable_panel, v_resizable},
     spinner::Spinner,
-    table::{Table, TableDelegate, TableState},
+    table::{DataTable, TableDelegate, TableState},
 };
 
 use crate::{
@@ -76,7 +76,7 @@ pub fn render_main_content(
 /// from, not in what they are.
 fn render_editor_surface(
     split: gpui::ElementId,
-    editor: &Entity<InputState>,
+    editor: &Entity<EditorState>,
     font_size: f32,
     query: &QueryState,
     bottom: AnyElement,
@@ -94,7 +94,7 @@ fn render_editor_surface(
         .p(px(layout::SPACE_LG))
         .font_family(code)
         .child(
-            Input::new(editor)
+            Editor::new(editor)
                 .h_full()
                 .appearance(false)
                 .bordered(false)
@@ -1007,7 +1007,7 @@ fn render_results(
                             .on_action(cx.listener(Workspace::request_write_mode))
                             .on_action(cx.listener(Workspace::delete_row))
                             .on_action(cx.listener(Workspace::follow_foreign_key))
-                            .child(Table::new(results).bordered(false).stripe(false)),
+                            .child(DataTable::new(results).bordered(false).stripe(false)),
                     )
                     .children(render_row_inspector(results, cx)),
             )
