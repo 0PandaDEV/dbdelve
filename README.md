@@ -1,135 +1,57 @@
 # DBDelve
 
-A native macOS database client, speaking Postgres, MySQL and SQLite. Rust,
-GPUI, no Electron.
+A native macOS database client for Postgres, MySQL and SQLite. Written in Rust
+with GPUI, so it opens fast, stays smooth while you scroll, and doesn't need a
+browser engine to show you a table.
 
-A data browser and a SQL editor as equals: open a table and page through it,
-or write the exact statement you mean. Keyboard-first, minimal, and built to
-stay at display refresh rate on real data.
+> Early days. Everything listed below works today, but there's no release yet.
 
-> **Status: early development.** Everything below under "What works" runs today.
+## Why
 
-## Development databases
+I wanted something in between DBeaver, which does everything and is heavy about
+it, and TablePlus, which is quick but costs money. DBDelve is free and MIT
+licensed. No feature is ever going behind a paywall.
 
-The repository includes a disposable database per engine, all carrying the same
-demo objects with deterministic data for editor, result-grid and large-value
-testing: enum, UUID, numeric, array, JSON, `NULL`, Unicode, binary, large text
-and 5,000 measurement rows. Geometry is Postgres-only — PostGIS has no
-equivalent in the other two, and DBDelve does not pretend otherwise.
+## Supported databases
 
-```sh
-docker compose up -d                                           # postgres + mysql
-sqlite3 dev/dbdelve_dev.db < dev/sqlite/001-dbdelve-demo.sql    # a file, not a service
-cargo run
-```
+Postgres, MySQL and SQLite. More once these three are solid.
 
-Pick the engine in the connection form, then paste a URL or fill in the fields:
+## What it does
 
-```text
-postgresql://dbdelve:dbdelve@127.0.0.1:55432/dbdelve_dev
-mysql://dbdelve:dbdelve@127.0.0.1:53306/dbdelve_dev
-/absolute/path/to/dbdelve/dev/dbdelve_dev.db
-```
+- **Separate connections that stay separate.** Each one keeps its own tabs,
+  schema tree and query history, so a buffer you wrote against staging can't
+  quietly end up pointed at production. Passwords go in the Keychain, never
+  into a config file.
+- **Read-only, read-write and full access, per connection.** DBDelve won't send
+  a statement your current mode doesn't allow, and it asks before anything
+  destructive. Read-only also asks Postgres and MySQL to refuse writes on their
+  end, as a second line. Neither replaces connecting as a role without write
+  grants, which is the only real boundary.
+- **In-line editing.** Arrow to a cell, Enter to edit it. Applying writes the
+  `UPDATE` into the editor first, so you read it before it runs. A cell is only
+  editable when DBDelve can identify its row by primary key; joins, views and
+  keyless tables stay read-only and tell you why.
+- **Sorting and filtering.** Clicking a header splices `ORDER BY` into the SQL
+  you're looking at. Filter bars build the `WHERE` for you when you'd rather
+  not type it.
+- **Completion from your own schema.** The tables, columns, views and routines
+  the connection actually has, not a generic keyword list. After `FROM` it
+  offers relations; after a table or alias and a dot, that table's columns.
+- **Export** whatever's in the grid to CSV or JSON. It writes what the tab
+  already holds, no second query.
+- **Keyboard-first.** Most actions ship with a chord and can be rebound in
+  Settings. A handful of contextual ones, mainly sorting and filters, are still
+  mouse-only.
 
-`PG*` environment variables still configure a Postgres profile at startup and
-are not generalised — DBDelve is a generic client, not a generic environment
-reader, and the other two engines have no such convention to read.
-`PGPASSWORD` is used for that session and nothing more: a profile the
-environment made gets no Keychain entry, because a variable set in a shell is
-not a credential anyone asked DBDelve to keep.
-
-```sh
-PGHOST=127.0.0.1 PGPORT=55432 PGDATABASE=dbdelve_dev \
-PGUSER=dbdelve PGPASSWORD=dbdelve cargo run
-```
-
-The official PostGIS image is currently `amd64`-only. Docker Desktop runs it
-under emulation on Apple Silicon; `compose.yaml` declares that platform
-explicitly rather than emitting a misleading mismatch warning.
-
-Initialization runs only when Docker creates the data volume, so reset it after
-changing a seed file. The MySQL container reports itself healthy even when its
-init script failed, so check the row count rather than the status:
-
-```sh
-docker compose down --volumes && docker compose up -d
-rm -f dev/dbdelve_dev.db && sqlite3 dev/dbdelve_dev.db < dev/sqlite/001-dbdelve-demo.sql
-```
-
-## What works
-
-- **Postgres, MySQL and SQLite**, behind one interface. Pick the engine on the
-  connection form and the fields follow it — a file path for SQLite, host and
-  credentials for the other two. No driver type reaches the UI, so the grid,
-  the explorer and the editor do not know which engine they are showing.
-- **Connection profiles with isolated workspaces.** Switch database and your
-  whole set of tabs, tree and history switches with it. Nothing is shared, so a
-  buffer written against staging cannot be silently retargeted at production.
-  Profiles persist; passwords live in the Keychain.
-- **Query editor** with tree-sitter SQL highlighting. `cmd+enter` runs the
-  selection, or the statement under the cursor. Errors render inline.
-- **Completion from your own schema.** Typing offers the schemas, tables,
-  views, routines and columns the connection actually has, plus the keywords
-  that carry a statement's shape. After `FROM` it offers relations; after a
-  table name or an alias and a dot, that table's columns; inside a string
-  literal or a comment, nothing at all.
-- **As many query buffers as you want.** `cmd+t` opens another, each with its
-  own results, sort state and history of what it ran. An unsaved one persists
-  by itself, so a scratch buffer survives a restart without being named.
-- **Virtualized result grid** with content-fitted draggable columns and a row
-  inspector showing whole values and their types. Table previews carry a
-  per-tab row limit and page through the relation a window at a time; a query
-  you wrote runs exactly as written, uncapped.
-- **Filter rows without writing SQL.** A table preview stacks one bar per
-  filter — pick a column, pick an operator, type a value — and the generated
-  `SELECT` carries them in its `WHERE`, quoted for the engine you are on.
-  Eighteen operators, from `=` through contains, `IN`, `BETWEEN` and a regex
-  match; `AND` or `OR` between any two bars, folded the way the stack reads. A
-  bar can hold raw SQL instead, which goes in verbatim and is refused if the
-  statement it makes is not one readable `SELECT`.
-- **Sorting that edits your SQL in front of you.** A header click splices an
-  `ORDER BY` into the statement in the buffer — the statement that runs is the
-  statement on screen, and you can edit or undo it.
-- **In-grid editing.** Click or arrow to a cell, `Enter` to edit, `cmd+c` to copy
-  the whole value. Apply writes one `UPDATE` per changed row into the buffer and
-  runs it. A cell is editable only when DBDelve can identify its row by primary
-  key; joins, aggregates, views and keyless tables stay read-only and say why.
-- **Schema explorer** over schemas, tables, views, functions and procedures, with
-  an inline filter and a structure view for columns, indexes and constraints.
-- **`cmd+p` and `cmd+shift+p`.** One flat fuzzy list over every table, view,
-  routine and saved query the connection has, and one over the verbs that apply
-  to what is on screen. Every row runs the same code the buttons do.
-- **Cancel, and a statement timeout.** A running query has a Cancel button that
-  reaches the statement itself, and each profile can carry a timeout applied at
-  connect. What each engine buys with that differs and DBDelve does not pretend
-  otherwise: on MySQL the timeout bounds read-only `SELECT`s only, and SQLite's
-  is wall clock rather than work done.
-- **Export** the result set in front of you to CSV or JSON. It writes what the
-  tab already holds — no second fetch, no generated SQL — and the file extension
-  picks the format.
-- **Query history**, per profile and appended to on every run — a failed
-  statement included, since that is the one worth getting back. Reach it from
-  the command palette; recalling a statement appends it to the buffer with the
-  cursor on it, so `cmd+enter` sends what you are looking at.
-- **`cmd+w`** closes the tab in front. A saved query is listed while its file
-  exists, so closing that one is deleting it and it asks first; everything else
-  just goes. The exception is the last unsaved buffer, which stays — a profile
-  always has somewhere to write.
-- **Two themes and a glass one**, cycled with `cmd+shift+t`, and the sidebar,
-  the editor and the grid each pick their own font. `cmd+shift+s` folds the
-  sidebar away; `cmd+±` and `cmd+0` size the editor.
-- **TLS, with libpq's five `sslmode` rungs** — `disable`, `prefer`, `require`,
-  `verify-ca`, `verify-full` — selectable per connection and carried through to
-  both server engines. `verify-full` checks the certificate against the macOS
-  trust store on Postgres, or against a root certificate you name, which
-  replaces that store rather than adding to it. A mode is never quietly
-  downgraded: ask for encryption and DBDelve either gets it or tells you which
-  certificate failed and why. SQLite has no transport to secure, so it has no
-  such setting.
+**DBDelve never generates a `DROP` or `TRUNCATE`.** The only statements it
+writes on your behalf are an `UPDATE`, a single-row `INSERT`, and a `DELETE` of
+one row named by its primary key. Anything else is refused before it's sent.
 
 ## Installing
 
-Apple Silicon, macOS 12 or later.
+Apple Silicon, macOS 12 or later — that's what it's built and tested on. Intel
+and older macOS aren't blocked by anything in the code, they're just untested.
+Open an issue if you want one.
 
 ```sh
 brew install --cask ShayanAbbas1/dbdelve/dbdelve
@@ -139,49 +61,32 @@ Or take the `.dmg` from [the latest release][releases] and drag DBDelve to
 Applications.
 
 Either way macOS will refuse to open it the first time. DBDelve is signed
-ad-hoc: there is no Developer ID behind it and nothing is notarized, so
-Gatekeeper has no name to show you and declines rather than guess. Clearing
-the quarantine flag is the whole of the fix:
+ad-hoc: there's no Developer ID behind it and nothing is notarized, so
+Gatekeeper has no name to show you and declines rather than guess. Clearing the
+quarantine flag is the whole of the fix:
 
 ```sh
 xattr -dr com.apple.quarantine /Applications/DBDelve.app
 ```
 
-Once per install, not once per launch. A Developer ID is a matter of whether
-anyone ends up using this, not of principle.
+Once per install, not once per launch. I'll pay for a Developer ID if enough
+people end up using this.
 
-To build it yourself instead, `dev/bundle.sh` produces `/Applications/DBDelve.app`
-— release build, icon, signature and all — and skips the quarantine step,
-because nothing downloaded it.
+To build it yourself instead, `dev/bundle.sh` produces
+`/Applications/DBDelve.app` with the release build, icon and signature, and
+skips the quarantine step because nothing downloaded it.
 
 [releases]: https://github.com/ShayanAbbas1/dbdelve/releases/latest
 
 ## Updating
 
 `brew upgrade --cask dbdelve`, if you installed it that way. Otherwise watch
-[the releases page][releases]; DBDelve does not check for its own updates.
-
-## Planned
-
-SSH tunneling, notarized builds, and an in-app update check.
+[the releases page][releases]. DBDelve doesn't check for its own updates.
 
 ## Not planned
 
 Visual query builders, ER diagrams, migrations. DBDelve assumes you can write
-SQL; it just does not make you write all of it.
-
-**DBDelve never writes a `DROP` or `TRUNCATE`** — not on request, not by
-accident. Generated statements pass a whitelist gate that admits three shapes
-and nothing else — an `UPDATE`, a single-row `INSERT`, and a `DELETE` of one row
-named by its primary key — so the guarantee is structural rather than a list of
-names someone remembered to check. The `DELETE` is generated only from an
-explicit ask and shown before it runs, never from a predicate DBDelve guessed at
-and never more than one row per statement; and its shape is read back out of the
-parse tree rather than trusted because DBDelve wrote it, since a gate that trusts
-its caller is a comment. On MySQL and SQLite, where each statement commits on its own, a
-multi-row edit is bracketed with `BEGIN`/`COMMIT` — written into the buffer
-where you can read it, never opened behind your back. A batch that fails part
-way is rolled back, and the error says which state the data is in.
+SQL. It just doesn't make you write all of it.
 
 ## License
 
