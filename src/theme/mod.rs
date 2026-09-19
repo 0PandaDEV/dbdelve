@@ -614,6 +614,22 @@ impl Theme {
         // to give up, and two rows of haze read as one flat slab.
         component.colors.table_row_border = self.border.into();
         component.highlight_theme = self.highlight_theme();
+
+        // 0.6.4 split every colour in two: `colors`, which is what a theme is
+        // written in, and `tokens`, a `Background`-valued copy of it that the
+        // library now actually paints from — `Root`'s base plane included. Only
+        // `Theme::change` rebuilds the copy, so mutating through `global_mut`
+        // leaves all 161 token reads on the library's light defaults, and the
+        // window comes back opaque white whatever `colors.background` says.
+        component.tokens = (&component.colors).into();
+
+        // 0.6.4 keeps a second theme global, the Base projection, and that is
+        // the one the input, the editor, the scrollbars and the text views read
+        // from. Mutating through `global_mut` alone leaves it on the library's
+        // light defaults: the editor pane comes back as an opaque fill, because
+        // `editor_background` falls through to `input_background`, which is
+        // `background` for any theme the Base does not believe is dark.
+        gpui_component::Theme::sync_base(cx);
     }
 
     /// Built through serde because `ThemeStyle`'s fields are private and it has
