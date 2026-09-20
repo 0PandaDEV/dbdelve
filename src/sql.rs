@@ -26,7 +26,7 @@ use sqlparser::parser::Parser as SqlParser;
 use tree_sitter::{Node, Parser, Tree};
 
 use crate::db::Engine;
-use crate::result_grid::PendingRow;
+use crate::result_grid::{NewValue, PendingRow};
 
 /// The runnable statements of a query buffer, as byte ranges into it.
 pub struct Buffer {
@@ -192,12 +192,12 @@ pub fn with_order_by(statement: &str, keys: &[SortKey]) -> Option<String> {
 /// column's assignment cast, so `'123'` lands in an `int4` exactly as `123`
 /// would, and SQLite applies the column's type affinity to the same effect. A
 /// cast dbdelve chose for itself could only ever be the wrong one. A cleared cell
-/// is therefore the empty string, and a `None` in `sets` is a `NULL`: the two
-/// are different writes, which is the whole point of spelling one of them as an
-/// absence.
+/// is therefore the empty string, and [`NewValue`]'s other two arms are the
+/// keywords: three different writes, which is the whole point of spelling two
+/// of them as something other than a value.
 ///
-/// `keys` carries no `None`, because a row identified by a `NULL` is a row `=`
-/// does not find; the caller drops such a row before it gets here.
+/// `keys` carries plain values, because a row identified by a `NULL` is a row
+/// `=` does not find; the caller drops such a row before it gets here.
 ///
 /// `None` when either list is empty. A statement with no `WHERE` rewrites every
 /// row in the table and one with no `SET` is not a statement at all, so a caller
@@ -207,16 +207,16 @@ pub fn update_row(
     engine: Engine,
     schema: &str,
     table: &str,
-    sets: &[(&str, Option<&str>)],
+    sets: &[(&str, NewValue)],
     keys: &[(&str, &str)],
 ) -> Option<String> {
     if sets.is_empty() || keys.is_empty() {
         return None;
     }
 
-    let keys: Vec<(&str, Option<&str>)> = keys
+    let keys: Vec<(&str, NewValue)> = keys
         .iter()
-        .map(|&(column, value)| (column, Some(value)))
+        .map(|&(column, value)| (column, NewValue::Value(value.into())))
         .collect();
     Some(format!(
         "UPDATE {} SET {} WHERE {}",
@@ -257,7 +257,14 @@ pub fn insert_row(
         .collect();
     let values: Vec<String> = columns
         .iter()
-        .map(|&(_, value)| literal(engine, value))
+        // An insert leaves a default to apply by omitting the column outright,
+        // so the third state the grid's edits carry has nothing to mean here.
+        .map(|&(_, value)| {
+            literal(
+                engine,
+                &value.map_or(NewValue::Null, |value| NewValue::Value(value.into())),
+            )
+        })
         .collect();
     Some(format!(
         "INSERT INTO {} ({}) VALUES ({})",
@@ -287,9 +294,9 @@ pub fn delete_row(
         return None;
     }
 
-    let keys: Vec<(&str, Option<&str>)> = keys
+    let keys: Vec<(&str, NewValue)> = keys
         .iter()
-        .map(|&(column, value)| (column, Some(value)))
+        .map(|&(column, value)| (column, NewValue::Value(value.into())))
         .collect();
     Some(format!(
         "DELETE FROM {} WHERE {}",
@@ -444,10 +451,10 @@ fn generated_statements<'tree>(root: &Node<'tree>) -> Option<Vec<Node<'tree>>> {
     }
 }
 
-fn assignments(engine: Engine, columns: &[(&str, Option<&str>)], separator: &str) -> String {
+fn assignments(engine: Engine, columns: &[(&str, NewValue)], separator: &str) -> String {
     columns
         .iter()
-        .map(|&(column, value)| {
+        .map(|(column, value)| {
             format!(
                 "{} = {}",
                 engine.quote_identifier(column),
@@ -458,12 +465,15 @@ fn assignments(engine: Engine, columns: &[(&str, Option<&str>)], separator: &str
         .join(separator)
 }
 
-/// A value as it goes into a statement: quoted, or the keyword for there being
-/// no value. Unquoted is the only way to write it — `'NULL'` is the word.
-fn literal(engine: Engine, value: Option<&str>) -> String {
+/// A value as it goes into a statement: quoted, or one of the two keywords that
+/// stand for there being no value to quote. Unquoted is the only way to write
+/// either — `'NULL'` and `'DEFAULT'` are the words, and a user who typed one of
+/// them into a cell meant the word.
+fn literal(engine: Engine, value: &NewValue) -> String {
     match value {
-        Some(value) => engine.quote_literal(value),
-        None => "NULL".to_string(),
+        NewValue::Value(value) => engine.quote_literal(value),
+        NewValue::Null => "NULL".to_string(),
+        NewValue::Default => "DEFAULT".to_string(),
     }
 }
 
@@ -807,10 +817,10 @@ pub(crate) fn update_batch(engine: Engine, rows: &[PendingRow]) -> Option<String
             .map(|(column, value)| (column.as_str(), value.as_str()))
             .collect()
     }
-    fn borrowed_sets(pairs: &[(String, Option<String>)]) -> Vec<(&str, Option<&str>)> {
+    fn borrowed_sets(pairs: &[(String, NewValue)]) -> Vec<(&str, NewValue)> {
         pairs
             .iter()
-            .map(|(column, value)| (column.as_str(), value.as_deref()))
+            .map(|(column, value)| (column.as_str(), value.clone()))
             .collect()
     }
     let statements: Option<Vec<String>> = rows
@@ -1651,7 +1661,7 @@ mod tests {
                 Engine::Postgres,
                 "public",
                 "measurements",
-                &[("note", Some("ok"))],
+                &[("note", set("ok"))],
                 &[("id", "7")]
             )
             .unwrap(),
@@ -1662,7 +1672,7 @@ mod tests {
                 Engine::Postgres,
                 "public",
                 "measurements",
-                &[("note", Some("ok")), ("depth", Some("12"))],
+                &[("note", set("ok")), ("depth", set("12"))],
                 &[("id", "7")]
             )
             .unwrap(),
@@ -1679,7 +1689,7 @@ mod tests {
                 Engine::Postgres,
                 "app",
                 "memberships",
-                &[("role", Some("owner"))],
+                &[("role", set("owner"))],
                 &[("org_id", "1"), ("user_id", "2")]
             )
             .unwrap(),
@@ -1696,7 +1706,7 @@ mod tests {
                 Engine::Postgres,
                 "s",
                 "t",
-                &[("a", Some("it's"))],
+                &[("a", set("it's"))],
                 &[("id", "o'hara")]
             )
             .unwrap(),
@@ -1707,7 +1717,7 @@ mod tests {
                 Engine::Postgres,
                 "s",
                 r#"od"d"#,
-                &[(r#"we"ird"#, Some("x"))],
+                &[(r#"we"ird"#, set("x"))],
                 &[("id", "1")]
             )
             .unwrap(),
@@ -1724,7 +1734,7 @@ mod tests {
                 Engine::Postgres,
                 "public",
                 "measurements",
-                &[("note", None)],
+                &[("note", NewValue::Null)],
                 &[("id", "7")]
             )
             .unwrap(),
@@ -1737,7 +1747,7 @@ mod tests {
                 Engine::MySql,
                 "dbdelve_dev",
                 "measurements",
-                &[("note", None), ("depth", Some("12"))],
+                &[("note", NewValue::Null), ("depth", set("12"))],
                 &[("id", "7")]
             )
             .unwrap(),
@@ -1749,7 +1759,7 @@ mod tests {
                 Engine::Sqlite,
                 "main",
                 "measurements",
-                &[("note", Some("NULL"))],
+                &[("note", set("NULL"))],
                 &[("id", "7")]
             )
             .unwrap(),
@@ -1757,8 +1767,52 @@ mod tests {
         );
         // The gate is untouched by this: `SET x = NULL` is an `update` node
         // like any other, and a test here is what proves it rather than hopes.
-        let statement =
-            update_row(Engine::Postgres, "s", "t", &[("a", None)], &[("id", "1")]).unwrap();
+        let statement = update_row(
+            Engine::Postgres,
+            "s",
+            "t",
+            &[("a", NewValue::Null)],
+            &[("id", "1")],
+        )
+        .unwrap();
+        assert!(is_generated_write(&statement), "{statement} was refused");
+    }
+
+    #[test]
+    fn a_default_goes_in_as_the_keyword_and_the_typed_word_stays_a_string() {
+        // The same distinction NULL is under, and the one that makes the menu
+        // entry worth having: quoted, `DEFAULT` is seven characters of data.
+        assert_eq!(
+            update_row(
+                Engine::Postgres,
+                "public",
+                "measurements",
+                &[("note", NewValue::Default)],
+                &[("id", "7")]
+            )
+            .unwrap(),
+            r#"UPDATE "public"."measurements" SET "note" = DEFAULT WHERE "id" = '7'"#
+        );
+        assert_eq!(
+            update_row(
+                Engine::Postgres,
+                "public",
+                "measurements",
+                &[("note", set("DEFAULT"))],
+                &[("id", "7")]
+            )
+            .unwrap(),
+            r#"UPDATE "public"."measurements" SET "note" = 'DEFAULT' WHERE "id" = '7'"#
+        );
+        // And the gate takes it, as it takes `SET x = NULL`.
+        let statement = update_row(
+            Engine::Postgres,
+            "s",
+            "t",
+            &[("a", NewValue::Default)],
+            &[("id", "1")],
+        )
+        .unwrap();
         assert!(is_generated_write(&statement), "{statement} was refused");
     }
 
@@ -1766,7 +1820,7 @@ mod tests {
     fn an_update_with_nothing_to_match_on_is_refused() {
         // No WHERE rewrites every row in the table. It must not be possible to
         // produce that statement, so a caller with no key gets nothing.
-        assert!(update_row(Engine::Postgres, "s", "t", &[("a", Some("1"))], &[]).is_none());
+        assert!(update_row(Engine::Postgres, "s", "t", &[("a", set("1"))], &[]).is_none());
         assert!(update_row(Engine::Postgres, "s", "t", &[], &[("id", "1")]).is_none());
     }
 
@@ -1944,7 +1998,7 @@ mod tests {
             Engine::Postgres,
             "public",
             "measurements",
-            &[("note", Some("it's fine")), ("depth", Some("12"))],
+            &[("note", set("it's fine")), ("depth", set("12"))],
             &[("id", "7"), ("run", "a'b")],
         )
         .unwrap();
@@ -2157,7 +2211,11 @@ mod tests {
         assert!(!delete_matches_key("DROP TABLE t", &["id"]));
     }
 
-    fn pending_row(sets: &[(&str, Option<&str>)], keys: &[(&str, &str)]) -> PendingRow {
+    fn set(value: &str) -> NewValue {
+        NewValue::Value(value.into())
+    }
+
+    fn pending_row(sets: &[(&str, NewValue)], keys: &[(&str, &str)]) -> PendingRow {
         fn owned(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
             pairs
                 .iter()
@@ -2169,7 +2227,7 @@ mod tests {
             table: "accounts".to_string(),
             sets: sets
                 .iter()
-                .map(|(column, value)| (column.to_string(), value.map(str::to_string)))
+                .map(|(column, value)| (column.to_string(), value.clone()))
                 .collect(),
             keys: owned(keys),
         }
@@ -2177,7 +2235,7 @@ mod tests {
 
     #[test]
     fn a_nulled_cell_reaches_the_batch_as_the_keyword() {
-        let rows = vec![pending_row(&[("name", None)], &[("id", "1")])];
+        let rows = vec![pending_row(&[("name", NewValue::Null)], &[("id", "1")])];
         assert_eq!(
             update_batch(Engine::Postgres, &rows).unwrap(),
             "UPDATE \"public\".\"accounts\" SET \"name\" = NULL WHERE \"id\" = '1';"
@@ -2187,8 +2245,8 @@ mod tests {
     #[test]
     fn several_pending_rows_become_one_semicolon_joined_batch() {
         let rows = vec![
-            pending_row(&[("name", Some("Ada"))], &[("id", "1")]),
-            pending_row(&[("name", Some("Bo"))], &[("id", "2")]),
+            pending_row(&[("name", set("Ada"))], &[("id", "1")]),
+            pending_row(&[("name", set("Bo"))], &[("id", "2")]),
         ];
 
         let batch = update_batch(Engine::Postgres, &rows).unwrap();
@@ -2209,8 +2267,8 @@ mod tests {
         // batch could apply half the user's edits and report the failure of the
         // rest.
         let rows = vec![
-            pending_row(&[("name", Some("Ada"))], &[("id", "1")]),
-            pending_row(&[("name", Some("Bo"))], &[("id", "2")]),
+            pending_row(&[("name", set("Ada"))], &[("id", "1")]),
+            pending_row(&[("name", set("Bo"))], &[("id", "2")]),
         ];
 
         for engine in [Engine::MySql, Engine::Sqlite] {
@@ -2233,10 +2291,10 @@ mod tests {
     #[test]
     fn a_row_with_no_key_to_find_it_by_refuses_the_whole_batch() {
         let rows = vec![
-            pending_row(&[("name", Some("Ada"))], &[("id", "1")]),
+            pending_row(&[("name", set("Ada"))], &[("id", "1")]),
             // No keys at all: update_row refuses this one, since there is
             // nothing to identify the row it would touch.
-            pending_row(&[("name", Some("Bo"))], &[]),
+            pending_row(&[("name", set("Bo"))], &[]),
         ];
 
         assert!(
@@ -2244,7 +2302,7 @@ mod tests {
                 Engine::Postgres,
                 "public",
                 "accounts",
-                &[("name", Some("Bo"))],
+                &[("name", set("Bo"))],
                 &[]
             )
             .is_none()

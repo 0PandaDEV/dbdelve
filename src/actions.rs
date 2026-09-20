@@ -108,6 +108,8 @@ actions!(
         EditCell,
         CopyCell,
         SetNull,
+        SetEmpty,
+        SetDefault,
         RequestWriteMode,
         FollowForeignKey,
         DeleteRow,

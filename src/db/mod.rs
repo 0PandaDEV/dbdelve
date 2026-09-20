@@ -156,6 +156,20 @@ impl Engine {
         }
     }
 
+    /// Whether `SET column = DEFAULT` is an assignment this engine accepts.
+    ///
+    /// SQLite's `UPDATE` takes an expression on the right and `DEFAULT` is not
+    /// one there, so the gesture has to be withheld rather than attempted. It
+    /// answers here for the reason [`Engine::transaction_start`] does: the
+    /// question is about which engine is connected, and rule 4 keeps every one
+    /// of those inside `src/db/` — the caller asks, and never matches.
+    pub fn assigns_default(self) -> bool {
+        match self {
+            Self::Postgres | Self::MySql => true,
+            Self::Sqlite => false,
+        }
+    }
+
     /// Postgres and SQLite take the standard's double quote. MySQL takes a
     /// backtick, which it accepts whether or not `ANSI_QUOTES` is set — a double
     /// quote there is a *string literal*, so quoting a MySQL identifier the

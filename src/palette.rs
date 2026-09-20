@@ -82,9 +82,12 @@ pub enum Command {
     /// key, so this is offered where the grid refuses to edit.
     NewRow,
     CloseObject(u64),
-    /// Stage a `NULL` on the active cell. The row is how the gesture stops
-    /// being folklore; the editor's own affordance dispatches the same action.
+    /// Stage a `NULL`, the empty string or `DEFAULT` on the active cell. The
+    /// rows are how the gestures stop being folklore; the cell menu dispatches
+    /// the same actions.
     SetNull,
+    SetEmpty,
+    SetDefault,
     /// Generate the one-row `DELETE` and show it for confirmation. Offered only
     /// where the grid can name the row by its primary key (spec §5).
     DeleteRow,
@@ -561,6 +564,21 @@ fn command_items(workspace: &Workspace, profile: &Profile, cx: &App) -> Vec<Item
             "⌃⇧N",
             icon::RENAME,
             Command::SetNull,
+        ));
+        items.push(Item::command(
+            "Set cell to empty",
+            "",
+            icon::RENAME,
+            Command::SetEmpty,
+        ));
+        // Offered on every editable cell rather than only where a default is
+        // known. The palette is reached from anywhere and knows no column; the
+        // cell menu is the surface that hides what would be refused.
+        items.push(Item::command(
+            "Set cell to default",
+            "",
+            icon::RENAME,
+            Command::SetDefault,
         ));
     }
 

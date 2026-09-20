@@ -206,6 +206,8 @@ impl Workspace {
             Command::NewRow => self.new_row(&NewRow, window, cx),
             Command::CloseObject(id) => self.ask_before_close(CloseTarget::Object(id), cx),
             Command::SetNull => self.set_null(&SetNull, window, cx),
+            Command::SetEmpty => self.set_empty(&SetEmpty, window, cx),
+            Command::SetDefault => self.set_default(&SetDefault, window, cx),
             Command::DeleteRow => self.delete_row(&DeleteRow, window, cx),
             Command::ApplyEdits => self.apply_edits(&ApplyEdits, window, cx),
             Command::DiscardEdits => self.discard_edits(&DiscardEdits, window, cx),

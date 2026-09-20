@@ -21,8 +21,8 @@ use crate::{
         CommandPalette, CopyCell, CycleTheme, DeleteRow, DiscardEdits, EditCell, ExplainQuery,
         FollowForeignKey, FuzzyOpen, NewConnection, NewQuery, NewRow, NextPage, NextProfile,
         NextTab, OpenSettings, PaletteNext, PalettePrevious, PreviousPage, PreviousProfile,
-        PreviousTab, Quit, ResetEditorZoom, RunQuery, SaveQuery, SetNull, ShowEditor,
-        ToggleNextJoin, ToggleSidebar, ZoomEditorIn, ZoomEditorOut,
+        PreviousTab, Quit, ResetEditorZoom, RunQuery, SaveQuery, SetDefault, SetEmpty, SetNull,
+        ShowEditor, ToggleNextJoin, ToggleSidebar, ZoomEditorIn, ZoomEditorOut,
     },
     db::ExplainMode,
 };
@@ -136,6 +136,10 @@ registry! {
     ("add_filter", "Add Filter", None, [], AddFilter),
     ("toggle_next_join", "Toggle Join Type", None, [], ToggleNextJoin),
     ("new_row", "New Row", None, [], NewRow),
+    // Scoped like `set_null` rather than left global: they act on the grid's
+    // active cell, so a chord put on one later must not fire from the editor.
+    ("set_empty", "Set Cell to Empty", Some("Table"), [], SetEmpty),
+    ("set_default", "Set Cell to Default", Some("Table"), [], SetDefault),
     ("follow_foreign_key", "Follow Foreign Key", None, [], FollowForeignKey),
     ("delete_row", "Delete Row", None, [], DeleteRow),
     ("discard_edits", "Discard Edits", None, [], DiscardEdits),

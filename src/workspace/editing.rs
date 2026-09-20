@@ -392,9 +392,35 @@ impl Workspace {
     }
 
     /// Stage a `NULL` on the active cell, from the keystroke, the palette, or
-    /// the `NULL` beside an open cell input — one action behind all three, so
-    /// none of them can mean something different (spec §3).
+    /// the cell menu — one action behind all three, so none of them can mean
+    /// something different (spec §3).
     pub(crate) fn set_null(&mut self, _: &SetNull, window: &mut Window, cx: &mut Context<Self>) {
+        self.stage_value(NewValue::Null, window, cx);
+    }
+
+    /// The empty string, which is a different write from a `NULL` and the one
+    /// an input cannot produce: committing an emptied input on a cell that came
+    /// back empty is the no-op `set_pending` drops.
+    pub(crate) fn set_empty(&mut self, _: &SetEmpty, window: &mut Window, cx: &mut Context<Self>) {
+        self.stage_value(NewValue::Value(gpui::SharedString::default()), window, cx);
+    }
+
+    /// `DEFAULT`, which is the server resolving the column's default rather
+    /// than dbdelve guessing at what it would be — the structure reports a
+    /// default's *presence*, and sometimes as a marker word rather than an
+    /// expression.
+    pub(crate) fn set_default(
+        &mut self,
+        _: &SetDefault,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.stage_value(NewValue::Default, window, cx);
+    }
+
+    /// The one body behind all three, so the mode prompt and the refusal cannot
+    /// drift between them.
+    fn stage_value(&mut self, value: NewValue, window: &mut Window, cx: &mut Context<Self>) {
         let Some(profile) = self.profile() else {
             return;
         };
@@ -410,17 +436,17 @@ impl Workspace {
             return;
         };
         if results.update(cx, |table, cx| {
-            let nulled = table.delegate_mut().set_null(row, col);
+            let staged = table.delegate_mut().stage(row, col, value);
             cx.notify();
-            nulled
+            staged
         }) {
             // The input this just closed had focus, and a window with nothing
             // focused has no dispatch path at all.
             results.focus_handle(cx).focus(window, cx);
             return;
         }
-        // Asked after the attempt rather than before it, so nulling a cell the
-        // server already left NULL -- which changes nothing -- does not ask a
+        // Asked after the attempt rather than before it, so staging a value the
+        // cell already holds -- which changes nothing -- does not ask a
         // Read-only connection to raise its mode for it.
         if !self.require(Mode::ReadWrite, cx) {
             return;

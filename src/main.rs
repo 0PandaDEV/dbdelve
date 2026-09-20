@@ -44,9 +44,10 @@ use actions::{
     CopyCell, CycleTheme, DeleteRow, DiscardEdits, EditCell, ExplainQuery, FollowForeignKey,
     FuzzyOpen, NewConnection, NewQuery, NewRow, NextPage, NextProfile, NextTab, OpenSettings,
     PaletteNext, PalettePrevious, PreviousPage, PreviousProfile, PreviousTab, Quit, RemoveFilter,
-    RequestWriteMode, ResetConfirmations, ResetEditorZoom, RunQuery, SaveQuery, SetFilterColumn,
-    SetFilterOperator, SetFilterRaw, SetMode, SetNull, SetRowLimit, ShowEditor, SortColumn,
-    ToggleFilterJoin, ToggleNextJoin, ToggleSidebar, ZoomEditorIn, ZoomEditorOut,
+    RequestWriteMode, ResetConfirmations, ResetEditorZoom, RunQuery, SaveQuery, SetDefault,
+    SetEmpty, SetFilterColumn, SetFilterOperator, SetFilterRaw, SetMode, SetNull, SetRowLimit,
+    ShowEditor, SortColumn, ToggleFilterJoin, ToggleNextJoin, ToggleSidebar, ZoomEditorIn,
+    ZoomEditorOut,
 };
 use completion::SchemaCompletions;
 use connection_form::{ConnectionForm, default_profile_name};
@@ -63,7 +64,7 @@ use filter::{
 };
 use icons::{Icons, icon};
 use palette::{Command, Mode as PaletteMode, Palette};
-use result_grid::ResultGrid;
+use result_grid::{NewValue, ResultGrid};
 use session::{
     ApplyReview, CatalogState, CloseTarget, Explained, Focus, InsertField, InsertForm, ObjectBody,
     ObjectTab, OpenedObject, Profile, ProfileState, QueryState, QueryTab, Refresh, Session,

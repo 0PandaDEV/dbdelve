@@ -899,7 +899,7 @@ impl Workspace {
                     // replaces the whole delegate, so a fresh grid has to be
                     // marked again from the structure the tab already holds.
                     if succeeded && let Tab::Object(object) = tab {
-                        workspace.mark_foreign_keys(object, cx);
+                        workspace.mark_columns(object, cx);
                     }
                     cx.notify();
 
