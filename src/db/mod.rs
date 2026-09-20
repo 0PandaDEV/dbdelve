@@ -529,6 +529,56 @@ pub fn is_binary_type(data_type: &str) -> bool {
     name == "bytea" || name.contains("blob") || name.contains("binary")
 }
 
+/// Whether a [`Column::data_type`] names a type whose values are numbers.
+///
+/// Exact names rather than the substrings [`is_binary_type`] can afford: the
+/// numeric families collide with types that are not numbers at all -- `interval`
+/// and `point` both contain `int`, and `bit` is a string of them. A wrong answer
+/// here only costs one column its alignment, but a column of timestamps flushed
+/// right because it answered to `int` is a worse read than one left alone.
+///
+/// What it is for: the grid right-aligns these, because a column of numbers that
+/// do not share a last digit cannot be compared down its own length.
+pub fn is_numeric_type(data_type: &str) -> bool {
+    let lowered = data_type.to_ascii_lowercase();
+    // A precision says how wide a number is, not whether it is one; MySQL's
+    // attributes say how it is stored.
+    let name = lowered
+        .split_once('(')
+        .map_or(lowered.as_str(), |(base, _)| base)
+        .trim()
+        .trim_end_matches(" zerofill")
+        .trim_end_matches(" unsigned")
+        .trim_end();
+
+    matches!(
+        name,
+        "int"
+            | "int2"
+            | "int4"
+            | "int8"
+            | "integer"
+            | "tinyint"
+            | "smallint"
+            | "mediumint"
+            | "bigint"
+            | "serial"
+            | "smallserial"
+            | "bigserial"
+            | "float"
+            | "float4"
+            | "float8"
+            | "real"
+            | "double"
+            | "double precision"
+            | "numeric"
+            | "decimal"
+            | "dec"
+            | "number"
+            | "money"
+    )
+}
+
 /// A cell value, already formatted by the server. `None` is SQL NULL, which is
 /// distinct from an empty string and must stay distinguishable in the grid.
 pub type Cell = Option<String>;
@@ -887,6 +937,38 @@ pub(super) fn result(columns: &[&str], rows: &[&[Option<&str>]]) -> QueryResult 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_numbers_are_numeric_across_the_three_engines_spellings() {
+        for numeric in [
+            "int4",
+            "INTEGER",
+            "bigint",
+            "tinyint(1)",
+            "int unsigned",
+            "decimal(10,2)",
+            "double precision",
+            "numeric",
+            "money",
+            "REAL",
+        ] {
+            assert!(is_numeric_type(numeric), "{numeric}");
+        }
+        // The near misses this predicate exists to get right: three of them
+        // contain `int`, and a bit is a string of them.
+        for other in [
+            "interval",
+            "point",
+            "bit(8)",
+            "text",
+            "timestamptz",
+            "uuid",
+            "jsonb",
+            "bytea",
+        ] {
+            assert!(!is_numeric_type(other), "{other}");
+        }
+    }
 
     #[test]
     fn an_engine_round_trips_through_the_spelling_it_is_stored_as() {

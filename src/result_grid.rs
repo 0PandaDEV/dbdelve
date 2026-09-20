@@ -501,6 +501,22 @@ impl ResultGrid {
                 .is_some_and(db::is_binary_type)
     }
 
+    /// Whether a column's values want their last digit lined up with the one
+    /// above — see [`db::is_numeric_type`].
+    ///
+    /// Never a foreign key, whatever it is typed as: that column carries the
+    /// follow affordance at its trailing edge, and a number flushed against it
+    /// would sit under the icon.
+    fn is_numeric(&self, col: usize) -> bool {
+        !self.follows_a_key(col)
+            && self
+                .result
+                .columns
+                .get(col)
+                .and_then(|column| column.data_type.as_deref())
+                .is_some_and(db::is_numeric_type)
+    }
+
     /// The row's table and its whole primary key, named and valued, or nothing.
     ///
     /// The same question [`ResultGrid::editable`] asks, answered for a whole row
@@ -835,16 +851,20 @@ impl TableDelegate for ResultGrid {
             .whitespace_nowrap()
             .text_size(px(layout::TEXT_SM))
             .font_weight(gpui::FontWeight::MEDIUM)
-            .text_color(match key.is_some() {
-                true => text,
-                false => muted,
-            });
+            // Full strength whether or not this column is sorted. A header is
+            // the only label for what is under it, and muted grey over a frosted
+            // window is a row of names the user has to lean in to read; which
+            // column the sort is on is already said by the arrow, in a way that
+            // survives being glanced at.
+            .text_color(text);
 
         base.child(
             div()
                 .min_w_0()
                 .overflow_hidden()
                 .text_ellipsis()
+                // Against the values it names, not the edge of the cell.
+                .when(self.is_numeric(col_ix), |name| name.ml_auto())
                 .child(self.columns[col_ix].name.clone()),
         )
         .child(
@@ -1038,6 +1058,10 @@ impl TableDelegate for ResultGrid {
         base.overflow_hidden()
             .whitespace_nowrap()
             .text_ellipsis()
+            // A column of numbers is read down its last digit, and left-aligned
+            // it has no last digit to read down: 9 and 1000 start in the same
+            // place and end nowhere near each other.
+            .when(self.is_numeric(col_ix), |cell| cell.justify_end())
             .text_color(if cell.is_some() { text } else { faint })
             // Italic so a NULL cannot be mistaken for the four-letter string.
             .when(cell.is_none(), |cell| cell.italic())
