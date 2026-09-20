@@ -1,6 +1,6 @@
 # DBDelve
 
-A modern and performant macOS database client for Postgres, MySQL and SQLite. Written in Rust
+A modern and performant database client for Postgres, MySQL and SQLite. MacOS only for now but linux is planned. Written in Rust
 with GPUI, so it opens fast, stays smooth while you scroll, and doesn't need a
 browser engine to show you a table.
 
