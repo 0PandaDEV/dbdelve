@@ -7,8 +7,7 @@ with GPUI. Buttery smooth, small memory footprint, fast navigation and stays per
 
 ![DBDelve](assets/screenshot.png)
 
-A table of a million rows, scrolled and tabbed through at speed. No spinners, no
-paging, no waiting for the grid to catch up.
+A table of a million rows, scrolling at speed with quick tab switches.
 
 https://github.com/user-attachments/assets/c24c98d9-6ab8-45c4-974b-96822b5a3042
 
@@ -76,20 +75,18 @@ pay for a Developer ID if enough people end up using this, which removes all of
 the above.
 
 Failing Homebrew, take the `.dmg` from [the latest release][releases] and drag
-DBDelve to Applications. Same quarantine step, and you're on your own for
-updates: quit the app, download the new DMG, replace, clear the flag again.
+DBDelve to Applications. Same quarantine step and you have to update manually.
 
 To build it yourself instead, `DBDELVE_CHANNEL=release dev/bundle.sh` produces
 `target/DBDelve.app` with the release build, icon and signature. Drag that to
-Applications; the quarantine step doesn't apply, because nothing downloaded it.
+Applications; the quarantine step doesn't apply here.
 
 [releases]: https://github.com/ShayanAbbas1/dbdelve/releases/latest
 
 ## Updating
 
 `brew upgrade --cask dbdelve`, if you installed it that way. Otherwise watch
-[the releases page][releases] — GitHub's *Watch → Custom → Releases* will mail
-you. DBDelve never checks for its own updates and never phones home.
+[the releases page][releases]
 
 
 ## License
