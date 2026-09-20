@@ -45,7 +45,7 @@ cask "dbdelve" do
   homepage "https://github.com/ShayanAbbas1/dbdelve"
 
   depends_on arch: :arm64
-  depends_on macos: ">= :monterey"
+  depends_on macos: :monterey
 
   app "DBDelve.app"
 
