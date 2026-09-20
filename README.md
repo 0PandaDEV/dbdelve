@@ -3,7 +3,7 @@
 A modern and performant database client for Postgres, MySQL and SQLite. MacOS only for now but linux is planned. Written in Rust
 with GPUI. Buttery smooth, small memory footprint, fast navigation and stays performant on large datasets.
 
-> Early days. Everything listed below works today, but there's no release yet.
+> Early days. Everything listed below works today.
 
 ## Why
 
@@ -65,9 +65,9 @@ xattr -dr com.apple.quarantine /Applications/DBDelve.app
 Once per install, not once per launch. I'll pay for a Developer ID if enough
 people end up using this.
 
-To build it yourself instead, `dev/bundle.sh` produces
-`/Applications/DBDelve.app` with the release build, icon and signature, and
-skips the quarantine step because nothing downloaded it.
+To build it yourself instead, `DBDELVE_CHANNEL=release dev/bundle.sh` produces
+`target/DBDelve.app` with the release build, icon and signature. Drag that to
+Applications; the quarantine step doesn't apply, because nothing downloaded it.
 
 [releases]: https://github.com/ShayanAbbas1/dbdelve/releases/latest
 
