@@ -601,10 +601,17 @@ impl Workspace {
     }
 
     pub(crate) fn load_catalog(&mut self, id: &str, generation: u64, cx: &mut Context<Self>) {
-        let Some(connection) = self
-            .issued_to(id, generation)
-            .and_then(|profile| profile.connection())
-        else {
+        let Some(profile) = self.issued_to(id, generation) else {
+            return;
+        };
+        // Reached with no connection only from a connect that failed, which
+        // left the catalog on `Loading` and has nothing after it to clear that:
+        // the sidebar would claim it was still loading objects for the rest of
+        // the session, behind a status bar already saying the connection was
+        // refused. The reason is the status bar's to carry -- repeating it here
+        // paints the same sentence twice in the same red.
+        let Some(connection) = profile.connection() else {
+            profile.catalog = CatalogState::Failed("Not connected.".into());
             return;
         };
         let catalog_task = cx
