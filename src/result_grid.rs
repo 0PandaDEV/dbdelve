@@ -394,9 +394,14 @@ impl ResultGrid {
             .map(|(col_ix, column)| Field {
                 name: column.name.clone().into(),
                 data_type: column.data_type.clone().map(SharedString::from),
-                value: self
-                    .cell(row_ix, col_ix)
-                    .map(|value| clip_to(value, FIELD_DISPLAY_LIMIT).into()),
+                // Reformatted before it is clipped, never after: a document cut
+                // at 4,000 characters does not parse, and the inspector would
+                // fall back to the one long line for exactly the values big
+                // enough to need the help.
+                value: self.cell(row_ix, col_ix).map(|value| {
+                    let value = indented_json(value);
+                    clip_to(&value, FIELD_DISPLAY_LIMIT).into()
+                }),
             })
             .collect()
     }
@@ -796,6 +801,33 @@ fn fitted_width(name: &str, display: &[Vec<Option<SharedString>>], col_ix: usize
 
 fn clip(value: &str) -> String {
     clip_to(value, CELL_DISPLAY_LIMIT)
+}
+
+/// A JSON object or array laid out over indented lines, or the value unchanged
+/// where it is not one.
+///
+/// Parsed rather than taken from the column's type. SQLite has no JSON type to
+/// report — a document there lives in whatever `text` column was declared for
+/// it — so the type name answers this question for two engines out of three,
+/// and the value itself answers it for all of them.
+///
+/// Objects and arrays only. A bare number, string or `true` is also valid JSON,
+/// and reformatting one produces the same characters back.
+///
+/// ponytail: runs on every repaint of the inspector rather than caching, which
+/// the leading-byte check is what makes affordable — it costs one comparison
+/// for a UUID or a timestamp and only reaches the parser for a value already
+/// shaped like a document. Cache per cell if a wide row of large documents ever
+/// makes the panel feel slow.
+fn indented_json(value: &str) -> String {
+    let trimmed = value.trim_start();
+    if !trimmed.starts_with(['{', '[']) {
+        return value.to_string();
+    }
+    serde_json::from_str::<serde_json::Value>(trimmed)
+        .ok()
+        .and_then(|parsed| serde_json::to_string_pretty(&parsed).ok())
+        .unwrap_or_else(|| value.to_string())
 }
 
 /// Cut to a character count, never a byte count: slicing bytes panics in the
@@ -2019,6 +2051,26 @@ mod tests {
         assert!(fields[1].data_type.is_none());
         // A selection can outlive the rows it was made against.
         assert!(grid.fields(4).is_empty());
+    }
+
+    #[test]
+    fn the_inspector_breaks_a_json_document_up_and_leaves_everything_else_alone() {
+        let document = indented_json(r#"{"aoi":{"acres":69.7},"tags":[1,2]}"#);
+        assert!(document.starts_with("{\n"), "{document}");
+        assert!(document.contains("\n  \"tags\""), "{document}");
+
+        // All valid JSON, and all already spelled the only way they can be.
+        // Reformatting a scalar is the characters back again, so the parser is
+        // never worth reaching for one.
+        for scalar in ["22.38", "true", "null", "\"quoted\""] {
+            assert_eq!(indented_json(scalar), scalar);
+        }
+        // Shaped like a document without being one -- a truncated value, or
+        // prose that opens with a brace. Handed back as it arrived rather than
+        // swallowed by a parse that failed.
+        for other in ["{not json at all", "[1, 2", "an ordinary sentence", ""] {
+            assert_eq!(indented_json(other), other);
+        }
     }
 
     #[test]
