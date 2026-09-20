@@ -5,11 +5,12 @@ with GPUI. Buttery smooth, small memory footprint, fast navigation and stays per
 
 > Early days. Everything listed below works today.
 
-[![DBDelve](assets/screenshot.png)](https://github.com/ShayanAbbas1/dbdelve/raw/main/assets/demo.mp4)
+![DBDelve](assets/screenshot.png)
 
-**[▶ Watch it move](https://github.com/ShayanAbbas1/dbdelve/raw/main/assets/demo.mp4)** — a
-table of a million rows, scrolled and tabbed through at speed. No spinners, no
+A table of a million rows, scrolled and tabbed through at speed. No spinners, no
 paging, no waiting for the grid to catch up.
+
+https://github.com/user-attachments/assets/c24c98d9-6ab8-45c4-974b-96822b5a3042
 
 ## Why
 

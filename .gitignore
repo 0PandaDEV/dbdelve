@@ -7,11 +7,13 @@
 # Build product of dev/sqlite/001-dbdelve-demo.sql, not a source file.
 dev/dbdelve_dev.db
 
-# Camera-roll originals of the README media. HEIC renders in no browser and the
-# HEVC .mov plays in no browser but Safari, so only the converted PNG and mp4
-# are committed -- and the originals are 30x their size.
+# Camera-roll originals of the README media. HEIC renders in no browser, so the
+# screenshot is committed as the converted PNG beside it. The video isn't
+# committed at all: GitHub only plays a video it hosts itself, so the README
+# points at an uploaded copy and the repo carries none of those 34 megabytes.
 assets/*.heic
 assets/*.mov
+assets/*.mp4
 
 # Private working notes live in the Claude project directory, not here.
 # See AGENTS.md. Anything matching these belongs outside the repo entirely.
