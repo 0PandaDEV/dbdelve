@@ -10,7 +10,9 @@ use serde::{Deserialize, Serialize};
 use crate::db::{Cell, RelationKind};
 
 const PROFILES_FILE: &str = "profiles.toml";
-const KEYCHAIN_SERVICE: &str = "dbdelve";
+/// The release variant's name. Both the support directory and the keychain
+/// service are this, so [`variant_name`] is the only thing that may widen it.
+const NAME: &str = "dbdelve";
 /// The buffer file a build before per-tab buffers wrote. Read-only now, and
 /// only for tab 0 -- see [`read_scratch`].
 const LEGACY_SCRATCH_FILE: &str = ".scratch.sql";
@@ -377,7 +379,7 @@ pub fn profile_id(name: &str, existing: &[String]) -> String {
 /// attempt that would follow.
 pub fn password(profile_id: &str) -> Result<Option<String>, String> {
     let bytes = match passwords::generic_password(PasswordOptions::new_generic_password(
-        KEYCHAIN_SERVICE,
+        &variant_name()?,
         profile_id,
     )) {
         Ok(bytes) => bytes,
@@ -394,12 +396,13 @@ pub fn password(profile_id: &str) -> Result<Option<String>, String> {
 }
 
 pub fn set_password(profile_id: &str, password: &str) -> Result<(), String> {
-    passwords::set_generic_password(KEYCHAIN_SERVICE, profile_id, password.as_bytes())
+    passwords::set_generic_password(&variant_name()?, profile_id, password.as_bytes())
         .map_err(|error| format!("Could not save the password to the keychain: {error}"))
 }
 
 pub fn delete_password(profile_id: &str) {
-    let _ = passwords::delete_generic_password(KEYCHAIN_SERVICE, profile_id);
+    let Ok(service) = variant_name() else { return };
+    let _ = passwords::delete_generic_password(&service, profile_id);
 }
 
 pub fn saved_queries(profile_id: &str) -> Vec<String> {
@@ -698,11 +701,33 @@ fn unsafe_component(value: &str) -> Option<&'static str> {
     }
 }
 
+/// `dbdelve` unset or empty, `dbdelve-<variant>` otherwise.
+///
+/// The support directory and the keychain service both come from here, and
+/// they have to move together: a dev build that suffixed only one of them
+/// would read the release's saved passwords or write its `profiles.toml`.
+/// A variant that cannot be a path component is an error rather than a
+/// fallback to the release name, for the same reason.
+fn variant_name() -> Result<String, String> {
+    let Some(variant) = std::env::var("DBDELVE_VARIANT")
+        .ok()
+        .filter(|variant| !variant.is_empty())
+    else {
+        return Ok(NAME.to_string());
+    };
+    if let Some(reason) = unsafe_component(&variant) {
+        return Err(format!("DBDELVE_VARIANT {reason}."));
+    }
+    Ok(format!("{NAME}-{variant}"))
+}
+
 fn dbdelve_directory() -> Result<PathBuf, String> {
     let home = std::env::var_os("HOME")
         .filter(|home| !home.is_empty())
         .ok_or_else(|| "HOME is not set.".to_string())?;
-    Ok(PathBuf::from(home).join("Library/Application Support/dbdelve"))
+    Ok(PathBuf::from(home)
+        .join("Library/Application Support")
+        .join(variant_name()?))
 }
 
 fn query_directory(profile_id: &str) -> Result<PathBuf, String> {
@@ -1358,6 +1383,45 @@ open_objects = []
         ] {
             assert!(validate_query_name(name).is_err(), "{name:?}");
         }
+    }
+
+    /// Inside `with_home` for its lock rather than for its directory:
+    /// `DBDELVE_VARIANT` is process-wide too, and every other test here reads
+    /// it through `dbdelve_directory`.
+    #[test]
+    fn the_variant_moves_the_directory_and_the_keychain_together() {
+        with_home(|| {
+            // SAFETY: as in `with_home` -- the lock it holds for the length of
+            // this body is what makes the writes single-threaded.
+            let variant = |value: Option<&str>| unsafe {
+                match value {
+                    Some(value) => std::env::set_var("DBDELVE_VARIANT", value),
+                    None => std::env::remove_var("DBDELVE_VARIANT"),
+                }
+            };
+
+            for unset in [None, Some("")] {
+                variant(unset);
+                assert_eq!(variant_name().unwrap(), "dbdelve");
+                let directory = dbdelve_directory().unwrap();
+                assert!(directory.ends_with("Library/Application Support/dbdelve"));
+            }
+
+            variant(Some("dev"));
+            assert_eq!(variant_name().unwrap(), "dbdelve-dev");
+            let directory = dbdelve_directory().unwrap();
+            assert!(directory.ends_with("Library/Application Support/dbdelve-dev"));
+
+            // No NUL case: `set_var` panics on one before the code under test
+            // ever sees it.
+            for rejected in ["../release", "a/b", "a\\b", ".dev", "   "] {
+                variant(Some(rejected));
+                assert!(variant_name().is_err(), "{rejected:?}");
+                assert!(dbdelve_directory().is_err(), "{rejected:?}");
+            }
+
+            variant(None);
+        });
     }
 
     #[test]

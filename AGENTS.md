@@ -262,27 +262,55 @@ database looks exactly like a good one. Check a row count, not the status —
 
 ### Bundling
 
-`dev/bundle.sh` builds `--release`, generates the icon, writes `Info.plist`,
-signs, and installs to `/Applications/DBDelve.app`. It is the only way to get a
-real app rather than a binary, and it replaces what is installed and restarts
-the Dock, so do not run it while someone is using the app.
+`dev/bundle.sh` builds `--release`, generates the icon, writes `Info.plist`
+and signs. It is the only way to get a real app rather than a binary. It
+builds **two variants from one script**, and neither of them installs:
 
-Three things in it are load-bearing:
+- **Dev, the default.** `target/macos-dev/DBDelve Dev.app`, named
+  `DBDelve Dev`, id `com.shayanabbas.dbdelve.dev`. Run from the build tree,
+  never copied to `/Applications`, and launched with `open` so LaunchServices
+  owns it. The script refuses to build while a dev instance is running —
+  overwriting a running executable is what breaks it — but says nothing about
+  the released app, which is meant to stay open alongside.
+- **Release, under `DBDELVE_CHANNEL=release`.** `target/DBDelve.app`, named
+  `DBDelve`, id `com.shayanabbas.dbdelve`, no `LSEnvironment`. Only
+  `dev/release.sh` sets it, and the DMG's drag-to-Applications is the install.
+
+**The two variants share nothing on disk.** `DBDELVE_VARIANT` moves both the
+support directory and the Keychain service together — unset or empty is
+`dbdelve` (the release's, unchanged and never to move), `dev` is
+`dbdelve-dev`. Both, always: a build that suffixed only one would read the
+release's saved passwords or write its `profiles.toml`. `store::variant_name`
+is the single place it is decided, it validates the variant with the same
+`unsafe_component` every path component goes through, and a variant it rejects
+is an error rather than a fall back to the release name — silently falling
+back is exactly how a dev build corrupts the real one. So a dev build has its
+own profiles and its own Keychain items, and asks for its own passwords.
+
+The dev variant carries `DBDELVE_VARIANT=dev` in an `LSEnvironment` dict in
+its own `Info.plist` rather than exported by the script, because the isolation
+has to survive a launch from the Dock, from Finder, or from a crash reporter's
+"Quit & Reopen" — none of which see the shell that built the app.
+
+Four things in the script are load-bearing:
 
 - **`CFBundleIdentifier` scopes the Keychain.** Every saved profile password
-  belongs to `com.shayanabbas.dbdelve`. Changing it orphans all of them.
+  belongs to `com.shayanabbas.dbdelve`. Changing it orphans all of them. The
+  dev id differs precisely so the two cannot reach each other's prompts.
 - **The signature is not optional on arm64.** An unsigned arm64 binary will not
   launch, and copying the binary into the bundle invalidates the signature
   rustc left. `DBDELVE_SIGN_ID` takes a real identity; `dev/identity.sh`'s
   self-signed one is what stops the Keychain re-prompting after every rebuild;
   ad-hoc is the fallback and runs, but prompts.
+- **`codesign --identifier` is passed explicitly.** The Keychain pins its
+  "Always Allow" to the signature's identifier, so the one value that must not
+  drift between builds is stated rather than inferred.
 - **The font licences ship inside the bundle**, because the fonts are compiled
   into the binary and the OFL asks the licence to travel with them.
 
 **There is still no notarization and no Developer ID**, but the app is no
 longer stuck on this machine. `dev/release.sh` builds with `dev/bundle.sh`
-(`DBDELVE_SIGN_ID=- DBDELVE_INSTALL=0`, so it stops short of the install step
-above), wraps `target/DBDelve.app` into `target/DBDelve-$VERSION.dmg` with an
+(`DBDELVE_CHANNEL=release DBDELVE_SIGN_ID=-`), wraps `target/DBDelve.app` into `target/DBDelve-$VERSION.dmg` with an
 `/Applications` symlink alongside it, publishes the DMG with
 `gh release create`, and rewrites `Casks/dbdelve.rb` in the
 `ShayanAbbas1/homebrew-dbdelve` tap (found at `../homebrew-dbdelve`, override with

@@ -18,7 +18,7 @@ TAP="${DBDELVE_TAP:-$ROOT/../homebrew-dbdelve}"
 # user does not trust reads worse to Gatekeeper than an anonymous one. The
 # price is that the hash moves every release, so the Keychain asks once more
 # after each update.
-DBDELVE_SIGN_ID=- DBDELVE_INSTALL=0 dev/bundle.sh
+DBDELVE_CHANNEL=release DBDELVE_SIGN_ID=- dev/bundle.sh
 
 # A symlink beside the app is the whole of the drag-to-install convention.
 rm -rf target/dmg "$DMG"
@@ -49,8 +49,10 @@ cask "dbdelve" do
 
   app "DBDelve.app"
 
-  # Saved passwords live in the Keychain, which zap cannot reach.
-  zap trash: "~/Library/Application Support/DBDelve"
+  # Lowercase: the app writes "dbdelve", and a zap spelled any other way
+  # silently removes nothing. Saved passwords live in the Keychain, which zap
+  # cannot reach at all.
+  zap trash: "~/Library/Application Support/dbdelve"
 end
 CASK
   git -C "$TAP" add Casks/dbdelve.rb
