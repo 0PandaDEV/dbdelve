@@ -22,7 +22,22 @@ SELECT
         WHEN 'v' THEN 'view'
         WHEN 'm' THEN 'materialized_view'
         WHEN 'f' THEN 'foreign_table'
-    END AS relation_kind
+    END AS relation_kind,
+    -- A subquery rather than a join: `pg_inherits` holds legacy inheritance
+    -- too, and a table with two ordinary parents would come back as two
+    -- relations. A partition has exactly one parent, so this stays scalar.
+    -- Restricted to the child's own schema because the sidebar nests by name
+    -- within a schema, and a parent elsewhere would nest the child under
+    -- whatever happened to share its name.
+    (
+        SELECT parent.relname
+        FROM pg_catalog.pg_inherits AS inheritance
+        JOIN pg_catalog.pg_class AS parent
+            ON parent.oid = inheritance.inhparent
+        WHERE inheritance.inhrelid = class.oid
+            AND parent.relkind = 'p'
+            AND parent.relnamespace = class.relnamespace
+    ) AS partition_of
 FROM pg_catalog.pg_class AS class
 JOIN pg_catalog.pg_namespace AS namespace
     ON namespace.oid = class.relnamespace

@@ -601,6 +601,12 @@ pub enum RelationKind {
 pub struct Relation {
     pub name: String,
     pub kind: RelationKind,
+    /// The relation this one is a partition of, by name, in the same schema.
+    /// A name rather than an index because the catalog is assembled a row at a
+    /// time and a parent can arrive after its children; a kind would not do at
+    /// all, since a partition of a partitioned table is an ordinary table
+    /// everywhere else it is looked at.
+    pub partition_of: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -755,6 +761,7 @@ pub(super) fn assemble_catalog(
         schema(&mut schemas, schema_name).relations.push(Relation {
             name: name.to_string(),
             kind,
+            partition_of: optional_cell(&relations, row, "partition_of").map(str::to_string),
         });
     }
 
@@ -867,6 +874,22 @@ pub(super) fn required_cell<'a>(
     row.get(index)
         .and_then(Option::as_deref)
         .ok_or_else(|| plain_error(format!("Catalog query returned no {column_name}.")))
+}
+
+/// A catalog column an engine may have nothing to say about. A missing column
+/// and a null read the same, so an engine without the concept says so by not
+/// selecting it rather than by coalescing a placeholder.
+fn optional_cell<'a>(
+    result: &'a QueryResult,
+    row: &'a [Cell],
+    column_name: &str,
+) -> Option<&'a str> {
+    let index = result
+        .columns
+        .iter()
+        .position(|column| column.name == column_name)?;
+
+    row.get(index)?.as_deref().filter(|value| !value.is_empty())
 }
 
 pub(super) fn unexpected_catalog_value(label: &str, value: &str) -> DbError {
@@ -1160,11 +1183,27 @@ mod tests {
     #[test]
     fn catalog_groups_relations_and_routines_by_schema() {
         let relations = result(
-            &["schema_name", "relation_name", "relation_kind"],
             &[
-                &[Some("analytics"), Some("events"), Some("partitioned_table")],
-                &[Some("public"), Some("accounts"), Some("table")],
-                &[Some("public"), Some("account_overview"), Some("view")],
+                "schema_name",
+                "relation_name",
+                "relation_kind",
+                "partition_of",
+            ],
+            &[
+                &[
+                    Some("analytics"),
+                    Some("events"),
+                    Some("partitioned_table"),
+                    None,
+                ],
+                &[
+                    Some("analytics"),
+                    Some("events_2026"),
+                    Some("table"),
+                    Some("events"),
+                ],
+                &[Some("public"), Some("accounts"), Some("table"), None],
+                &[Some("public"), Some("account_overview"), Some("view"), None],
             ],
         );
         let routines = result(
@@ -1205,15 +1244,38 @@ mod tests {
         assert_eq!(catalog.schemas[0].name, "analytics");
         assert_eq!(
             catalog.schemas[0].relations,
-            vec![Relation {
-                name: "events".into(),
-                kind: RelationKind::PartitionedTable,
-            }]
+            vec![
+                Relation {
+                    name: "events".into(),
+                    kind: RelationKind::PartitionedTable,
+                    partition_of: None,
+                },
+                Relation {
+                    name: "events_2026".into(),
+                    kind: RelationKind::Table,
+                    partition_of: Some("events".into()),
+                },
+            ]
         );
         assert_eq!(catalog.schemas[0].routines[0].kind, RoutineKind::Procedure);
         assert_eq!(catalog.schemas[1].name, "public");
         assert_eq!(catalog.schemas[1].relations[1].kind, RelationKind::View);
         assert_eq!(catalog.schemas[1].routines[0].result_type, "text");
+    }
+
+    #[test]
+    fn an_engine_that_selects_no_parent_column_assembles_anyway() {
+        // What MySQL and SQLite send: neither has partitions to report, and
+        // neither should have to coalesce a placeholder to say so.
+        let relations = result(
+            &["schema_name", "relation_name", "relation_kind"],
+            &[&[Some("public"), Some("accounts"), Some("table")]],
+        );
+        let routines = result(&["schema_name", "routine_name", "routine_kind"], &[]);
+
+        let catalog = assemble_catalog(relations, routines).unwrap();
+
+        assert_eq!(catalog.schemas[0].relations[0].partition_of, None);
     }
 
     #[test]

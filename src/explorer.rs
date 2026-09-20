@@ -1,8 +1,8 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use gpui_component::tree::TreeItem;
 
-use crate::db::{Catalog, Engine, Relation, RelationKind, Routine, RoutineKind};
+use crate::db::{Catalog, Engine, Relation, RelationKind, Routine, RoutineKind, Schema};
 
 /// The row counts a preview can be asked for, and the one it opens with. Every
 /// result set is capped (spec §4.3); this is the part of the cap the user gets
@@ -70,28 +70,29 @@ pub fn tree(catalog: &Catalog, filter: &str) -> ExplorerTree {
             let schema_matches = matches_filter(&schema.name, &filter);
             let mut groups = Vec::new();
 
+            let partitions = partitions_by_parent(schema);
+            let nested: HashSet<usize> = partitions.values().flatten().copied().collect();
+
             for (kind, label) in RELATION_CATEGORIES {
                 let children = schema
                     .relations
                     .iter()
                     .enumerate()
-                    .filter(|(_, relation)| {
-                        relation.kind == kind
-                            && (schema_matches || relation_matches(relation, &filter))
+                    // A partition is drawn under its parent instead, whatever
+                    // category its own kind would put it in.
+                    .filter(|(relation_index, relation)| {
+                        relation.kind == kind && !nested.contains(relation_index)
                     })
-                    .map(|(relation_index, relation)| {
-                        let id = format!("relation-{schema_index}-{relation_index}");
-                        leaves.insert(
-                            id.clone(),
-                            ExplorerLeaf {
-                                target: ExplorerTarget::Relation {
-                                    schema_index,
-                                    relation_index,
-                                },
-                                kind: ObjectKind::Relation(kind),
-                            },
-                        );
-                        TreeItem::new(id, relation.name.clone())
+                    .filter_map(|(relation_index, _)| {
+                        relation_item(
+                            &mut leaves,
+                            schema,
+                            schema_index,
+                            relation_index,
+                            &partitions,
+                            &filter,
+                            schema_matches,
+                        )
                     })
                     .collect::<Vec<_>>();
 
@@ -146,6 +147,94 @@ pub fn tree(catalog: &Catalog, filter: &str) -> ExplorerTree {
         .collect();
 
     ExplorerTree { items, leaves }
+}
+
+/// Every schema's partitions, by the name of the relation they hang under.
+/// Built once per schema rather than searched per relation: a table split a
+/// thousand ways is the case this whole feature exists for.
+fn partitions_by_parent(schema: &Schema) -> HashMap<&str, Vec<usize>> {
+    let names: HashSet<&str> = schema
+        .relations
+        .iter()
+        .map(|relation| relation.name.as_str())
+        .collect();
+    let mut partitions: HashMap<&str, Vec<usize>> = HashMap::new();
+
+    for (index, relation) in schema.relations.iter().enumerate() {
+        // A parent the catalog did not list -- a permission the connecting
+        // role lacks is enough -- leaves the child flat rather than nowhere.
+        if let Some(parent) = relation
+            .partition_of
+            .as_deref()
+            .filter(|parent| names.contains(parent))
+        {
+            partitions.entry(parent).or_default().push(index);
+        }
+    }
+
+    partitions
+}
+
+/// One relation row and the partitions under it, recursively: a partition can
+/// itself be partitioned, and a sub-partition that fell out of the tree would
+/// be a relation the sidebar simply never shows.
+///
+/// `inherited` is a match already made by something above — the schema, or a
+/// parent whose name the filter matched — which is what makes a filter on a
+/// partitioned table keep all of its partitions.
+fn relation_item(
+    leaves: &mut HashMap<String, ExplorerLeaf>,
+    schema: &Schema,
+    schema_index: usize,
+    relation_index: usize,
+    partitions: &HashMap<&str, Vec<usize>>,
+    filter: &str,
+    inherited: bool,
+) -> Option<TreeItem> {
+    let relation = &schema.relations[relation_index];
+    let matched = inherited || relation_matches(relation, filter);
+
+    let children: Vec<TreeItem> = partitions
+        .get(relation.name.as_str())
+        .into_iter()
+        .flatten()
+        .filter_map(|&index| {
+            relation_item(
+                leaves,
+                schema,
+                schema_index,
+                index,
+                partitions,
+                filter,
+                matched,
+            )
+        })
+        .collect();
+
+    if !matched && children.is_empty() {
+        return None;
+    }
+
+    let id = format!("relation-{schema_index}-{relation_index}");
+    leaves.insert(
+        id.clone(),
+        ExplorerLeaf {
+            target: ExplorerTarget::Relation {
+                schema_index,
+                relation_index,
+            },
+            kind: ObjectKind::Relation(relation.kind),
+        },
+    );
+
+    // Collapsed is the point: nesting a hundred partitions only helps if the
+    // parent stays one row. The exception is a filter that reached past the
+    // parent to match a partition, which has to show what it found.
+    Some(
+        TreeItem::new(id, relation.name.clone())
+            .expanded(!matched)
+            .children(children),
+    )
 }
 
 fn category(label: &'static str, schema_index: usize, children: Vec<TreeItem>) -> TreeItem {
@@ -212,6 +301,7 @@ mod tests {
                     relations: vec![Relation {
                         name: "events".into(),
                         kind: RelationKind::Table,
+                        partition_of: None,
                     }],
                     routines: Vec::new(),
                 },
@@ -221,10 +311,12 @@ mod tests {
                         Relation {
                             name: "active_accounts".into(),
                             kind: RelationKind::View,
+                            partition_of: None,
                         },
                         Relation {
                             name: "accounts".into(),
                             kind: RelationKind::Table,
+                            partition_of: None,
                         },
                     ],
                     routines: vec![
@@ -248,6 +340,120 @@ mod tests {
                 },
             ],
         }
+    }
+
+    fn partitioned_catalog() -> Catalog {
+        let partition = |name: &str, parent: &str, kind| Relation {
+            name: name.into(),
+            kind,
+            partition_of: Some(parent.into()),
+        };
+
+        Catalog {
+            schemas: vec![Schema {
+                name: "public".into(),
+                relations: vec![
+                    Relation {
+                        name: "measurements".into(),
+                        kind: RelationKind::PartitionedTable,
+                        partition_of: None,
+                    },
+                    partition("measurements_2025", "measurements", RelationKind::Table),
+                    partition(
+                        "measurements_2026",
+                        "measurements",
+                        RelationKind::PartitionedTable,
+                    ),
+                    partition(
+                        "measurements_2026_q1",
+                        "measurements_2026",
+                        RelationKind::Table,
+                    ),
+                    Relation {
+                        name: "accounts".into(),
+                        kind: RelationKind::Table,
+                        partition_of: None,
+                    },
+                ],
+                routines: Vec::new(),
+            }],
+        }
+    }
+
+    #[test]
+    fn partitions_nest_under_their_parent_instead_of_their_category() {
+        let explorer = tree(&partitioned_catalog(), "");
+        let categories = &explorer.items[0].children;
+
+        assert_eq!(
+            categories
+                .iter()
+                .map(|c| c.label.as_ref())
+                .collect::<Vec<_>>(),
+            ["Tables", "Partitioned Tables"]
+        );
+        // The only table left in its own category is the one that is not a
+        // partition of anything.
+        assert_eq!(
+            categories[0]
+                .children
+                .iter()
+                .map(|c| c.label.as_ref())
+                .collect::<Vec<_>>(),
+            ["accounts"]
+        );
+
+        let parent = &categories[1].children[0];
+        assert_eq!(parent.label, "measurements");
+        assert_eq!(
+            parent
+                .children
+                .iter()
+                .map(|c| c.label.as_ref())
+                .collect::<Vec<_>>(),
+            ["measurements_2025", "measurements_2026"]
+        );
+        assert_eq!(parent.children[1].children[0].label, "measurements_2026_q1");
+
+        // A nested row is still openable, and still points at the relation its
+        // index names.
+        assert_eq!(
+            explorer
+                .leaves
+                .get(parent.children[1].children[0].id.as_ref()),
+            Some(&ExplorerLeaf {
+                target: ExplorerTarget::Relation {
+                    schema_index: 0,
+                    relation_index: 3,
+                },
+                kind: ObjectKind::Relation(RelationKind::Table),
+            })
+        );
+    }
+
+    #[test]
+    fn a_catalog_without_partitions_nests_nothing() {
+        let explorer = tree(&catalog(), "");
+
+        for schema in &explorer.items {
+            for category in &schema.children {
+                for object in &category.children {
+                    assert!(object.children.is_empty(), "{} nested", object.label);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_filter_matching_a_partition_surfaces_it_under_its_parent() {
+        let explorer = tree(&partitioned_catalog(), "2026_q1");
+        let categories = &explorer.items[0].children;
+
+        assert_eq!(categories.len(), 1);
+        let parent = &categories[0].children[0];
+        assert_eq!(parent.label, "measurements");
+        assert_eq!(parent.children[0].label, "measurements_2026");
+        assert_eq!(parent.children[0].children[0].label, "measurements_2026_q1");
     }
 
     #[test]
