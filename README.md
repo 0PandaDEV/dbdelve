@@ -41,9 +41,6 @@ Postgres, MySQL and SQLite. More once these three are solid.
   Settings. A handful of contextual ones, mainly sorting and filters, are still
   mouse-only.
 
-**DBDelve never generates a `DROP` or `TRUNCATE`.** The only statements it
-writes on your behalf are an `UPDATE`, a single-row `INSERT`, and a `DELETE` of
-one row named by its primary key. Anything else is refused before it's sent.
 
 ## Installing
 
