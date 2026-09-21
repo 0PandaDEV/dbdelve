@@ -4,7 +4,6 @@ use std::io::{self, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use security_framework::passwords::{self, PasswordOptions};
 use serde::{Deserialize, Serialize};
 
 use crate::db::{Cell, RelationKind};
@@ -28,11 +27,6 @@ pub const HISTORY_DEPTH: usize = 200;
 /// [`HISTORY_DEPTH`] runs, and bounds the file either way -- which is what
 /// makes reading the whole of it cheap.
 const HISTORY_SLACK: usize = HISTORY_DEPTH * 4;
-/// `errSecItemNotFound`. Apple's `OSStatus` values are frozen ABI, and the
-/// named constant lives in `security-framework-sys`, which is not a dependency
-/// here -- adding it with the exact pin this project uses everywhere would
-/// fight `security-framework`'s own transitive bump of it.
-const ITEM_NOT_FOUND: i32 = -25300;
 /// A grid past this many rows still runs and displays in full -- this is only
 /// how much of it a snapshot keeps on disk, so reopening a tab is instant
 /// without the cache growing as large as the result it is caching.
@@ -383,31 +377,36 @@ pub fn profile_id(name: &str, existing: &[String]) -> String {
 /// blank password is valid, so none of them can be inferred from the connect
 /// attempt that would follow.
 pub fn password(profile_id: &str) -> Result<Option<String>, String> {
-    let bytes = match passwords::generic_password(PasswordOptions::new_generic_password(
-        &variant_name()?,
-        profile_id,
-    )) {
-        Ok(bytes) => bytes,
-        Err(error) if error.code() == ITEM_NOT_FOUND => return Ok(None),
-        Err(error) => {
-            return Err(format!(
-                "Could not read the password from the keychain: {error}"
-            ));
+    match keychain_entry(profile_id)?.get_password() {
+        Ok(password) => Ok(Some(password)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(keyring::Error::BadEncoding(_)) => {
+            Err("The keychain password is not valid text.".to_string())
         }
-    };
-    String::from_utf8(bytes)
-        .map(Some)
-        .map_err(|error| format!("The keychain password is not valid text: {error}"))
+        Err(error) => Err(format!(
+            "Could not read the password from the keychain: {error}"
+        )),
+    }
 }
 
 pub fn set_password(profile_id: &str, password: &str) -> Result<(), String> {
-    passwords::set_generic_password(&variant_name()?, profile_id, password.as_bytes())
+    keychain_entry(profile_id)?
+        .set_password(password)
         .map_err(|error| format!("Could not save the password to the keychain: {error}"))
 }
 
 pub fn delete_password(profile_id: &str) {
-    let Ok(service) = variant_name() else { return };
-    let _ = passwords::delete_generic_password(&service, profile_id);
+    if let Ok(entry) = keychain_entry(profile_id) {
+        let _ = entry.delete_credential();
+    }
+}
+
+/// Keychain Services on macOS, Secret Service on Linux. The service is the
+/// variant name and the account the profile id, which is what keeps a dev
+/// build's passwords apart from a release build's.
+fn keychain_entry(profile_id: &str) -> Result<keyring::Entry, String> {
+    keyring::Entry::new(&variant_name()?, profile_id)
+        .map_err(|error| format!("Could not reach the keychain: {error}"))
 }
 
 pub fn saved_queries(profile_id: &str) -> Vec<String> {
@@ -759,13 +758,25 @@ fn variant_name() -> Result<String, String> {
     Ok(format!("{NAME}-{variant}"))
 }
 
+/// macOS keeps Application Support, where every install before this already
+/// has its data. Everywhere else follows the XDG base directory spec.
 fn dbdelve_directory() -> Result<PathBuf, String> {
-    let home = std::env::var_os("HOME")
+    let variant = variant_name()?;
+    #[cfg(target_os = "macos")]
+    let root = home()?.join("Library/Application Support");
+    #[cfg(not(target_os = "macos"))]
+    let root = match std::env::var_os("XDG_DATA_HOME").filter(|value| !value.is_empty()) {
+        Some(data_home) => PathBuf::from(data_home),
+        None => home()?.join(".local/share"),
+    };
+    Ok(root.join(variant))
+}
+
+fn home() -> Result<PathBuf, String> {
+    std::env::var_os("HOME")
         .filter(|home| !home.is_empty())
-        .ok_or_else(|| "HOME is not set.".to_string())?;
-    Ok(PathBuf::from(home)
-        .join("Library/Application Support")
-        .join(variant_name()?))
+        .map(PathBuf::from)
+        .ok_or_else(|| "HOME is not set.".to_string())
 }
 
 fn query_directory(profile_id: &str) -> Result<PathBuf, String> {
@@ -859,18 +870,37 @@ mod tests {
         fs::create_dir_all(&home).expect("the test home must be creatable");
 
         let previous = std::env::var_os("HOME");
+        // `XDG_DATA_HOME` goes with it: left set, it would point the storage
+        // outside the test home on every platform that honours it.
+        let previous_data_home = std::env::var_os("XDG_DATA_HOME");
         // SAFETY: the lock above is what makes this the only thread reading or
         // writing the environment for as long as `body` runs.
-        unsafe { std::env::set_var("HOME", &home) };
+        unsafe {
+            std::env::set_var("HOME", &home);
+            std::env::remove_var("XDG_DATA_HOME");
+        }
         let outcome = body();
         unsafe {
             match previous {
                 Some(value) => std::env::set_var("HOME", value),
                 None => std::env::remove_var("HOME"),
             }
+            if let Some(value) = previous_data_home {
+                std::env::set_var("XDG_DATA_HOME", value);
+            }
         }
         let _ = fs::remove_dir_all(&home);
         outcome
+    }
+
+    /// What `dbdelve_directory` appends to the home the test set, which is
+    /// the platform's data directory and not one fixed path.
+    fn data_path(variant: &str) -> PathBuf {
+        if cfg!(target_os = "macos") {
+            PathBuf::from("Library/Application Support").join(variant)
+        } else {
+            PathBuf::from(".local/share").join(variant)
+        }
     }
 
     fn ids(names: &[&str]) -> Vec<String> {
@@ -1442,13 +1472,13 @@ open_objects = []
                 variant(unset);
                 assert_eq!(variant_name().unwrap(), "dbdelve");
                 let directory = dbdelve_directory().unwrap();
-                assert!(directory.ends_with("Library/Application Support/dbdelve"));
+                assert!(directory.ends_with(data_path("dbdelve")));
             }
 
             variant(Some("dev"));
             assert_eq!(variant_name().unwrap(), "dbdelve-dev");
             let directory = dbdelve_directory().unwrap();
-            assert!(directory.ends_with("Library/Application Support/dbdelve-dev"));
+            assert!(directory.ends_with(data_path("dbdelve-dev")));
 
             // No NUL case: `set_var` panics on one before the code under test
             // ever sees it.

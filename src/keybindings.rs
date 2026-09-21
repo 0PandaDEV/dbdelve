@@ -5,6 +5,13 @@
 //! [`KeybindingSpec::id`] -- a default that changes in a later build still
 //! reaches anyone who never touched that row.
 //!
+//! Defaults are spelled `secondary-`, which GPUI reads as Cmd on macOS and
+//! Ctrl everywhere else. `cmd-` would parse too, but it sets the platform
+//! modifier, which on Linux is Super -- a key the window manager takes before
+//! the app ever sees it. An override already on disk in the older `cmd-`
+//! spelling still parses and still wins; it just carries that macOS meaning
+//! with it.
+//!
 //! Rebinding takes effect on the next launch. GPUI's keymap can only be
 //! replaced wholesale (`clear_key_bindings` then `bind_keys`), and clearing
 //! it at runtime would also wipe the bindings `gpui_component::init` wires up
@@ -97,37 +104,41 @@ macro_rules! registry {
 }
 
 registry! {
-    ("run_query", "Run Query", None, ["cmd-enter"], RunQuery),
+    ("run_query", "Run Query", None, ["secondary-enter"], RunQuery),
     // Only the planning mode gets a chord. The other one runs the statement,
-    // and a keystroke away from `cmd-enter` is too close to reach for by
+    // and a keystroke away from `secondary-enter` is too close to reach for by
     // accident when reaching for it is a write.
-    ("explain_query", "Explain Query", None, ["cmd-shift-enter"], ExplainQuery { mode: ExplainMode::Plan }),
-    ("format_query", "Format Query", None, ["cmd-shift-f"], FormatQuery),
-    ("apply_edits", "Apply Edits", None, ["cmd-s"], ApplyEdits),
-    ("rename_query_tab", "Rename Query Tab", None, ["cmd-k s"], SaveQuery),
-    ("new_query", "New Query Tab", None, ["cmd-t"], NewQuery),
-    ("new_connection", "New Connection", None, ["cmd-shift-n"], NewConnection),
-    ("close_tab", "Close Tab", None, ["cmd-w"], CloseTab),
+    ("explain_query", "Explain Query", None, ["secondary-shift-enter"], ExplainQuery { mode: ExplainMode::Plan }),
+    ("format_query", "Format Query", None, ["secondary-shift-f"], FormatQuery),
+    ("apply_edits", "Apply Edits", None, ["secondary-s"], ApplyEdits),
+    ("rename_query_tab", "Rename Query Tab", None, ["secondary-k s"], SaveQuery),
+    ("new_query", "New Query Tab", None, ["secondary-t"], NewQuery),
+    ("new_connection", "New Connection", None, ["secondary-shift-n"], NewConnection),
+    ("close_tab", "Close Tab", None, ["secondary-w"], CloseTab),
     ("next_tab", "Next Tab", None, ["ctrl-tab"], NextTab),
     ("previous_tab", "Previous Tab", None, ["ctrl-shift-tab"], PreviousTab),
     ("next_profile", "Next Connection", None, ["ctrl-`"], NextProfile),
     ("previous_profile", "Previous Connection", None, ["ctrl-shift-`"], PreviousProfile),
     ("show_editor", "Back / Dismiss", None, ["escape"], ShowEditor),
-    ("cycle_theme", "Cycle Theme", None, ["cmd-k t"], CycleTheme),
-    ("open_settings", "Open Settings", None, ["cmd-,"], OpenSettings),
-    ("fuzzy_open", "Fuzzy Schema Search", None, ["cmd-p"], FuzzyOpen),
-    ("command_palette", "Command Palette", None, ["cmd-shift-p"], CommandPalette),
+    ("cycle_theme", "Cycle Theme", None, ["secondary-k t"], CycleTheme),
+    ("open_settings", "Open Settings", None, ["secondary-,"], OpenSettings),
+    ("fuzzy_open", "Fuzzy Schema Search", None, ["secondary-p"], FuzzyOpen),
+    ("command_palette", "Command Palette", None, ["secondary-shift-p"], CommandPalette),
     ("palette_previous", "Palette: Previous Row", Some("Palette > Input"), ["up"], PalettePrevious),
     ("palette_next", "Palette: Next Row", Some("Palette > Input"), ["down"], PaletteNext),
-    ("zoom_editor_in", "Zoom Editor In", None, ["cmd-+", "cmd-="], ZoomEditorIn),
-    ("zoom_editor_out", "Zoom Editor Out", None, ["cmd--"], ZoomEditorOut),
-    ("reset_editor_zoom", "Reset Editor Zoom", None, ["cmd-0"], ResetEditorZoom),
+    ("zoom_editor_in", "Zoom Editor In", None, ["secondary-+", "secondary-="], ZoomEditorIn),
+    ("zoom_editor_out", "Zoom Editor Out", None, ["secondary--"], ZoomEditorOut),
+    ("reset_editor_zoom", "Reset Editor Zoom", None, ["secondary-0"], ResetEditorZoom),
     ("edit_cell", "Edit Cell", Some("Table"), ["enter"], EditCell),
-    ("copy_cell", "Copy Cell", Some("Table"), ["cmd-c"], CopyCell),
-    ("set_null", "Set Cell to NULL", Some("Table"), ["ctrl-shift-n"], SetNull),
+    ("copy_cell", "Copy Cell", Some("Table"), ["secondary-c"], CopyCell),
+    // Not the spreadsheet's `ctrl-shift-n`: on Linux that is New Connection's
+    // keys, and New Connection wins even with a cell focused -- which left
+    // this unreachable there. Clearing a cell with the delete key is the
+    // gesture anyway, and it collides with nothing on either platform.
+    ("set_null", "Set Cell to NULL", Some("Table"), ["secondary-backspace"], SetNull),
     ("accept_completion", "Accept Completion", Some("Editor > Input"), ["tab"], AcceptCompletion),
-    ("toggle_sidebar", "Toggle Sidebar", None, ["cmd-shift-s"], ToggleSidebar),
-    ("quit", "Quit dbdelve", None, ["cmd-q"], Quit),
+    ("toggle_sidebar", "Toggle Sidebar", None, ["secondary-shift-s"], ToggleSidebar),
+    ("quit", "Quit dbdelve", None, ["secondary-q"], Quit),
     // Click or command-palette only today; listed so they can be given a
     // chord for the first time.
     ("cancel_query", "Cancel Query", None, [], CancelQuery),
@@ -196,7 +207,7 @@ mod tests {
     fn same_context_collision_is_a_conflict() {
         let overrides = HashMap::new();
         assert_eq!(
-            conflict("cmd-enter", None, "quit", &overrides),
+            conflict("secondary-enter", None, "quit", &overrides),
             Some("Run Query")
         );
     }
@@ -250,6 +261,9 @@ mod tests {
         // only `run_query` (excluded here, since it's the one asking) should
         // be found holding it.
         overrides.insert("quit".to_string(), "cmd-k q".to_string());
-        assert_eq!(conflict("cmd-enter", None, "run_query", &overrides), None);
+        assert_eq!(
+            conflict("secondary-enter", None, "run_query", &overrides),
+            None
+        );
     }
 }

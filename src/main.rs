@@ -26,7 +26,7 @@ use gpui::{
     AnyElement, App, AppContext, ClickEvent, ClipboardItem, Context, Entity, EntityInputHandler,
     FocusHandle, Focusable, FontWeight, InteractiveElement, IntoElement, Menu, MenuItem,
     ParentElement, Render, StatefulInteractiveElement, Styled, TitlebarOptions, Window,
-    WindowOptions, deferred, div, point, prelude::FluentBuilder, px,
+    WindowDecorations, WindowOptions, deferred, div, point, prelude::FluentBuilder, px,
 };
 use gpui_component::{
     Disableable, IndexPath, Root,
@@ -158,7 +158,15 @@ fn install_panic_log() {
     let Some(home) = std::env::var_os("HOME").filter(|home| !home.is_empty()) else {
         return;
     };
+    // A crash log is state, not cache: XDG puts it under the state directory,
+    // and a cache cleaner is entitled to delete anything in the other one.
+    #[cfg(target_os = "macos")]
     let directory = PathBuf::from(home).join("Library/Logs/dbdelve");
+    #[cfg(not(target_os = "macos"))]
+    let directory = match std::env::var_os("XDG_STATE_HOME").filter(|value| !value.is_empty()) {
+        Some(state_home) => PathBuf::from(state_home).join("dbdelve"),
+        None => PathBuf::from(home).join(".local/state/dbdelve"),
+    };
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         // Nothing in here may panic: a panic inside the hook aborts with less
@@ -280,16 +288,30 @@ fn main() {
             // The platform titlebar is kept only for its window buttons: a system
             // bar in its own grey above dbdelve's chrome is the seam every native app
             // avoids. dbdelve paints that strip itself, and the buttons sit over it.
+            //
+            // ponytail: there is nothing to sit over on Linux -- no compositor
+            // draws window buttons into a transparent titlebar -- so the window
+            // asks for the real one and wears the seam. The upgrade is drawing
+            // close, minimise and maximise into `ui::titlebar` and switching
+            // back to `WindowDecorations::Client`.
             let options = WindowOptions {
                 window_background: theme.window_background(),
                 titlebar: Some(TitlebarOptions {
                     title: Some("dbdelve".into()),
-                    appears_transparent: true,
-                    traffic_light_position: Some(point(
-                        px(layout::SPACE_MD),
-                        px((layout::TITLEBAR_HEIGHT - TRAFFIC_LIGHT_DIAMETER) / 2.),
-                    )),
+                    appears_transparent: !cfg!(target_os = "linux"),
+                    traffic_light_position: (!cfg!(target_os = "linux")).then(|| {
+                        point(
+                            px(layout::SPACE_MD),
+                            px((layout::TITLEBAR_HEIGHT - TRAFFIC_LIGHT_DIAMETER) / 2.),
+                        )
+                    }),
                 }),
+                window_decorations: Some(WindowDecorations::Server),
+                // Wayland matches a window to its desktop entry by app id and
+                // by nothing else, so without this the app runs with a blank
+                // icon however well the .desktop file is installed. It has to
+                // equal the entry's basename.
+                app_id: Some("dbdelve".into()),
                 ..Default::default()
             };
 
