@@ -574,7 +574,7 @@ fn command_items(workspace: &Workspace, profile: &Profile, cx: &App) -> Vec<Item
     if workspace.has_editable_cell(cx) {
         items.push(Item::command(
             "Set cell to NULL",
-            keycap_text("ctrl-shift-n"),
+            keycap_text("secondary-backspace"),
             icon::RENAME,
             Command::SetNull,
         ));
