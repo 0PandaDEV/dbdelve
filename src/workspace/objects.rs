@@ -240,7 +240,7 @@ impl Workspace {
         relation: String,
         cx: &mut Context<Self>,
     ) {
-        let Some(profile) = self.profile() else {
+        let Some(profile) = self.profile_mut() else {
             return;
         };
         let Some(connection) = profile.connection() else {
@@ -248,6 +248,11 @@ impl Workspace {
         };
         let profile_id = profile.id.clone();
         let generation = profile.generation;
+        let request = {
+            let issued = profile.session.structure_requests.entry(id).or_default();
+            *issued += 1;
+            *issued
+        };
         let key = (schema.clone(), relation.clone());
         let structure_task = cx
             .background_executor()
@@ -260,6 +265,11 @@ impl Workspace {
                     let Some(profile) = workspace.issued_to(&profile_id, generation) else {
                         return;
                     };
+                    // A refresh started after this one has already asked for the
+                    // same definition, and its answer is the newer one.
+                    if profile.session.structure_requests.get(&id) != Some(&request) {
+                        return;
+                    }
                     // The same call completion makes, so completion should not
                     // make it again for this relation.
                     if let Ok(structure) = &result {
@@ -563,6 +573,7 @@ impl Workspace {
                 .map(|tab| store::object_grid_key(&tab.schema, &tab.name, tab.filter()));
             let profile_id = profile.id.clone();
             profile.session.objects.retain(|tab| tab.id != id);
+            profile.session.structure_requests.remove(&id);
             if let Some(key) = snapshot {
                 let _ = store::remove_grid(&profile_id, &key);
             }
