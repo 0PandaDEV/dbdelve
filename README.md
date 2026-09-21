@@ -1,7 +1,8 @@
 # DBDelve
 
-A modern and performant database client for Postgres, MySQL and SQLite. MacOS only for now but linux is planned. Written in Rust
-with GPUI. Buttery smooth, small memory footprint, fast navigation and stays performant on large datasets.
+A modern and performant database client for Postgres, MySQL and SQLite. macOS
+and Linux. Written in Rust with GPUI. Buttery smooth, small memory footprint,
+fast navigation and stays performant on large datasets.
 
 > Early days. Everything listed below works today.
 
@@ -49,6 +50,8 @@ Postgres, MySQL and SQLite. More once these three are solid.
 
 ## Installing
 
+### macOS
+
 Apple Silicon, macOS 12 or later — that's what it's built and tested on. Intel
 and older macOS aren't blocked by anything in the code, they're just untested.
 
@@ -80,6 +83,27 @@ DBDelve to Applications. Same quarantine step and you have to update manually.
 To build it yourself instead, `DBDELVE_CHANNEL=release dev/bundle.sh` produces
 `target/DBDelve.app` with the release build, icon and signature. Drag that to
 Applications; the quarantine step doesn't apply here.
+
+### Linux
+
+Source only for now — there is no package yet. X11 and Wayland both work, and
+you need a Vulkan or OpenGL driver, a Secret Service keyring (gnome-keyring or
+KWallet) for saved passwords, and xdg-desktop-portal for the export dialog.
+
+On Debian or Ubuntu the build needs:
+
+```sh
+sudo apt install build-essential pkg-config cmake libxkbcommon-dev \
+  libxkbcommon-x11-dev libwayland-dev libdbus-1-dev
+cargo build --release
+```
+
+The binary lands at `target/release/dbdelve` and runs from anywhere. Connections
+and query history go to `$XDG_DATA_HOME/dbdelve`, or `~/.local/share/dbdelve`.
+
+Chords are the same as macOS with Ctrl in place of Cmd. A `profiles.toml`
+carried over from a Mac keeps its `cmd-` overrides, which mean Super on Linux —
+rebind them in Settings.
 
 [releases]: https://github.com/ShayanAbbas1/dbdelve/releases/latest
 
