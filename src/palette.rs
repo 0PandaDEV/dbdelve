@@ -60,6 +60,8 @@ pub enum Command {
     /// row: which one is which is the whole decision, and a palette that made
     /// the user guess would be hiding the one that writes.
     ExplainQuery(ExplainMode),
+    /// Rewrite the buffer as formatted SQL.
+    FormatQuery,
     /// Flip the results pane between the rows and the plan.
     ShowPlan(bool),
     SaveQuery,
@@ -423,6 +425,12 @@ fn command_items(workspace: &Workspace, profile: &Profile, cx: &App) -> Vec<Item
                     )
                 }),
         );
+        items.push(Item::command(
+            "Format query",
+            "⇧⌘F",
+            icon::STRUCTURE,
+            Command::FormatQuery,
+        ));
         if let Some(tab) = session.active_query_tab()
             && tab.plan.is_some()
         {

@@ -130,6 +130,19 @@ url = "2"
 # it is two pure-Rust crates and an 8.5s build instead of 28.6s.
 sqlparser = { version = "=0.63.0", default-features = false, features = ["std"] }
 
+# The Format Query command, and only that. A token-level reformatter: it splits
+# the text into keywords, strings and comments and re-emits them with newlines,
+# never building a semantic model. That is the whole reason it is here rather
+# than `sqlparser`'s `{:#}` -- an AST round-trip regenerates the statement from
+# the tree, which drops every comment the user wrote and silently rewrites the
+# dialect corners sqlparser only half-supports. Hard rule 1 says we do not
+# rewrite SQL behind the user's back, and a formatter that eats comments does.
+#
+# Default features off: `debug` pulls anstream, anstyle and okhsl to colourise a
+# token dump nothing here prints. Off, the only crate this adds that is not
+# already in the graph is `unicode_categories`; `winnow` is already here.
+sqlformat = { version = "=0.5.0", default-features = false }
+
 # Profile passwords live in the macOS Keychain, never in profiles.toml.
 security-framework = "3"
 guic-gpui-assets = "=0.2.0"

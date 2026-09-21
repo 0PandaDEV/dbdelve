@@ -936,6 +936,64 @@ impl Workspace {
         }
     }
 
+    /// Rewrite the buffer as formatted SQL. Invoked by hand only -- running,
+    /// saving and leaving the buffer all leave what was typed alone.
+    pub(crate) fn format_query(
+        &mut self,
+        _: &FormatQuery,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(profile) = self.profile() else {
+            return;
+        };
+        let Some(tab) = profile.session.active_query_tab() else {
+            return;
+        };
+        let editor = tab.editor.clone();
+        let (text, cursor) = {
+            let editor = editor.read(cx);
+            (editor.value().to_string(), editor.cursor())
+        };
+        if text.trim().is_empty() {
+            return;
+        }
+
+        // Said out loud rather than left as a no-op: a Format that appears to
+        // do nothing reads as a broken Format, not as a deliberate refusal.
+        let Some(formatted) = crate::sql::format(&text) else {
+            self.note(
+                "Not formatting: a dollar-quoted body would be rewritten.".into(),
+                cx,
+            );
+            return;
+        };
+        if formatted == text {
+            return;
+        }
+
+        // ponytail: the cursor lands at the top of the statement it was in,
+        // not on the token it was on -- a reflow moves every offset, and the
+        // statement is the unit the user was working in. Map the token too if
+        // the jump ever reads as losing your place.
+        let was_in = Buffer::parse(&text)
+            .statement_at(cursor)
+            .and_then(|range| {
+                statement_starts(&text)
+                    .iter()
+                    .position(|start| *start == range.start)
+            })
+            .and_then(|index| statement_starts(&formatted).get(index).copied());
+        let position = was_in.map_or(Position::new(0, 0), |offset| {
+            position_at(&formatted, offset)
+        });
+
+        editor.update(cx, |editor, cx| {
+            editor.set_value(formatted, window, cx);
+            editor.set_cursor_position(position, window, cx);
+        });
+    }
+
     pub(crate) fn sql_to_run(
         &self,
         editor: &Entity<EditorState>,
@@ -960,5 +1018,56 @@ impl Workspace {
         let sql = editor.value();
         let range = Buffer::parse(&sql).statement_at(editor.cursor())?;
         Some(sql[range].to_string())
+    }
+}
+
+/// Where each statement begins, in source order. `Buffer` keeps its ranges to
+/// itself outside its own tests, so `statement_at` is the only way in.
+///
+/// ponytail: one probe per byte, which is nothing next to the parse that
+/// precedes it. Ask `Buffer` for the ranges directly if a buffer ever gets big
+/// enough to feel it.
+fn statement_starts(sql: &str) -> Vec<usize> {
+    let buffer = Buffer::parse(sql);
+    let mut starts: Vec<usize> = Vec::new();
+    for range in (0..=sql.len()).filter_map(|offset| buffer.statement_at(offset)) {
+        if starts.last() != Some(&range.start) {
+            starts.push(range.start);
+        }
+    }
+    starts
+}
+
+fn position_at(text: &str, offset: usize) -> Position {
+    let before = &text[..offset];
+    Position::new(
+        before.matches('\n').count() as u32,
+        before
+            .rsplit('\n')
+            .next()
+            .unwrap_or_default()
+            .chars()
+            .count() as u32,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn statement_starts_finds_every_statement_in_order() {
+        let sql = "select 1;\n\n-- a comment\nselect 2;\nselect 3";
+        let starts = statement_starts(sql);
+        assert_eq!(starts.len(), 3);
+        assert!(starts.windows(2).all(|pair| pair[0] < pair[1]));
+        assert_eq!(&sql[starts[1]..starts[1] + 8], "select 2");
+    }
+
+    #[test]
+    fn a_position_lands_on_the_line_the_offset_is_on() {
+        let sql = "select 1;\n  select 2;";
+        let offset = statement_starts(sql)[1];
+        assert_eq!(position_at(sql, offset), Position::new(1, 2));
     }
 }

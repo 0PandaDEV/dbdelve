@@ -192,6 +192,7 @@ impl Workspace {
             Command::NewQuery => self.new_query(&NewQuery, window, cx),
             Command::RunQuery => self.run_query(&RunQuery, window, cx),
             Command::ExplainQuery(mode) => self.explain_query(&ExplainQuery { mode }, window, cx),
+            Command::FormatQuery => self.format_query(&FormatQuery, window, cx),
             Command::ShowPlan(showing) => self.show_plan(showing, cx),
             Command::SaveQuery => self.save_query(&SaveQuery, window, cx),
             Command::RenameQuery => self.rename_query(window, cx),
