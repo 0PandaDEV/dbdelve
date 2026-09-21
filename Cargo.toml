@@ -87,9 +87,9 @@ hex = "=0.4.3"
 #
 # rustls rather than native-tls because rustls, rustls-native-certs and
 # rustls-pemfile were already in the graph through gpui, and the trust store
-# reader goes through security-framework, which is already a direct dependency
-# for the Keychain. This adds an adapter, not a second TLS stack, and no
-# OpenSSL on any platform.
+# reader goes through security-framework on macOS and openssl-probe on Linux,
+# both of which it target-gates itself. This adds an adapter, not a second TLS
+# stack, and no OpenSSL on any platform.
 #
 # `default-features = false` on rustls is load-bearing: its defaults select the
 # aws-lc-rs provider, which would build a second crypto library from C and
@@ -143,16 +143,25 @@ sqlparser = { version = "=0.63.0", default-features = false, features = ["std"] 
 # already in the graph is `unicode_categories`; `winnow` is already here.
 sqlformat = { version = "=0.5.0", default-features = false }
 
-# Profile passwords live in the macOS Keychain, never in profiles.toml.
-security-framework = "3"
+# Profile passwords live in the platform keychain, never in profiles.toml:
+# Keychain Services on macOS, Secret Service (gnome-keyring, KWallet) on Linux.
+# The `v1` default feature is the whole API this needs, and its Apple store
+# writes the same generic-password items security-framework did, so passwords
+# saved by an earlier build still read back.
+keyring = "4"
 guic-gpui-assets = "=0.2.0"
 icondata_lu = "=0.1.0"
 icondata_core = "=0.1.0"
 # `font-kit` is not in this crate's default features, and without it the macOS
 # backend swaps the text system for `NoopTextSystem` and renders no text at all
 # -- silently, through a `log::warn!` nothing here is listening to.
+# x11 and wayland: gpui-pre-platform enables neither by default, and the Linux
+# backend panics on the first frame unless at least one is on. Both are inert
+# in a macOS build -- they forward to gpui_linux, which is not in that graph.
 gpui_platform = { version = "=0.3.5", package = "gpui-pre-platform", features = [
     "font-kit",
+    "x11",
+    "wayland",
 ] }
 
 # GPUI does layout, text shaping and scene building on the CPU every frame, so
