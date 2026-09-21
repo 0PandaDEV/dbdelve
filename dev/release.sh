@@ -80,7 +80,7 @@ cask "dbdelve" do
 
   url "https://github.com/ShayanAbbas1/dbdelve/releases/download/v#{version}/DBDelve-#{version}.dmg"
   name "DBDelve"
-  desc "Native macOS SQL client"
+  desc "Native SQL client"
   homepage "https://github.com/ShayanAbbas1/dbdelve"
 
   depends_on arch: :arm64

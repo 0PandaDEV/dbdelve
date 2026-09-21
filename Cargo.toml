@@ -3,7 +3,7 @@ name = "dbdelve"
 version = "0.1.2"
 edition = "2024"
 license = "MIT"
-description = "A native macOS SQL client"
+description = "A native SQL client"
 publish = false
 
 # Exact pins: gpui is pre-1.0 and breaks on minor bumps. See AGENTS.md before
