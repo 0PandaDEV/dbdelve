@@ -158,7 +158,15 @@ fn install_panic_log() {
     let Some(home) = std::env::var_os("HOME").filter(|home| !home.is_empty()) else {
         return;
     };
+    // A crash log is state, not cache: XDG puts it under the state directory,
+    // and a cache cleaner is entitled to delete anything in the other one.
+    #[cfg(target_os = "macos")]
     let directory = PathBuf::from(home).join("Library/Logs/dbdelve");
+    #[cfg(not(target_os = "macos"))]
+    let directory = match std::env::var_os("XDG_STATE_HOME").filter(|value| !value.is_empty()) {
+        Some(state_home) => PathBuf::from(state_home).join("dbdelve"),
+        None => PathBuf::from(home).join(".local/state/dbdelve"),
+    };
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         // Nothing in here may panic: a panic inside the hook aborts with less

@@ -432,7 +432,7 @@ fn command_items(workspace: &Workspace, profile: &Profile, cx: &App) -> Vec<Item
         );
         items.push(Item::command(
             "Format query",
-            "⇧⌘F",
+            keycap_text("secondary-shift-f"),
             icon::STRUCTURE,
             Command::FormatQuery,
         ));
