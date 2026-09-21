@@ -8,8 +8,8 @@
 //! surface it assembles, which is why the rest of the module is private.
 
 use gpui::{
-    AnyElement, ClickEvent, Context, Entity, FontWeight, InteractiveElement, IntoElement,
-    ParentElement, SharedString, StatefulInteractiveElement, Styled, Window, div,
+    AnyElement, ClickEvent, Context, Div, Entity, FontWeight, InteractiveElement, IntoElement,
+    ParentElement, SharedString, Stateful, StatefulInteractiveElement, Styled, Window, div,
     prelude::FluentBuilder, px,
 };
 use gpui_component::{
@@ -1393,6 +1393,22 @@ fn render_tab_strip(
             .child(name)
     };
 
+    // Middle-click closes the tab, as it does in every browser and editor. It
+    // goes through `ask_before_close` rather than the chip's own button so the
+    // gesture means what `cmd+w` means -- a saved query is still asked about
+    // rather than deleted by a stray wheel press.
+    let close_on_middle_click = |chip: Stateful<Div>, target: CloseTarget| {
+        let workspace = workspace.clone();
+        chip.on_aux_click(move |event, _, cx| {
+            if !event.is_middle_click() {
+                return;
+            }
+            _ = workspace.update(cx, |workspace, cx| {
+                workspace.ask_before_close(target.clone(), cx);
+            });
+        })
+    };
+
     // One chip per unsaved buffer, numbered in strip order. There used to be
     // exactly one, because there used to be exactly one editor.
     let unsaved_count = session
@@ -1459,6 +1475,9 @@ fn render_tab_strip(
                         workspace.activate_tab(Tab::Query(id), cx);
                     });
                 })
+                .when(unsaved_count > 1, |chip| {
+                    close_on_middle_click(chip, CloseTarget::Buffer(id))
+                })
                 .into_any_element()
         })
         .collect::<Vec<_>>();
@@ -1471,6 +1490,7 @@ fn render_tab_strip(
             .map(|(index, name)| {
                 let open_name = name.clone();
                 let delete_name = name.clone();
+                let middle_name = name.clone();
                 let open_workspace = workspace.clone();
                 let delete_workspace = workspace.clone();
                 let pending = session.pending_delete.as_deref() == Some(name);
@@ -1529,6 +1549,9 @@ fn render_tab_strip(
                         _ = open_workspace.update(cx, |workspace, cx| {
                             workspace.open_saved_query(open_name.clone(), window, cx);
                         });
+                    })
+                    .map(|chip| {
+                        close_on_middle_click(chip, CloseTarget::SavedQuery(middle_name.clone()))
                     })
                     .into_any_element()
             }),
@@ -1593,6 +1616,7 @@ fn render_tab_strip(
                     workspace.activate_tab(Tab::Object(id), cx);
                 });
             })
+            .map(|chip| close_on_middle_click(chip, CloseTarget::Object(id)))
             .into_any_element()
     }));
 
