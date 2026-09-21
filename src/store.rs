@@ -17,12 +17,17 @@ const NAME: &str = "dbdelve";
 /// only for tab 0 -- see [`read_scratch`].
 const LEGACY_SCRATCH_FILE: &str = ".scratch.sql";
 const HISTORY_FILE: &str = ".history.jsonl";
-/// How far back the history reads.
-///
-/// ponytail: the whole file is read and the newest entries kept. A line per
-/// statement run is small for a long time; read it backwards from the end if
-/// one ever gets big enough to feel.
+/// How far back the history reads, and what [`compact_history`] leaves on
+/// disk once the slack is used up.
 pub const HISTORY_DEPTH: usize = 200;
+/// How far past [`HISTORY_DEPTH`] the file may run before it is rewritten.
+///
+/// Rewriting on every run would cost a full write per statement to keep a
+/// handful of lines off the end. Letting it drift and compacting in one go
+/// amortises that to one rewrite per [`HISTORY_SLACK`] minus
+/// [`HISTORY_DEPTH`] runs, and bounds the file either way -- which is what
+/// makes reading the whole of it cheap.
+const HISTORY_SLACK: usize = HISTORY_DEPTH * 4;
 /// `errSecItemNotFound`. Apple's `OSStatus` values are frozen ABI, and the
 /// named constant lives in `security-framework-sys`, which is not a dependency
 /// here -- adding it with the exact pin this project uses everywhere would
@@ -499,7 +504,7 @@ pub fn delete_scratch(profile_id: &str, tab: u64) -> Result<(), String> {
 /// newlines, semicolons and comments, so there is no separator to put between
 /// two of them that is not also SQL. Appended rather than rewritten, so a run
 /// costs one write and no history can be lost to a rewrite that failed
-/// halfway.
+/// halfway -- see [`compact_history`] for the one rewrite that does happen.
 pub fn append_history(profile_id: &str, sql: &str) -> Result<(), String> {
     let directory = query_directory(profile_id)?;
     fs::create_dir_all(&directory)
@@ -513,7 +518,40 @@ pub fn append_history(profile_id: &str, sql: &str) -> Result<(), String> {
         .open(&path)
         .map_err(|error| format!("Could not open {}: {error}", path.display()))?;
     secure(&path)?;
-    writeln!(file, "{line}").map_err(|error| format!("Could not write {}: {error}", path.display()))
+    writeln!(file, "{line}")
+        .map_err(|error| format!("Could not write {}: {error}", path.display()))?;
+    compact_history(&path);
+    Ok(())
+}
+
+/// Drops everything past [`HISTORY_DEPTH`] once the file has run
+/// [`HISTORY_SLACK`] lines long, so the append in `append_history` cannot grow
+/// it without bound.
+///
+/// Written through [`write_file`] rather than in place: the same
+/// temporary-then-rename that protects every other file here, so a compaction
+/// that fails halfway leaves the history it was trimming intact.
+///
+/// The rewrite is what [`decode_history`] would have returned anyway -- newest
+/// first, each statement once -- put back oldest first so a later read walks
+/// it the same way. Failures are dropped: the history is still correct to read,
+/// it just costs the disk it already had.
+fn compact_history(path: &Path) {
+    let Ok(text) = fs::read_to_string(path) else {
+        return;
+    };
+    if text.lines().count() <= HISTORY_SLACK {
+        return;
+    }
+    let mut kept = String::new();
+    for sql in decode_history(&text).iter().rev() {
+        let Ok(line) = serde_json::to_string(sql) else {
+            return;
+        };
+        kept.push_str(&line);
+        kept.push('\n');
+    }
+    let _ = write_file(path, &kept);
 }
 
 /// What this profile has run, newest first and each statement once. A missing
@@ -1446,6 +1484,37 @@ open_objects = []
         let text = format!("{}\n\"SELECT 2", serde_json::to_string("SELECT 1").unwrap());
 
         assert_eq!(decode_history(&text), ["SELECT 1"]);
+    }
+
+    #[test]
+    fn a_long_lived_history_stops_growing_at_the_slack() {
+        with_home(|| {
+            // One past the slack, so the last append is the one that has to
+            // trip the compaction.
+            let runs = HISTORY_SLACK + 1;
+            for n in 0..runs {
+                append_history("dev", &format!("SELECT {n}")).unwrap();
+            }
+
+            let path = query_directory("dev").unwrap().join(HISTORY_FILE);
+            let text = fs::read_to_string(&path).unwrap();
+            assert_eq!(text.lines().count(), HISTORY_DEPTH);
+
+            // Trimmed off the front, so what the user can still reach is the
+            // newest HISTORY_DEPTH runs and not some older window of them.
+            let read_back = history("dev");
+            assert_eq!(read_back.len(), HISTORY_DEPTH);
+            assert_eq!(read_back[0], format!("SELECT {}", runs - 1));
+            assert_eq!(
+                read_back[HISTORY_DEPTH - 1],
+                format!("SELECT {}", runs - HISTORY_DEPTH)
+            );
+
+            // The rewrite goes through `write_file`, so the mode the appends
+            // set has to survive it.
+            let mode = fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        });
     }
 
     #[test]
