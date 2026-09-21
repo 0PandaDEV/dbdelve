@@ -27,7 +27,7 @@ use crate::{
     icons::icon,
     session::{CatalogState, ObjectBody, Profile, QueryState, Tab, routine_name},
     theme::{FontSlot, fonts, layout, theme},
-    ui::{keycap_text, object_icon, row_icon},
+    ui::{chord_hint, object_icon, row_icon},
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -395,10 +395,13 @@ fn one_line(sql: &str) -> String {
 /// standing. A palette that lists what it cannot do is a palette to read past.
 fn command_items(workspace: &Workspace, profile: &Profile, cx: &App) -> Vec<Item> {
     let session = &profile.session;
+    // Every cap here is the chord the action actually holds, so a rebind shows
+    // up in the palette rather than only in settings.
+    let overrides = &workspace.settings.custom_keybindings;
     let runnable = session.editor(session.active).is_some();
     let mut items = vec![Item::command(
         "New query",
-        keycap_text("secondary-t"),
+        chord_hint("new_query", overrides),
         icon::SCRATCH_QUERY,
         Command::NewQuery,
     )];
@@ -406,7 +409,7 @@ fn command_items(workspace: &Workspace, profile: &Profile, cx: &App) -> Vec<Item
     if runnable {
         items.push(Item::command(
             "Run query",
-            keycap_text("secondary-enter"),
+            chord_hint("run_query", overrides),
             icon::RUN,
             Command::RunQuery,
         ));
@@ -422,7 +425,7 @@ fn command_items(workspace: &Workspace, profile: &Profile, cx: &App) -> Vec<Item
                     Item::command(
                         mode.label(),
                         match mode {
-                            ExplainMode::Plan => keycap_text("secondary-shift-enter"),
+                            ExplainMode::Plan => chord_hint("explain_query", overrides),
                             ExplainMode::Analyze => String::new(),
                         },
                         icon::PLAN,
@@ -432,7 +435,7 @@ fn command_items(workspace: &Workspace, profile: &Profile, cx: &App) -> Vec<Item
         );
         items.push(Item::command(
             "Format query",
-            keycap_text("secondary-shift-f"),
+            chord_hint("format_query", overrides),
             icon::STRUCTURE,
             Command::FormatQuery,
         ));
@@ -454,7 +457,7 @@ fn command_items(workspace: &Workspace, profile: &Profile, cx: &App) -> Vec<Item
         } else {
             items.push(Item::command(
                 "Save query",
-                keycap_text("secondary-k s"),
+                chord_hint("rename_query_tab", overrides),
                 icon::SAVE,
                 Command::SaveQuery,
             ));
@@ -494,7 +497,7 @@ fn command_items(workspace: &Workspace, profile: &Profile, cx: &App) -> Vec<Item
             });
             items.push(Item::command(
                 "Refresh rows",
-                keycap_text("secondary-r"),
+                chord_hint("refresh_relation", overrides),
                 icon::RUN,
                 Command::RefreshRelation(tab.id),
             ));
@@ -547,7 +550,7 @@ fn command_items(workspace: &Workspace, profile: &Profile, cx: &App) -> Vec<Item
         }
         items.push(Item::command(
             "Close tab",
-            keycap_text("secondary-w"),
+            chord_hint("close_tab", overrides),
             icon::CLOSE,
             Command::CloseObject(tab.id),
         ));
@@ -574,7 +577,7 @@ fn command_items(workspace: &Workspace, profile: &Profile, cx: &App) -> Vec<Item
     if workspace.has_editable_cell(cx) {
         items.push(Item::command(
             "Set cell to NULL",
-            keycap_text("secondary-backspace"),
+            chord_hint("set_null", overrides),
             icon::RENAME,
             Command::SetNull,
         ));
@@ -629,13 +632,13 @@ fn command_items(workspace: &Workspace, profile: &Profile, cx: &App) -> Vec<Item
     if workspace.profiles.len() > 1 {
         items.push(Item::command(
             "Next connection",
-            keycap_text("ctrl-`"),
+            chord_hint("next_profile", overrides),
             icon::DATABASE,
             Command::NextProfile,
         ));
         items.push(Item::command(
             "Previous connection",
-            keycap_text("ctrl-shift-`"),
+            chord_hint("previous_profile", overrides),
             icon::DATABASE,
             Command::PreviousProfile,
         ));
@@ -643,13 +646,13 @@ fn command_items(workspace: &Workspace, profile: &Profile, cx: &App) -> Vec<Item
 
     items.push(Item::command(
         "New connection",
-        keycap_text("secondary-shift-n"),
+        chord_hint("new_connection", overrides),
         icon::PLUS,
         Command::NewConnection,
     ));
     items.push(Item::command(
         "Cycle theme",
-        keycap_text("secondary-k t"),
+        chord_hint("cycle_theme", overrides),
         icon::SWITCHER,
         Command::CycleTheme,
     ));
@@ -667,7 +670,7 @@ fn command_items(workspace: &Workspace, profile: &Profile, cx: &App) -> Vec<Item
     }
     items.push(Item::command(
         "Settings",
-        keycap_text("secondary-,"),
+        chord_hint("open_settings", overrides),
         icon::SWITCHER,
         Command::OpenSettings,
     ));
@@ -675,14 +678,14 @@ fn command_items(workspace: &Workspace, profile: &Profile, cx: &App) -> Vec<Item
     // session, which does not know whether the column is folded.
     items.push(Item::command(
         "Toggle sidebar",
-        keycap_text("secondary-shift-s"),
+        chord_hint("toggle_sidebar", overrides),
         icon::SIDEBAR,
         Command::ToggleSidebar,
     ));
     if matches!(session.active, Tab::Query(_)) {
         items.push(Item::command(
             "Reset editor zoom",
-            keycap_text("secondary-0"),
+            chord_hint("reset_editor_zoom", overrides),
             icon::SEARCH,
             Command::ResetEditorZoom,
         ));

@@ -28,8 +28,9 @@ use crate::{
         CommandPalette, CopyCell, CycleTheme, DeleteRow, DiscardEdits, EditCell, ExplainQuery,
         FollowForeignKey, FormatQuery, FuzzyOpen, NewConnection, NewQuery, NewRow, NextPage,
         NextProfile, NextTab, OpenSettings, PaletteNext, PalettePrevious, PreviousPage,
-        PreviousProfile, PreviousTab, Quit, RefreshRelation, ResetEditorZoom, RunQuery, SaveQuery, SetDefault,
-        SetEmpty, SetNull, ShowEditor, ToggleNextJoin, ToggleSidebar, ZoomEditorIn, ZoomEditorOut,
+        PreviousProfile, PreviousTab, Quit, RefreshRelation, ResetEditorZoom, RunQuery, SaveQuery,
+        SetDefault, SetEmpty, SetNull, ShowEditor, ToggleNextJoin, ToggleSidebar, ZoomEditorIn,
+        ZoomEditorOut,
     },
     db::ExplainMode,
 };
@@ -115,6 +116,7 @@ registry! {
     ("new_query", "New Query Tab", None, ["secondary-t"], NewQuery),
     ("new_connection", "New Connection", None, ["secondary-shift-n"], NewConnection),
     ("close_tab", "Close Tab", None, ["secondary-w"], CloseTab),
+    ("refresh_relation", "Refresh Rows", None, ["secondary-r"], RefreshRelation),
     ("next_tab", "Next Tab", None, ["ctrl-tab"], NextTab),
     ("previous_tab", "Previous Tab", None, ["ctrl-shift-tab"], PreviousTab),
     ("next_profile", "Next Connection", None, ["ctrl-`"], NextProfile),
@@ -142,7 +144,6 @@ registry! {
     // Click or command-palette only today; listed so they can be given a
     // chord for the first time.
     ("cancel_query", "Cancel Query", None, [], CancelQuery),
-    ("refresh_relation", "Refresh Rows", None, ["secondary-r"], RefreshRelation),
     ("next_page", "Next Page", None, [], NextPage),
     ("previous_page", "Previous Page", None, [], PreviousPage),
     ("clear_filter", "Clear Filter", None, [], ClearFilter),

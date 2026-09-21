@@ -16,10 +16,13 @@ use gpui_component::{
     kbd::Kbd,
 };
 
+use std::collections::HashMap;
+
 use crate::{
     db::{RelationKind, RoutineKind},
     explorer::ObjectKind,
     icons::icon,
+    keybindings,
     sql::Mode,
     theme::{self, ConnectionColor, Theme, layout},
 };
@@ -328,16 +331,24 @@ pub(crate) fn keycap_for(stroke: &str) -> Option<Kbd> {
 /// Space-separated strokes are a two-stroke chord, which `Kbd` has no notion
 /// of: each stroke is formatted on its own and they are joined the way the
 /// binding is written.
-pub(crate) fn keycap_text(chord: &'static str) -> String {
+pub(crate) fn keycap_text(chord: &str) -> String {
     chord
         .split_whitespace()
-        .map(|stroke| {
-            Kbd::format(
-                &Keystroke::parse(stroke).expect("keycap strokes are compile-time constants"),
-            )
-        })
+        .filter_map(|stroke| Keystroke::parse(stroke).ok().map(|key| Kbd::format(&key)))
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// The cap to draw beside an action, read from the keymap rather than written
+/// beside the label: a hint spelled out at the call site goes on claiming the
+/// shipped chord after the action has been rebound to another one.
+pub(crate) fn chord_hint(id: &str, overrides: &HashMap<String, String>) -> String {
+    keybindings::REGISTRY
+        .iter()
+        .find(|spec| spec.id == id)
+        .and_then(|spec| keybindings::chords_for(spec, overrides).first().copied())
+        .map(keycap_text)
+        .unwrap_or_default()
 }
 
 /// A shortcut hint and what it does, in the app face rather than the editor's
@@ -430,6 +441,21 @@ pub(crate) fn human_bytes(bytes: u64) -> String {
 mod tests {
     use super::*;
     use crate::explorer;
+
+    #[test]
+    fn a_hint_follows_a_rebound_action_rather_than_its_shipped_chord() {
+        let mut overrides = HashMap::new();
+        let shipped = chord_hint("refresh_relation", &overrides);
+        overrides.insert(
+            "refresh_relation".to_string(),
+            "secondary-shift-r".to_string(),
+        );
+        let rebound = chord_hint("refresh_relation", &overrides);
+        assert!(!shipped.is_empty());
+        assert_ne!(shipped, rebound);
+        // An action nothing has bound draws no cap at all.
+        assert_eq!(chord_hint("cancel_query", &overrides), "");
+    }
 
     #[test]
     fn a_row_limit_reads_as_a_chip_not_as_a_number() {
