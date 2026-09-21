@@ -46,7 +46,7 @@ use crate::{
     theme::{FontSlot, Theme, fonts, layout, theme},
     ui::{
         Control, Tone, button, button_label, compact_count, dialog, group_thousands, icon_button,
-        key_hint, keycap_for, object_icon, row_icon, section_label,
+        key_hint, keycap_for, keycap_text, object_icon, row_icon, section_label,
     },
     workspace::{EDITOR_FONT_SIZE_MAX, EDITOR_FONT_SIZE_MIN, SettingsTab, editor_zoom_percent},
 };
@@ -932,7 +932,7 @@ fn render_results(
         QueryState::Idle if is_query => Some(centered(
             key_hint(
                 t,
-                "cmd-enter",
+                "secondary-enter",
                 "runs the selection or statement under the cursor",
             )
             .into_any_element(),
@@ -1847,7 +1847,7 @@ fn render_tab_strip(
             div()
                 .flex_shrink_0()
                 .text_color(t.text_faint)
-                .child(format!("{zoom}% · ⌘0 resets"))
+                .child(format!("{zoom}% · {} resets", keycap_text("secondary-0")))
         }))
         .children(naming)
         // A named query is already written to disk on every swap, so there

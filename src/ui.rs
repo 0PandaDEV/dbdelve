@@ -91,6 +91,11 @@ pub(crate) fn mode_pill(t: Theme, mode: Mode) -> Button {
 /// is why the drag region is a child covering what is left of the row rather
 /// than the row itself: a drag region swallows the clicks a button needs, so
 /// anything interactive goes in `leading`, outside it.
+///
+/// On Linux the window wears a real system titlebar instead, so this row keeps
+/// only the job the system one cannot do — saying which database is in front of
+/// you. Nothing is inset for buttons that are drawn above rather than over it,
+/// and moving the window belongs to the bar the compositor drew.
 pub(crate) fn titlebar(
     t: Theme,
     subtitle: Option<String>,
@@ -105,14 +110,20 @@ pub(crate) fn titlebar(
         .flex_shrink_0()
         .items_center()
         .gap(px(layout::SPACE_MD))
-        .pl(px(layout::TITLEBAR_LEADING_INSET))
+        .pl(px(match cfg!(target_os = "linux") {
+            true => layout::SPACE_MD,
+            false => layout::TITLEBAR_LEADING_INSET,
+        }))
         .pr(px(layout::SPACE_MD))
         .children(leading)
         .child(
             div()
                 .id("titlebar")
-                .window_control_area(gpui::WindowControlArea::Drag)
-                .on_double_click(|_, window, _| window.titlebar_double_click())
+                .when(!cfg!(target_os = "linux"), |strip| {
+                    strip
+                        .window_control_area(gpui::WindowControlArea::Drag)
+                        .on_double_click(|_, window, _| window.titlebar_double_click())
+                })
                 .flex_1()
                 .h_full()
                 .flex()
@@ -307,6 +318,14 @@ pub(crate) fn keycap(stroke: &'static str) -> Kbd {
 /// parse draws nothing rather than a cap with garbage on it.
 pub(crate) fn keycap_for(stroke: &str) -> Option<Kbd> {
     Keystroke::parse(stroke).ok().map(Kbd::new)
+}
+
+/// The same cap as plain text, for the readouts that run as a sentence rather
+/// than carrying a chip of their own. `Kbd`'s own formatter, so a cap written
+/// into a string reads the way the drawn ones do -- `⌘0` on macOS, `Ctrl+0`
+/// where there is no Command key.
+pub(crate) fn keycap_text(stroke: &'static str) -> String {
+    Kbd::format(&Keystroke::parse(stroke).expect("keycap strokes are compile-time constants"))
 }
 
 /// A shortcut hint and what it does, in the app face rather than the editor's

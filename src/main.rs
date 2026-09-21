@@ -26,7 +26,7 @@ use gpui::{
     AnyElement, App, AppContext, ClickEvent, ClipboardItem, Context, Entity, EntityInputHandler,
     FocusHandle, Focusable, FontWeight, InteractiveElement, IntoElement, Menu, MenuItem,
     ParentElement, Render, StatefulInteractiveElement, Styled, TitlebarOptions, Window,
-    WindowOptions, deferred, div, point, prelude::FluentBuilder, px,
+    WindowDecorations, WindowOptions, deferred, div, point, prelude::FluentBuilder, px,
 };
 use gpui_component::{
     Disableable, IndexPath, Root,
@@ -280,16 +280,25 @@ fn main() {
             // The platform titlebar is kept only for its window buttons: a system
             // bar in its own grey above dbdelve's chrome is the seam every native app
             // avoids. dbdelve paints that strip itself, and the buttons sit over it.
+            //
+            // ponytail: there is nothing to sit over on Linux -- no compositor
+            // draws window buttons into a transparent titlebar -- so the window
+            // asks for the real one and wears the seam. The upgrade is drawing
+            // close, minimise and maximise into `ui::titlebar` and switching
+            // back to `WindowDecorations::Client`.
             let options = WindowOptions {
                 window_background: theme.window_background(),
                 titlebar: Some(TitlebarOptions {
                     title: Some("dbdelve".into()),
-                    appears_transparent: true,
-                    traffic_light_position: Some(point(
-                        px(layout::SPACE_MD),
-                        px((layout::TITLEBAR_HEIGHT - TRAFFIC_LIGHT_DIAMETER) / 2.),
-                    )),
+                    appears_transparent: !cfg!(target_os = "linux"),
+                    traffic_light_position: (!cfg!(target_os = "linux")).then(|| {
+                        point(
+                            px(layout::SPACE_MD),
+                            px((layout::TITLEBAR_HEIGHT - TRAFFIC_LIGHT_DIAMETER) / 2.),
+                        )
+                    }),
                 }),
+                window_decorations: Some(WindowDecorations::Server),
                 ..Default::default()
             };
 
