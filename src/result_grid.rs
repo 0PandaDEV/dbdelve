@@ -668,10 +668,12 @@ impl ResultGrid {
         // Bytes, not characters: it only has to be cheap and never under-count,
         // and `clip` is a no-op on anything that turns out to fit.
         let shown = match &value {
-            NewValue::Value(value) => Some(match value.len() > CELL_DISPLAY_LIMIT {
-                true => SharedString::from(clip(value)),
-                false => value.clone(),
-            }),
+            NewValue::Value(value) => Some(
+                match value.len() > CELL_DISPLAY_LIMIT || value.contains(['\n', '\r']) {
+                    true => SharedString::from(clip(value)),
+                    false => value.clone(),
+                },
+            ),
             NewValue::Null | NewValue::Default => None,
         };
         match self
@@ -881,8 +883,25 @@ fn fitted_width(name: &str, display: &[Vec<Option<SharedString>>], col_ix: usize
     px((values.max(header) + padding).clamp(MIN_COLUMN_WIDTH, MAX_COLUMN_WIDTH))
 }
 
+/// What a cell paints: one line, cut to the display limit.
+///
+/// A row is one line tall, and a value with line breaks in it was laid out over
+/// several and centred, so the cell showed whichever line fell in the middle --
+/// for a view's DDL, a column from half way down it. Each run of line breaks
+/// becomes a space here, so the cell reads from the start of the value. The
+/// value itself is untouched: the inspector lays it out as it is, and a copy
+/// takes the original.
 fn clip(value: &str) -> String {
-    clip_to(value, CELL_DISPLAY_LIMIT)
+    if !value.contains(['\n', '\r']) {
+        return clip_to(value, CELL_DISPLAY_LIMIT);
+    }
+    let flattened = value
+        .split(['\n', '\r'])
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    clip_to(&flattened, CELL_DISPLAY_LIMIT)
 }
 
 /// A JSON object or array laid out over indented lines, or the value unchanged
@@ -2297,6 +2316,24 @@ mod tests {
     #[test]
     fn a_short_value_is_left_alone() {
         assert_eq!(clip("SELECT"), "SELECT");
+    }
+
+    #[test]
+    fn a_value_with_line_breaks_paints_as_one_line_from_its_start() {
+        assert_eq!(
+            clip("create table t (\n    id int,\r\n\n    note text\n)"),
+            "create table t ( id int, note text )"
+        );
+        // Only what is painted: the grid still holds what the server sent.
+        let grid = ResultGrid::new(
+            QueryResult {
+                columns: vec![Default::default()],
+                rows: vec![vec![Some("a\nb".to_string())]],
+                ..Default::default()
+            },
+            Mode::ReadWrite,
+        );
+        assert_eq!(grid.result.rows[0][0].as_deref(), Some("a\nb"));
     }
 
     #[test]
