@@ -56,14 +56,17 @@ fi
 gh run watch "$RUN" --exit-status
 
 # A green run is not proof the assets landed: the upload step can be skipped by
-# a condition or clobber the wrong release. Both tarballs are named here so a
-# half-uploaded matrix fails while the release is still a draft.
+# a condition or clobber the wrong release. Every file both arches are supposed
+# to produce is named here, so a half-uploaded matrix -- or a matrix that built
+# the tarball and lost the AppImage -- fails while the release is still a draft.
 ASSETS="$(gh release view "v$VERSION" --json assets --jq '.assets[].name')"
 for ARCH in x86_64 aarch64; do
-  if ! grep -qxF "dbdelve-$VERSION-linux-$ARCH.tar.gz" <<<"$ASSETS"; then
-    echo "no $ARCH tarball on v$VERSION -- v$VERSION is still a draft" >&2
-    exit 1
-  fi
+  for ASSET in "dbdelve-$VERSION-linux-$ARCH.tar.gz" "dbdelve-$VERSION-$ARCH.AppImage"; do
+    if ! grep -qxF "$ASSET" <<<"$ASSETS"; then
+      echo "no $ASSET on v$VERSION -- v$VERSION is still a draft" >&2
+      exit 1
+    fi
+  done
 done
 
 gh release edit "v$VERSION" --draft=false

@@ -86,11 +86,11 @@ Applications; the quarantine step doesn't apply here.
 
 ### Linux
 
-A tarball, x86_64 or aarch64, built on Ubuntu 22.04 — that is the oldest glibc
-it will run against, so anything at least that new is fine. X11 and Wayland
-both work, and you need a Vulkan or OpenGL driver, a Secret Service keyring
-(gnome-keyring or KWallet) for saved passwords, and xdg-desktop-portal for the
-export dialog.
+A tarball or an AppImage, x86_64 or aarch64, built on Ubuntu 22.04 — that is
+the oldest glibc either will run against, so anything at least that new is
+fine. X11 and Wayland both work, and you need a Vulkan or OpenGL driver, a
+Secret Service keyring (gnome-keyring or KWallet) for saved passwords, and
+xdg-desktop-portal for the export dialog.
 
 Take `dbdelve-<version>-linux-<arch>.tar.gz` from [the latest release][releases]
 and run the `install.sh` inside it:
@@ -108,6 +108,28 @@ puts DBDelve in the app menu. Make sure `~/.local/bin` is on your PATH —
 running it again; `./install.sh --uninstall` reverses it and leaves your
 connections and query history alone.
 
+Or take `dbdelve-<version>-<arch>.AppImage` from the same release, which is one
+file that runs where it lands:
+
+```sh
+chmod +x dbdelve-*.AppImage
+./dbdelve-*.AppImage
+```
+
+It carries the libraries that are safe to carry and takes the graphics drivers
+from your machine, so it runs on distributions either side of the one it was
+built on. Running any AppImage needs FUSE 2, which Ubuntu 22.04 and later no
+longer install — `sudo apt install libfuse2`, or `libfuse2t64` on 24.04 and
+later, is usually the only thing missing. Failing that,
+`./dbdelve-*.AppImage --appimage-extract` unpacks it and `squashfs-root/AppRun`
+runs it with no FUSE at all.
+
+What it does not do is put DBDelve in the app menu: an AppImage on its own is
+just a file you run, so there is no desktop entry and no icon until you
+integrate it — Gear Lever and AppImageLauncher both do that, or you copy the
+entry out by hand. The tarball does it for you, which is still the reason to
+prefer it. Updating either way is downloading the next one.
+
 To build it yourself instead, on Debian or Ubuntu the build needs:
 
 ```sh
@@ -117,8 +139,9 @@ cargo build --release
 ```
 
 The binary lands at `target/release/dbdelve` and runs from anywhere;
-`dev/package-linux.sh` wraps that same build into the tarball above. Connections
-and query history go to `$XDG_DATA_HOME/dbdelve`, or `~/.local/share/dbdelve`.
+`dev/package-linux.sh` wraps that same build into the tarball above and
+`dev/package-appimage.sh` into the AppImage. Connections and query history go
+to `$XDG_DATA_HOME/dbdelve`, or `~/.local/share/dbdelve`.
 
 Chords are the same as macOS with Ctrl in place of Cmd. A `profiles.toml`
 carried over from a Mac keeps its `cmd-` overrides, which mean Super on Linux —
