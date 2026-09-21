@@ -560,7 +560,7 @@ pub(crate) enum Tab {
 }
 
 /// What `cmd+w` has to do with the surface in front of it.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CloseTarget {
     /// Close it. It is a view onto something the database still holds, and
     /// reopening it costs a click.
