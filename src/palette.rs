@@ -27,7 +27,7 @@ use crate::{
     icons::icon,
     session::{CatalogState, ObjectBody, Profile, QueryState, Tab, routine_name},
     theme::{FontSlot, fonts, layout, theme},
-    ui::{object_icon, row_icon},
+    ui::{keycap_text, object_icon, row_icon},
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -125,7 +125,12 @@ struct Item {
 }
 
 impl Item {
-    fn command(label: &str, hint: &'static str, icon: &'static str, command: Command) -> Self {
+    fn command(
+        label: &str,
+        hint: impl Into<SharedString>,
+        icon: &'static str,
+        command: Command,
+    ) -> Self {
         Self {
             label: label.to_string(),
             hint: hint.into(),
@@ -393,7 +398,7 @@ fn command_items(workspace: &Workspace, profile: &Profile, cx: &App) -> Vec<Item
     let runnable = session.editor(session.active).is_some();
     let mut items = vec![Item::command(
         "New query",
-        "⌘T",
+        keycap_text("secondary-t"),
         icon::SCRATCH_QUERY,
         Command::NewQuery,
     )];
@@ -401,7 +406,7 @@ fn command_items(workspace: &Workspace, profile: &Profile, cx: &App) -> Vec<Item
     if runnable {
         items.push(Item::command(
             "Run query",
-            "⌘↩",
+            keycap_text("secondary-enter"),
             icon::RUN,
             Command::RunQuery,
         ));
@@ -417,8 +422,8 @@ fn command_items(workspace: &Workspace, profile: &Profile, cx: &App) -> Vec<Item
                     Item::command(
                         mode.label(),
                         match mode {
-                            ExplainMode::Plan => "⇧⌘↩",
-                            ExplainMode::Analyze => "",
+                            ExplainMode::Plan => keycap_text("secondary-shift-enter"),
+                            ExplainMode::Analyze => String::new(),
                         },
                         icon::PLAN,
                         Command::ExplainQuery(mode),
@@ -449,7 +454,7 @@ fn command_items(workspace: &Workspace, profile: &Profile, cx: &App) -> Vec<Item
         } else {
             items.push(Item::command(
                 "Save query",
-                "⌘S",
+                keycap_text("secondary-k s"),
                 icon::SAVE,
                 Command::SaveQuery,
             ));
@@ -542,7 +547,7 @@ fn command_items(workspace: &Workspace, profile: &Profile, cx: &App) -> Vec<Item
         }
         items.push(Item::command(
             "Close tab",
-            "⌘W",
+            keycap_text("secondary-w"),
             icon::CLOSE,
             Command::CloseObject(tab.id),
         ));
@@ -569,7 +574,7 @@ fn command_items(workspace: &Workspace, profile: &Profile, cx: &App) -> Vec<Item
     if workspace.has_editable_cell(cx) {
         items.push(Item::command(
             "Set cell to NULL",
-            "⌃⇧N",
+            keycap_text("ctrl-shift-n"),
             icon::RENAME,
             Command::SetNull,
         ));
@@ -624,13 +629,13 @@ fn command_items(workspace: &Workspace, profile: &Profile, cx: &App) -> Vec<Item
     if workspace.profiles.len() > 1 {
         items.push(Item::command(
             "Next connection",
-            "⌃`",
+            keycap_text("ctrl-`"),
             icon::DATABASE,
             Command::NextProfile,
         ));
         items.push(Item::command(
             "Previous connection",
-            "⌃⇧`",
+            keycap_text("ctrl-shift-`"),
             icon::DATABASE,
             Command::PreviousProfile,
         ));
@@ -638,13 +643,13 @@ fn command_items(workspace: &Workspace, profile: &Profile, cx: &App) -> Vec<Item
 
     items.push(Item::command(
         "New connection",
-        "⇧⌘N",
+        keycap_text("secondary-shift-n"),
         icon::PLUS,
         Command::NewConnection,
     ));
     items.push(Item::command(
         "Cycle theme",
-        "⇧⌘T",
+        keycap_text("secondary-k t"),
         icon::SWITCHER,
         Command::CycleTheme,
     ));
@@ -662,7 +667,7 @@ fn command_items(workspace: &Workspace, profile: &Profile, cx: &App) -> Vec<Item
     }
     items.push(Item::command(
         "Settings",
-        "⌘,",
+        keycap_text("secondary-,"),
         icon::SWITCHER,
         Command::OpenSettings,
     ));
@@ -670,14 +675,14 @@ fn command_items(workspace: &Workspace, profile: &Profile, cx: &App) -> Vec<Item
     // session, which does not know whether the column is folded.
     items.push(Item::command(
         "Toggle sidebar",
-        "⇧⌘S",
+        keycap_text("secondary-shift-s"),
         icon::SIDEBAR,
         Command::ToggleSidebar,
     ));
     if matches!(session.active, Tab::Query(_)) {
         items.push(Item::command(
             "Reset editor zoom",
-            "⌘0",
+            keycap_text("secondary-0"),
             icon::SEARCH,
             Command::ResetEditorZoom,
         ));

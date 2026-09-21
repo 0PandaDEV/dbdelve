@@ -324,8 +324,20 @@ pub(crate) fn keycap_for(stroke: &str) -> Option<Kbd> {
 /// than carrying a chip of their own. `Kbd`'s own formatter, so a cap written
 /// into a string reads the way the drawn ones do -- `⌘0` on macOS, `Ctrl+0`
 /// where there is no Command key.
-pub(crate) fn keycap_text(stroke: &'static str) -> String {
-    Kbd::format(&Keystroke::parse(stroke).expect("keycap strokes are compile-time constants"))
+///
+/// Space-separated strokes are a two-stroke chord, which `Kbd` has no notion
+/// of: each stroke is formatted on its own and they are joined the way the
+/// binding is written.
+pub(crate) fn keycap_text(chord: &'static str) -> String {
+    chord
+        .split_whitespace()
+        .map(|stroke| {
+            Kbd::format(
+                &Keystroke::parse(stroke).expect("keycap strokes are compile-time constants"),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// A shortcut hint and what it does, in the app face rather than the editor's

@@ -263,6 +263,9 @@ mod tests {
         // only `run_query` (excluded here, since it's the one asking) should
         // be found holding it.
         overrides.insert("quit".to_string(), "cmd-k q".to_string());
-        assert_eq!(conflict("secondary-enter", None, "run_query", &overrides), None);
+        assert_eq!(
+            conflict("secondary-enter", None, "run_query", &overrides),
+            None
+        );
     }
 }
