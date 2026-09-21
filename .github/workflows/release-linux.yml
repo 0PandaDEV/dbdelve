@@ -1,15 +1,15 @@
 name: release-linux
 
-# Both triggers on purpose. dev/release.sh cuts the macOS release with
-# `gh release create`, which makes the tag through the API -- and a tag created
-# that way does not reliably raise a push event. `release: published` is the
-# one that always fires for it; the tag push covers a tag pushed by hand.
-# Whichever arrives first uploads, and --clobber makes the second harmless.
+# The tag push is the only trigger that matters: dev/release.sh now pushes the
+# tag with git before it opens the draft release, so the push event always
+# fires. `release: published` is deliberately absent -- the driver publishes the
+# release itself once this run's tarballs are attached, and that would fire a
+# second, pointless build of the same tag. A release made by hand in the web UI
+# creates its tag through the API and so raises no push event; that one needs
+# either a tag pushed with git first or a workflow_dispatch and a manual upload.
 on:
   push:
     tags: ["v*"]
-  release:
-    types: [published]
   workflow_dispatch:
 
 permissions:
@@ -40,10 +40,22 @@ jobs:
 
       # workflow_dispatch has no release to attach to, so it stops at building
       # -- the point of running it by hand is finding out whether it builds.
+      # Every other run is a tag push, where `github.ref_name` is the tag.
       - if: github.event_name != 'workflow_dispatch'
-        run: gh release upload "${TAG}" target/linux/*.tar.gz --clobber
+        run: |
+          # The tag lands before dev/release.sh has created the draft release,
+          # so this job can get here first. It waits for the release rather
+          # than creating one: a release made here would be a second release on
+          # the same tag, without the DMG and without the notes.
+          for _ in $(seq 24); do
+            gh release view "$TAG" >/dev/null 2>&1 && break
+            sleep 5
+          done
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            echo "no release for $TAG after two minutes -- nothing to upload to" >&2
+            exit 1
+          fi
+          gh release upload "$TAG" target/linux/*.tar.gz --clobber
         env:
           GH_TOKEN: ${{ github.token }}
-          # `github.ref_name` is the tag on a push and the release's tag on a
-          # release event, but only the latter carries `release.tag_name`.
-          TAG: ${{ github.event.release.tag_name || github.ref_name }}
+          TAG: ${{ github.ref_name }}
