@@ -101,6 +101,7 @@ actions!(
         ZoomEditorOut,
         ResetEditorZoom,
         NextPage,
+        RefreshRelation,
         PreviousPage,
         ClearFilter,
         AddFilter,

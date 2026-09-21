@@ -28,6 +28,17 @@ impl Workspace {
         self.requery_relation(id, |_, _, _, _| true, cx);
     }
 
+    pub(crate) fn refresh_active_relation(
+        &mut self,
+        _: &RefreshRelation,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(Tab::Object(id)) = self.profile().map(|profile| profile.session.active) {
+            self.refresh_relation(id, cx);
+        }
+    }
+
     /// Ask a relation's preview for a different number of rows.
     ///
     /// The cap is the point of the row limit, so this moves it rather than

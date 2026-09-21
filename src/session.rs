@@ -207,6 +207,14 @@ pub(crate) struct Session {
     pub(crate) insert_form: Option<InsertForm>,
     /// The statement the mode check stopped, held until the user answers.
     pub(crate) pending_run: Option<PendingRun>,
+    /// The structure request each relation tab is waiting on, by tab id.
+    ///
+    /// A refresh asks for the definition again, and nothing stops a second
+    /// refresh starting while the first is in flight -- the engine reads the
+    /// catalog in several queries, so the older request can finish last and
+    /// put the older definition back. A completion that is not the newest
+    /// issued for its tab is dropped.
+    pub(crate) structure_requests: HashMap<u64, u64>,
 }
 
 /// A generated statement waiting to be read and run.
@@ -389,6 +397,7 @@ impl Session {
             apply_review: None,
             insert_form: None,
             pending_run: None,
+            structure_requests: HashMap::new(),
         }
     }
 
