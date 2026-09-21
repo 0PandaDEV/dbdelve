@@ -19,10 +19,10 @@ use crate::{
     actions::{
         AcceptCompletion, AddFilter, ApplyEdits, CancelQuery, ClearFilter, CloseTab,
         CommandPalette, CopyCell, CycleTheme, DeleteRow, DiscardEdits, EditCell, ExplainQuery,
-        FollowForeignKey, FuzzyOpen, NewConnection, NewQuery, NewRow, NextPage, NextProfile,
-        NextTab, OpenSettings, PaletteNext, PalettePrevious, PreviousPage, PreviousProfile,
-        PreviousTab, Quit, ResetEditorZoom, RunQuery, SaveQuery, SetDefault, SetEmpty, SetNull,
-        ShowEditor, ToggleNextJoin, ToggleSidebar, ZoomEditorIn, ZoomEditorOut,
+        FollowForeignKey, FormatQuery, FuzzyOpen, NewConnection, NewQuery, NewRow, NextPage,
+        NextProfile, NextTab, OpenSettings, PaletteNext, PalettePrevious, PreviousPage,
+        PreviousProfile, PreviousTab, Quit, ResetEditorZoom, RunQuery, SaveQuery, SetDefault,
+        SetEmpty, SetNull, ShowEditor, ToggleNextJoin, ToggleSidebar, ZoomEditorIn, ZoomEditorOut,
     },
     db::ExplainMode,
 };
@@ -102,6 +102,7 @@ registry! {
     // and a keystroke away from `cmd-enter` is too close to reach for by
     // accident when reaching for it is a write.
     ("explain_query", "Explain Query", None, ["cmd-shift-enter"], ExplainQuery { mode: ExplainMode::Plan }),
+    ("format_query", "Format Query", None, ["cmd-shift-f"], FormatQuery),
     ("apply_edits", "Apply Edits", None, ["cmd-s"], ApplyEdits),
     ("rename_query_tab", "Rename Query Tab", None, ["cmd-k s"], SaveQuery),
     ("new_query", "New Query Tab", None, ["cmd-t"], NewQuery),

@@ -87,6 +87,7 @@ actions!(
     [
         RunQuery,
         CancelQuery,
+        FormatQuery,
         ShowEditor,
         CycleTheme,
         SaveQuery,

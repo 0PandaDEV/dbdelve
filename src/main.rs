@@ -42,12 +42,12 @@ use gpui_component::{
 use actions::{
     AcceptCompletion, AddFilter, ApplyEdits, CancelQuery, ClearFilter, CloseTab, CommandPalette,
     CopyCell, CycleTheme, DeleteRow, DiscardEdits, EditCell, ExplainQuery, FollowForeignKey,
-    FuzzyOpen, NewConnection, NewQuery, NewRow, NextPage, NextProfile, NextTab, OpenSettings,
-    PaletteNext, PalettePrevious, PreviousPage, PreviousProfile, PreviousTab, Quit, RemoveFilter,
-    RequestWriteMode, ResetConfirmations, ResetEditorZoom, RunQuery, SaveQuery, SetDefault,
-    SetEmpty, SetFilterColumn, SetFilterOperator, SetFilterRaw, SetMode, SetNull, SetRowLimit,
-    ShowEditor, SortColumn, ToggleFilterJoin, ToggleNextJoin, ToggleSidebar, ZoomEditorIn,
-    ZoomEditorOut,
+    FormatQuery, FuzzyOpen, NewConnection, NewQuery, NewRow, NextPage, NextProfile, NextTab,
+    OpenSettings, PaletteNext, PalettePrevious, PreviousPage, PreviousProfile, PreviousTab, Quit,
+    RemoveFilter, RequestWriteMode, ResetConfirmations, ResetEditorZoom, RunQuery, SaveQuery,
+    SetDefault, SetEmpty, SetFilterColumn, SetFilterOperator, SetFilterRaw, SetMode, SetNull,
+    SetRowLimit, ShowEditor, SortColumn, ToggleFilterJoin, ToggleNextJoin, ToggleSidebar,
+    ZoomEditorIn, ZoomEditorOut,
 };
 use completion::SchemaCompletions;
 use connection_form::{ConnectionForm, default_profile_name};

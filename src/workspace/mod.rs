@@ -580,6 +580,7 @@ impl Render for Workspace {
             .track_focus(&self.focus)
             .on_action(cx.listener(Self::run_query))
             .on_action(cx.listener(Self::explain_query))
+            .on_action(cx.listener(Self::format_query))
             .on_action(cx.listener(Self::choose_mode))
             .on_action(cx.listener(Self::reset_confirmations))
             .on_action(cx.listener(Self::cancel_query))

@@ -15,7 +15,7 @@ use gpui::{
 use gpui_component::{
     Disableable, IconName, Sizable,
     button::Button,
-    input::{Editor, EditorState, Input},
+    input::{self, Editor, EditorState, Input},
     menu::DropdownMenu,
     resizable::{resizable_panel, v_resizable},
     spinner::Spinner,
@@ -25,9 +25,10 @@ use gpui_component::{
 use crate::{
     Settings, Workspace,
     actions::{
-        AddFilter, CancelQuery, ExplainQuery, NewQuery, NewRow, NextPage, PreviousPage,
-        RemoveFilter, ResetEditorZoom, RunQuery, SaveQuery, SetFilterColumn, SetFilterOperator,
-        SetFilterRaw, SetRowLimit, ToggleFilterJoin, ToggleNextJoin, ZoomEditorIn, ZoomEditorOut,
+        AddFilter, CancelQuery, ExplainQuery, FormatQuery, NewQuery, NewRow, NextPage,
+        PreviousPage, RemoveFilter, ResetEditorZoom, RunQuery, SaveQuery, SetFilterColumn,
+        SetFilterOperator, SetFilterRaw, SetRowLimit, ToggleFilterJoin, ToggleNextJoin,
+        ZoomEditorIn, ZoomEditorOut,
     },
     db,
     db::{Engine, ExplainMode, RoutineKind},
@@ -99,7 +100,25 @@ fn render_editor_surface(
                 .appearance(false)
                 .bordered(false)
                 .text_size(px(font_size))
-                .line_height(px(font_size * 1.55)),
+                .line_height(px(font_size * 1.55))
+                // The builder replaces the built-in menu rather than extending
+                // it, so the edit items are restated to keep them. Gone with the
+                // default are Go to Definition and Show Code Actions, which this
+                // editor drew permanently greyed -- dbdelve registers neither
+                // provider, and no language server is coming.
+                .context_menu(|menu, _, cx| {
+                    menu.menu("Cut", Box::new(input::Cut))
+                        .menu("Copy", Box::new(input::Copy))
+                        .menu_with_disabled(
+                            "Paste",
+                            cx.read_from_clipboard().is_none(),
+                            Box::new(input::Paste),
+                        )
+                        .separator()
+                        .menu("Select All", Box::new(input::SelectAll))
+                        .separator()
+                        .menu("Format Query", Box::new(FormatQuery))
+                }),
         );
 
     let expanded = result_pane_is_expanded(query);
