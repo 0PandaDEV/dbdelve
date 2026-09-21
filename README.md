@@ -83,6 +83,8 @@ Applications; the quarantine step doesn't apply here.
 
 [releases]: https://github.com/ShayanAbbas1/dbdelve/releases/latest
 
+For discussions and ideas join the DBDelve discord server: https://discord.gg/upKpusAnS
+
 ## Updating
 
 `brew upgrade --cask dbdelve`, if you installed it that way. Otherwise watch
