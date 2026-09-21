@@ -93,8 +93,8 @@ KWallet) for saved passwords, and xdg-desktop-portal for the export dialog.
 On Debian or Ubuntu the build needs:
 
 ```sh
-sudo apt install build-essential pkg-config cmake libxkbcommon-dev \
-  libxkbcommon-x11-dev libwayland-dev libdbus-1-dev
+sudo apt install build-essential pkg-config cmake libfontconfig-dev \
+  libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libdbus-1-dev
 cargo build --release
 ```
 
