@@ -1,10 +1,15 @@
 name: release-linux
 
-# Tags only, matching dev/release.sh's "v$VERSION" -- that script cuts the
-# macOS release and creates the GitHub release these tarballs attach to.
+# Both triggers on purpose. dev/release.sh cuts the macOS release with
+# `gh release create`, which makes the tag through the API -- and a tag created
+# that way does not reliably raise a push event. `release: published` is the
+# one that always fires for it; the tag push covers a tag pushed by hand.
+# Whichever arrives first uploads, and --clobber makes the second harmless.
 on:
   push:
     tags: ["v*"]
+  release:
+    types: [published]
   workflow_dispatch:
 
 permissions:
@@ -35,7 +40,10 @@ jobs:
 
       # workflow_dispatch has no release to attach to, so it stops at building
       # -- the point of running it by hand is finding out whether it builds.
-      - if: github.event_name == 'push'
-        run: gh release upload "${GITHUB_REF_NAME}" target/linux/*.tar.gz --clobber
+      - if: github.event_name != 'workflow_dispatch'
+        run: gh release upload "${TAG}" target/linux/*.tar.gz --clobber
         env:
           GH_TOKEN: ${{ github.token }}
+          # `github.ref_name` is the tag on a push and the release's tag on a
+          # release event, but only the latter carries `release.tag_name`.
+          TAG: ${{ github.event.release.tag_name || github.ref_name }}
