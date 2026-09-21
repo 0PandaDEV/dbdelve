@@ -307,6 +307,11 @@ fn main() {
                     }),
                 }),
                 window_decorations: Some(WindowDecorations::Server),
+                // Wayland matches a window to its desktop entry by app id and
+                // by nothing else, so without this the app runs with a blank
+                // icon however well the .desktop file is installed. It has to
+                // equal the entry's basename.
+                app_id: Some("dbdelve".into()),
                 ..Default::default()
             };
 
