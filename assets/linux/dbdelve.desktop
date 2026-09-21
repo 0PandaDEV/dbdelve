@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=DBDelve
+Comment=A modern and performant database client for Postgres, MySQL and SQLite
+Exec=dbdelve %f
+Icon=dbdelve
+Terminal=false
+Categories=Development;Database;
+MimeType=application/vnd.sqlite3;application/x-sqlite3;
+# The window carries no WM_CLASS of its own -- gpui only sets one when the
+# window asks for an app_id, and dbdelve does not -- so desktops fall back to
+# the process name. Matching that is what keeps the running window under this
+# icon in the dock rather than beside it.
+StartupWMClass=dbdelve

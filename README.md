@@ -86,11 +86,29 @@ Applications; the quarantine step doesn't apply here.
 
 ### Linux
 
-Source only for now — there is no package yet. X11 and Wayland both work, and
-you need a Vulkan or OpenGL driver, a Secret Service keyring (gnome-keyring or
-KWallet) for saved passwords, and xdg-desktop-portal for the export dialog.
+A tarball, x86_64 or aarch64, built on Ubuntu 22.04 — that is the oldest glibc
+it will run against, so anything at least that new is fine. X11 and Wayland
+both work, and you need a Vulkan or OpenGL driver, a Secret Service keyring
+(gnome-keyring or KWallet) for saved passwords, and xdg-desktop-portal for the
+export dialog.
 
-On Debian or Ubuntu the build needs:
+Take `dbdelve-<version>-linux-<arch>.tar.gz` from [the latest release][releases]
+and run the `install.sh` inside it:
+
+```sh
+tar xzf dbdelve-*-linux-*.tar.gz
+cd dbdelve-*-linux-*/
+./install.sh
+```
+
+Everything goes under `~/.local`, so no root: the binary to `~/.local/bin`, the
+icons and the desktop entry where your desktop looks for them, which is what
+puts DBDelve in the app menu. Make sure `~/.local/bin` is on your PATH —
+`install.sh` says so if it isn't. Updating means unpacking the next release and
+running it again; `./install.sh --uninstall` reverses it and leaves your
+connections and query history alone.
+
+To build it yourself instead, on Debian or Ubuntu the build needs:
 
 ```sh
 sudo apt install build-essential pkg-config cmake libfontconfig-dev \
@@ -98,7 +116,8 @@ sudo apt install build-essential pkg-config cmake libfontconfig-dev \
 cargo build --release
 ```
 
-The binary lands at `target/release/dbdelve` and runs from anywhere. Connections
+The binary lands at `target/release/dbdelve` and runs from anywhere;
+`dev/package-linux.sh` wraps that same build into the tarball above. Connections
 and query history go to `$XDG_DATA_HOME/dbdelve`, or `~/.local/share/dbdelve`.
 
 Chords are the same as macOS with Ctrl in place of Cmd. A `profiles.toml`

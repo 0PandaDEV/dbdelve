@@ -1,0 +1,41 @@
+name: release-linux
+
+# Tags only, matching dev/release.sh's "v$VERSION" -- that script cuts the
+# macOS release and creates the GitHub release these tarballs attach to.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  tarball:
+    strategy:
+      matrix:
+        # 22.04, never ubuntu-latest: glibc is forward-compatible only, so a
+        # binary linked against a newer runner's glibc will not start on Ubuntu
+        # 22.04 or on Debian stable. The oldest runner we build on is the
+        # oldest system the release runs on.
+        runner: [ubuntu-22.04, ubuntu-22.04-arm]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # The same list the README tells a Linux user to install before building
+      # from source. If CI needs something more, the README is wrong too.
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config cmake \
+            libfontconfig-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libwayland-dev libdbus-1-dev
+
+      - run: dev/package-linux.sh
+
+      # workflow_dispatch has no release to attach to, so it stops at building
+      # -- the point of running it by hand is finding out whether it builds.
+      - if: github.event_name == 'push'
+        run: gh release upload "${GITHUB_REF_NAME}" target/linux/*.tar.gz --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
