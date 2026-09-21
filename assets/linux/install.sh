@@ -39,7 +39,12 @@ fi
 
 mkdir -p "$BIN" "$APPS"
 install -m 755 "$HERE/dbdelve" "$BIN/dbdelve"
-install -m 644 "$HERE/dbdelve.desktop" "$APPS/dbdelve.desktop"
+# Exec gets the absolute path rather than the bare name the entry ships with:
+# a desktop launches its entries with the session's PATH, and ~/.local/bin only
+# joins that at login -- and only when it already existed. Bare `dbdelve` would
+# leave the icon there and do nothing when clicked, until the next login.
+sed "s|^Exec=dbdelve |Exec=$BIN/dbdelve |" "$HERE/dbdelve.desktop" > "$APPS/dbdelve.desktop"
+chmod 644 "$APPS/dbdelve.desktop"
 for size in "${SIZES[@]}"; do
   mkdir -p "$ICONS/${size}x${size}/apps"
   install -m 644 "$HERE/icons/dbdelve-$size.png" "$ICONS/${size}x${size}/apps/dbdelve.png"
@@ -49,5 +54,5 @@ refresh
 echo "installed $BIN/dbdelve"
 case ":$PATH:" in
   *":$BIN:"*) ;;
-  *) echo "warning: $BIN is not on your PATH -- add it, or the desktop entry will fail to launch" >&2 ;;
+  *) echo "note: $BIN is not on your PATH, so running dbdelve from a terminal needs a new login -- the menu entry works now regardless" >&2 ;;
 esac
