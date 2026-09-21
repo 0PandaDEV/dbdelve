@@ -494,7 +494,7 @@ fn command_items(workspace: &Workspace, profile: &Profile, cx: &App) -> Vec<Item
             });
             items.push(Item::command(
                 "Refresh rows",
-                "",
+                keycap_text("secondary-r"),
                 icon::RUN,
                 Command::RefreshRelation(tab.id),
             ));

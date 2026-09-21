@@ -28,7 +28,7 @@ use crate::{
         CommandPalette, CopyCell, CycleTheme, DeleteRow, DiscardEdits, EditCell, ExplainQuery,
         FollowForeignKey, FormatQuery, FuzzyOpen, NewConnection, NewQuery, NewRow, NextPage,
         NextProfile, NextTab, OpenSettings, PaletteNext, PalettePrevious, PreviousPage,
-        PreviousProfile, PreviousTab, Quit, ResetEditorZoom, RunQuery, SaveQuery, SetDefault,
+        PreviousProfile, PreviousTab, Quit, RefreshRelation, ResetEditorZoom, RunQuery, SaveQuery, SetDefault,
         SetEmpty, SetNull, ShowEditor, ToggleNextJoin, ToggleSidebar, ZoomEditorIn, ZoomEditorOut,
     },
     db::ExplainMode,
@@ -142,6 +142,7 @@ registry! {
     // Click or command-palette only today; listed so they can be given a
     // chord for the first time.
     ("cancel_query", "Cancel Query", None, [], CancelQuery),
+    ("refresh_relation", "Refresh Rows", None, ["secondary-r"], RefreshRelation),
     ("next_page", "Next Page", None, [], NextPage),
     ("previous_page", "Previous Page", None, [], PreviousPage),
     ("clear_filter", "Clear Filter", None, [], ClearFilter),

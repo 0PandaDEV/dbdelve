@@ -588,6 +588,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::discard_edits))
             .on_action(cx.listener(Self::sort_column))
             .on_action(cx.listener(Self::set_row_limit))
+            .on_action(cx.listener(Self::refresh_active_relation))
             .on_action(cx.listener(Self::next_page))
             .on_action(cx.listener(Self::previous_page))
             .on_action(cx.listener(Self::clear_filter))
