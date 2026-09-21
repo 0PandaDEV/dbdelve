@@ -7,8 +7,7 @@ Icon=dbdelve
 Terminal=false
 Categories=Development;Database;
 MimeType=application/vnd.sqlite3;application/x-sqlite3;
-# The window carries no WM_CLASS of its own -- gpui only sets one when the
-# window asks for an app_id, and dbdelve does not -- so desktops fall back to
-# the process name. Matching that is what keeps the running window under this
-# icon in the dock rather than beside it.
+# Equal to the app id the window sets for itself, which is what keeps the
+# running window under this icon in the dock rather than beside it. The two
+# have to move together.
 StartupWMClass=dbdelve
