@@ -70,7 +70,7 @@ impl Workspace {
         if theme.name == theme::theme(cx).name {
             return;
         }
-        install_theme(theme, window, cx);
+        install_theme(theme.with_opacity(self.settings.opacity), window, cx);
         // The titlebar deliberately no longer names the theme -- permanent
         // chrome should not narrate a setting -- so the switch itself says
         // where it landed.
@@ -79,6 +79,39 @@ impl Workspace {
         }
         self.remember_profiles(cx);
         cx.refresh_windows();
+    }
+
+    /// Written through to disk like the zoom, and reinstalled rather than
+    /// merely notified: `install_theme` snapshots the derived colours into
+    /// gpui-component's globals, so a repaint alone would leave the library's
+    /// half of the window on the old alpha.
+    pub(crate) fn set_opacity(
+        &mut self,
+        opacity: f32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // The field is rewritten before the early return, not after it: typing
+        // 120 against a window already at the ceiling changes nothing, and the
+        // number we refused would otherwise stay on screen as if it had taken.
+        let percent = opacity_percent(opacity).to_string();
+        self.opacity_input
+            .update(cx, |input, cx| input.set_value(percent, window, cx));
+        if self.settings.opacity == opacity {
+            return;
+        }
+        self.settings.opacity = opacity;
+        install_theme(theme::theme(cx).with_opacity(opacity), window, cx);
+        self.remember_profiles(cx);
+        cx.refresh_windows();
+    }
+
+    /// What the typed percentage means, once the user is done typing it. Both
+    /// the way out of the field -- enter and blur -- come through here.
+    pub(crate) fn commit_opacity_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let typed = self.opacity_input.read(cx).value();
+        let opacity = opacity_from_percent_input(&typed, self.settings.opacity);
+        self.set_opacity(opacity, window, cx);
     }
 
     /// Return to the editor, backing out of whatever is in front of it.

@@ -262,7 +262,35 @@ const HAIRLINE_LIGHT: f32 = 0.12;
 /// multiply: chrome is `1 - FROST`, and the planes over it are that again
 /// times their own. Keeping the three within a few points of each other is
 /// what lets the tone ramp, rather than the desktop, say which plane is which.
-const FROST_ALPHA: f32 = 0.72;
+/// The frost, and the one number that covers every plane, since the rest are
+/// tints over this one rather than over the desktop. 0.72 is what the palette
+/// was built against: a quarter of the desktop, blurred, is depth without
+/// texture under the rows.
+///
+/// It stays 0.72 everywhere, including where nothing blurs. GPUI's `Blurred`
+/// is the `org_kde_kwin_blur` Wayland global and nothing else on Linux, so
+/// outside KWin — GNOME, X11 — the desktop arrives sharp and the wallpaper's
+/// own detail reads through the grid. The answer to that is the user raising
+/// this themselves, not the app guessing at which desktop environment it woke
+/// up in and shipping two different windows.
+///
+/// Which is why this is the number the setting moves. Every other plane is a
+/// tint over the frost, so turning this dial slides the whole window against
+/// the desktop with the relationships between the planes intact — there is no
+/// second value to keep in step with it. The floor is where the tone stops
+/// carrying text.
+pub const OPACITY_DEFAULT: f32 = 0.72;
+pub const OPACITY_MIN: f32 = 0.50;
+/// Short of opaque, and that is a palette constraint rather than taste. What
+/// tells this theme's planes apart is mostly how much each lets through, not
+/// their tone — the steps between them are half of dark's. Shut the desktop
+/// out entirely and only those half-steps remain: chrome, editor and results
+/// land within a couple of sRGB levels of each other, which is the one black
+/// rectangle `the_three_planes_are_told_apart_at_a_glance` exists to refuse.
+/// A window with no desktop in it is what `Theme::dark` already is, toned for
+/// the job. Widen the glass tones and this can rise.
+pub const OPACITY_MAX: f32 = 0.95;
+pub const OPACITY_STEP: f32 = 0.05;
 const PANEL_ALPHA: f32 = 0.14;
 const DATA_ALPHA: f32 = 0.14;
 /// A modal card's own transmission. Nowhere near the other three, and for the
@@ -382,6 +410,12 @@ pub struct Theme {
     /// its palette has to be built for that — see [`Theme::glass`].
     pub is_glass: bool,
 
+    /// How much of the window reaches the desktop, and the user's to set. It
+    /// is the frost's alpha and nothing else, because every other plane is a
+    /// tint over the frost — see [`OPACITY_DEFAULT`]. An opaque theme carries
+    /// it too and ignores it, so switching themes and back does not lose it.
+    pub opacity: f32,
+
     /// The content plane, and the brightest tone: the results. The data is
     /// what dbdelve exists to show, so it gets the most light.
     pub bg: Srgb,
@@ -459,8 +493,13 @@ impl Theme {
     /// The window frost: the chrome tone over the blurred desktop, and the
     /// plane every other surface is layered on. Chrome — sidebar, titlebar, tab
     /// strip, status bar — paints nothing of its own and is this.
+    pub fn with_opacity(mut self, opacity: f32) -> Self {
+        self.opacity = opacity;
+        self
+    }
+
     pub fn frost(self) -> Rgba {
-        self.surface.alpha(self.tint(FROST_ALPHA))
+        self.surface.alpha(self.tint(self.opacity))
     }
 
     /// The editor's page, as a tint over [`Theme::frost`].
@@ -730,11 +769,12 @@ impl Theme {
     /// The steps between the planes are half of dark's for the same reason:
     /// they are read through a moving backdrop, and tone that survives on an
     /// opaque page reads as patchiness on a transparent one. What separates the
-    /// planes here is mostly how much they let through — see [`FROST_ALPHA`].
+    /// planes here is mostly how much they let through — see [`OPACITY_DEFAULT`].
     pub fn glass() -> Self {
         Self {
             name: "dbdelve Glass",
             is_glass: true,
+            opacity: OPACITY_DEFAULT,
 
             // Chrome goes near-black and stays there — it is the plane with
             // nothing to read on it, so it can afford to be mostly desktop.
@@ -767,6 +807,7 @@ impl Theme {
             name: "dbdelve Dark",
             appearance: Appearance::Dark,
             is_glass: false,
+            opacity: OPACITY_DEFAULT,
 
             bg: neutral(0.300),
             panel: neutral(0.260),
@@ -813,6 +854,7 @@ impl Theme {
             name: "dbdelve Light",
             appearance: Appearance::Light,
             is_glass: false,
+            opacity: OPACITY_DEFAULT,
 
             bg: WHITE,
             panel: neutral(0.972),

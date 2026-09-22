@@ -99,9 +99,15 @@ impl Workspace {
     pub(crate) fn open_settings(
         &mut self,
         _: &OpenSettings,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Seeded on the way in rather than at startup: the opacity is restored
+        // from disk well after the workspace is built, and this is the only
+        // moment the field is about to be looked at.
+        let percent = opacity_percent(self.settings.opacity).to_string();
+        self.opacity_input
+            .update(cx, |input, cx| input.set_value(percent, window, cx));
         self.settings_open = true;
         cx.notify();
     }
