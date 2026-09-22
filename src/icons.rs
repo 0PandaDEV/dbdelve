@@ -22,7 +22,7 @@ use icondata_core::IconData;
 /// The gpui-component widgets ask for their own paths — those are Lucide names
 /// too, so they resolve here as well. Add a row when something asks for one;
 /// an unlisted path simply draws nothing.
-const ICONS: [(&str, &IconData); 36] = [
+const ICONS: [(&str, &IconData); 37] = [
     ("icons/git-fork.svg", icondata_lu::LuGitFork),
     ("icons/chevron-down.svg", icondata_lu::LuChevronDown),
     ("icons/chevron-right.svg", icondata_lu::LuChevronRight),
@@ -62,6 +62,7 @@ const ICONS: [(&str, &IconData); 36] = [
     ("icons/panel-left.svg", icondata_lu::LuPanelLeft),
     ("icons/type.svg", icondata_lu::LuType),
     ("icons/arrow-up-right.svg", icondata_lu::LuArrowUpRight),
+    ("icons/shield-alert.svg", icondata_lu::LuShieldAlert),
 ];
 
 /// dbdelve's own names for the icons it draws, so a call site names a thing
@@ -71,6 +72,10 @@ pub mod icon {
     pub const CHEVRON_RIGHT: &str = "icons/chevron-right.svg";
     pub const CHEVRON_LEFT: &str = "icons/chevron-left.svg";
     pub const SWITCHER: &str = "icons/chevrons-up-down.svg";
+    /// A connection's mode, on its pill in the titlebar.
+    pub const READ_ONLY: &str = "icons/eye.svg";
+    pub const READ_WRITE: &str = "icons/pencil.svg";
+    pub const FULL_ACCESS: &str = "icons/shield-alert.svg";
     /// Folds the explorer column away, and brings it back.
     pub const SIDEBAR: &str = "icons/panel-left.svg";
     /// A column header's sort state: which way the server ordered the rows, or
@@ -162,6 +167,9 @@ mod tests {
             icon::CHEVRON_DOWN,
             icon::CHEVRON_RIGHT,
             icon::SWITCHER,
+            icon::READ_ONLY,
+            icon::READ_WRITE,
+            icon::FULL_ACCESS,
             icon::SIDEBAR,
             icon::SORT_UP,
             icon::SORT_DOWN,

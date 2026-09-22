@@ -65,25 +65,37 @@ pub(crate) fn row_icon_tinted(
 /// database am I on" and "what can I do to it" are read in one glance or not at
 /// all.
 ///
-/// Deliberately not tinted with the connection's `ConnectionColor`: that colour
-/// answers the first question, and two things wearing one hue answer neither.
+/// Drawn as the same tinted pill as the connection switcher beside it, in a
+/// hue that climbs with what the mode lets through: green reads, yellow
+/// writes, red can do anything.
 ///
 /// A `Button` rather than the plain `Div` this drew as before Task 7: the
 /// titlebar hangs a `dropdown_menu` off it, and that trait is bounded on
 /// `Selectable`, which `Div` does not implement.
 pub(crate) fn mode_pill(t: Theme, mode: Mode) -> Button {
-    button(
-        "connection-mode",
-        mode.label(),
-        Tone::Quiet,
-        Control::Compact,
-        t,
-    )
-    .border_1()
-    .border_color(match mode {
-        Mode::Full => t.border_strong,
-        _ => t.border,
-    })
+    let (color, path) = match mode {
+        Mode::ReadOnly => (ConnectionColor::Green, icon::READ_ONLY),
+        Mode::ReadWrite => (ConnectionColor::Yellow, icon::READ_WRITE),
+        Mode::Full => (ConnectionColor::Red, icon::FULL_ACCESS),
+    };
+    // The look is set on a plain `Div` inside rather than on the `Button`, so
+    // the button's own label sizing cannot drift it from the switcher's.
+    control("connection-mode", Tone::Quiet, Control::Compact)
+        .px(px(layout::SPACE_SM))
+        .rounded(px(layout::RADIUS_CONTROL))
+        .bg(color.fill())
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(layout::SPACE_XS))
+                .text_size(px(layout::TEXT_SM))
+                .text_color(t.text)
+                .font_weight(FontWeight::MEDIUM)
+                .child(row_icon_tinted(t, path, Some(color)))
+                .child(mode.label())
+                .child(row_icon(t, icon::CHEVRON_DOWN)),
+        )
 }
 
 /// dbdelve's own titlebar, drawn where the platform's would be.
