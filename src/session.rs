@@ -177,11 +177,13 @@ pub(crate) struct Session {
     /// list is wanted while a list is being built, which is a frame.
     pub(crate) history: Vec<String>,
     pub(crate) save_name: Entity<InputState>,
-    /// Where to jump to, never where we are: the label beside it is the only
-    /// claim about the current page, so this holds a typed page until Enter
-    /// spends it and empties it again. One field for the window, because only
-    /// the relation in front can be paged.
+    /// The page in front, and where to jump to once it is typed over: see
+    /// `sync_page_input`. One field for the window, because only the relation
+    /// in front can be paged.
     pub(crate) page_input: Entity<InputState>,
+    /// The page last written into `page_input`, to tell a page that moved
+    /// from one that is being typed over.
+    pub(crate) page_shown: usize,
     pub(crate) naming: bool,
     pub(crate) pending_delete: Option<String>,
     /// The saved query `cmd+w` is asking about.
@@ -323,16 +325,14 @@ impl Session {
         )
         .detach();
 
-        let page_input = cx.new(|cx| InputState::new(window, cx).placeholder("Go to"));
-        // With the window, because arriving empties the field, and clearing an
-        // input is editing it.
-        cx.subscribe_in(
+        let page_input = cx.new(|cx| InputState::new(window, cx));
+        cx.subscribe(
             &page_input,
-            window,
-            |workspace, _, event: &InputEvent, window, cx| {
-                if matches!(event, InputEvent::PressEnter { .. }) {
-                    workspace.go_to_page(window, cx);
-                }
+            |workspace, _, event: &InputEvent, cx| match event {
+                InputEvent::PressEnter { .. } => workspace.go_to_page(cx),
+                // A page typed and abandoned goes back to the one in front.
+                InputEvent::Blur => cx.notify(),
+                _ => {}
             },
         )
         .detach();
@@ -389,6 +389,7 @@ impl Session {
             history: store::history(&id),
             save_name,
             page_input,
+            page_shown: 0,
             naming: false,
             pending_delete: None,
             pending_close: None,

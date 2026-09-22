@@ -51,10 +51,7 @@ use crate::{
         Control, Tone, button, button_label, compact_count, dialog, group_thousands, icon_button,
         key_hint, keycap_for, keycap_text, object_icon, row_icon, section_label,
     },
-    workspace::{
-        EDITOR_FONT_SIZE_MAX, EDITOR_FONT_SIZE_MIN, SettingsTab,
-        editor_zoom_percent,
-    },
+    workspace::{EDITOR_FONT_SIZE_MAX, EDITOR_FONT_SIZE_MIN, SettingsTab, editor_zoom_percent},
 };
 
 pub fn render_main_content(
@@ -1759,7 +1756,7 @@ fn render_tab_strip(
     // The pager appears only once there is somewhere to go: a first page
     // shorter than its limit is the whole relation, and arrows over it are
     // controls that can do nothing.
-    let pager = preview.and_then(|(limit, offset, full_page)| {
+    let pager = preview.and_then(|(_, offset, full_page)| {
         (offset > 0 || full_page).then(|| {
             div()
                 .flex_shrink_0()
@@ -1780,18 +1777,32 @@ fn render_tab_strip(
                     })
                 }))
                 .child(
+                    // Dressed as the row-limit chips beside it rather than as
+                    // the library's field: its own fill is the frost again,
+                    // which stacks to a black slab on this strip. A wash lets
+                    // the glass through and is a faint step on opaque themes.
                     div()
+                        .h(px(layout::CONTROL_HEIGHT_COMPACT))
+                        .w(px(44.))
+                        .px(px(layout::SPACE_SM))
+                        .flex()
+                        .items_center()
+                        .rounded(px(layout::RADIUS_CONTROL))
+                        .bg(t.element_active)
+                        // The strong edge is what says "type here": on glass
+                        // the wash alone is close to the strip behind it.
+                        .border_1()
+                        .border_color(t.border_strong)
                         .text_size(px(layout::TEXT_SM))
-                        .text_color(t.text_faint)
-                        // Offsets are multiples of the limit by construction --
-                        // paging moves a page at a time and every other change
-                        // resets to the first -- so the page number is exact.
-                        .child(format!("Page {}", offset / limit + 1)),
+                        .text_color(t.text)
+                        .child(
+                            Input::new(&session.page_input)
+                                .appearance(false)
+                                .px_0()
+                                .h_full()
+                                .text_size(px(layout::TEXT_SM)),
+                        ),
                 )
-                // Beside the label rather than replacing it: the label is
-                // state, this is a destination, and a field that were both
-                // would have to be kept in step with every arrow and chip.
-                .child(Input::new(&session.page_input).small().w(px(64.)))
                 .children(full_page.then(|| {
                     icon_button(
                         "next-page",

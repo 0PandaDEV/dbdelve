@@ -429,6 +429,7 @@ impl Render for Workspace {
         // have: the catalog that names these tabs resolves off-thread, and a
         // grid cannot be built without a window.
         self.restore_objects(window, cx);
+        self.sync_page_input(window, cx);
         // Where a query tab that reached the front without `activate_tab` gets
         // its snapshot read. `session.active` is written in six places --
         // `Session::new`, `activate_tab`, `close_object`, `escape`,
