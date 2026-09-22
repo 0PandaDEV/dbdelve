@@ -578,6 +578,45 @@ impl Workspace {
         cx.write_to_clipboard(ClipboardItem::new_string(value));
     }
 
+    /// One field of the row panel, taken from the fetched cell rather than the
+    /// re-indented, clipped text the panel paints. The field's button shows a
+    /// tick for a moment after, since a copy otherwise changes nothing on
+    /// screen.
+    pub(crate) fn copy_row_field(&mut self, row_ix: usize, col_ix: usize, cx: &mut Context<Self>) {
+        let Some(results) = self
+            .profile()
+            .and_then(|profile| profile.session.active_results())
+        else {
+            return;
+        };
+        let Some(value) = results
+            .read(cx)
+            .delegate()
+            .cell(row_ix, col_ix)
+            .map(str::to_string)
+        else {
+            return;
+        };
+        cx.write_to_clipboard(ClipboardItem::new_string(value));
+
+        let copied = Some((row_ix, col_ix));
+        self.row_panel.copied = copied;
+        cx.notify();
+        cx.spawn(async move |workspace, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(1500))
+                .await;
+            let _ = workspace.update(cx, |workspace, cx| {
+                // A later copy owns the tick now; this timer is not its to clear.
+                if workspace.row_panel.copied == copied {
+                    workspace.row_panel.copied = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
     /// Write the result set in front of the user to a file they pick.
     ///
     /// The rows on screen and only those. A relation tab holds what its

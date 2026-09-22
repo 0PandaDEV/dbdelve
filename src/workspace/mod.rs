@@ -131,6 +131,7 @@ impl Workspace {
             row_panel: views::RowPanel {
                 hidden: false,
                 split: cx.new(|_| ResizableState::default()),
+                copied: None,
             },
             pending_removal: None,
             store_unreadable: false,

@@ -8,9 +8,9 @@
 //! surface it assembles, which is why the rest of the module is private.
 
 use gpui::{
-    AnyElement, ClickEvent, Context, Div, Entity, FontWeight, InteractiveElement, IntoElement,
-    ParentElement, SharedString, Stateful, StatefulInteractiveElement, Styled, Window, div,
-    prelude::FluentBuilder, px,
+    Animation, AnimationExt, AnyElement, ClickEvent, Context, Div, Entity, FontWeight,
+    InteractiveElement, IntoElement, ParentElement, SharedString, Stateful,
+    StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
     Disableable, IconName, Sizable,
@@ -62,6 +62,9 @@ use crate::{
 pub struct RowPanel {
     pub hidden: bool,
     pub split: Entity<ResizableState>,
+    /// The (row, column) whose value was just copied, so its button can show
+    /// a tick until the timer in `copy_row_field` clears it.
+    pub copied: Option<(usize, usize)>,
 }
 
 pub fn render_main_content(
@@ -1044,7 +1047,7 @@ fn render_results(
                     .on_action(cx.listener(Workspace::follow_foreign_key))
                     .child(DataTable::new(results).bordered(false).stripe(false));
                 let body = div().flex_1().flex().min_h_0();
-                match render_row_inspector(results, row_panel.hidden, cx) {
+                match render_row_inspector(results, row_panel, cx) {
                     None => body.child(data),
                     // Folded, the panel keeps a strip of the edge rather than
                     // vanishing: a selected row with nowhere to bring its
@@ -1089,7 +1092,7 @@ fn render_results(
 /// arrow keys move both.
 fn render_row_inspector(
     results: &Entity<TableState<ResultGrid>>,
-    hidden: bool,
+    row_panel: &RowPanel,
     cx: &mut Context<Workspace>,
 ) -> Option<AnyElement> {
     let t = *theme(cx);
@@ -1116,7 +1119,7 @@ fn render_row_inspector(
                 workspace.toggle_row_panel(&ToggleRowPanel, window, cx);
             }))
     };
-    if hidden {
+    if row_panel.hidden {
         return Some(
             div()
                 .h_full()
@@ -1193,8 +1196,49 @@ fn render_row_inspector(
                     .flex()
                     .flex_col()
                     .gap(px(layout::SPACE_MD))
-                    .children(fields.into_iter().map(|field| {
+                    .children(fields.into_iter().enumerate().map(|(col_ix, field)| {
+                        let group = format!("row-field-{col_ix}");
+                        let copy = field.value.is_some().then(|| {
+                            if row_panel.copied == Some((row_ix, col_ix)) {
+                                return div()
+                                    .size(px(Control::Compact.height()))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .child(
+                                        icon(icon::CHECK)
+                                            .size(px(layout::ICON_SIZE))
+                                            .text_color(t.success),
+                                    )
+                                    .with_animation(
+                                        ("copied-row-field", col_ix),
+                                        Animation::new(std::time::Duration::from_millis(150)),
+                                        |tick, delta| tick.opacity(delta),
+                                    )
+                                    .into_any_element();
+                            }
+                            div()
+                                .opacity(0.)
+                                .group_hover(group.clone(), |style| style.opacity(1.))
+                                .child(
+                                    icon_button(
+                                        ("copy-row-field", col_ix),
+                                        icon::COPY,
+                                        Tone::Quiet,
+                                        Control::Compact,
+                                        t,
+                                    )
+                                    .tooltip("Copy value")
+                                    .on_click(cx.listener(
+                                        move |workspace, _, _, cx| {
+                                            workspace.copy_row_field(row_ix, col_ix, cx);
+                                        },
+                                    )),
+                                )
+                                .into_any_element()
+                        });
                         div()
+                            .group(group)
                             .flex()
                             .flex_col()
                             .gap(px(layout::SPACE_XS))
@@ -1212,14 +1256,21 @@ fn render_row_inspector(
                                     // Absent rather than guessed: a type
                                     // dbdelve could not learn is not shown as
                                     // one it inferred from the text.
-                                    .children(field.data_type.map(|data_type| {
+                                    .child(
                                         div()
                                             .ml_auto()
                                             .flex_shrink_0()
-                                            .text_size(px(layout::TEXT_XS))
-                                            .text_color(t.text_faint)
-                                            .child(data_type)
-                                    })),
+                                            .flex()
+                                            .items_center()
+                                            .gap(px(layout::SPACE_XS))
+                                            .children(field.data_type.map(|data_type| {
+                                                div()
+                                                    .text_size(px(layout::TEXT_XS))
+                                                    .text_color(t.text_faint)
+                                                    .child(data_type)
+                                            }))
+                                            .children(copy),
+                                    ),
                             )
                             .child(
                                 div()

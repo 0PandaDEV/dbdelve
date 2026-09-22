@@ -419,7 +419,7 @@ impl ResultGrid {
     /// column is a couple of hundred pixels wide and a JSONB document is not,
     /// and copying what happens to fit would be the same bug as reading a value
     /// through the column.
-    fn cell(&self, row_ix: usize, col_ix: usize) -> Option<&str> {
+    pub(crate) fn cell(&self, row_ix: usize, col_ix: usize) -> Option<&str> {
         self.result.rows.get(row_ix)?.get(col_ix)?.as_deref()
     }
 
