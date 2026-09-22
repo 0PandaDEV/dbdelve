@@ -255,6 +255,8 @@ pub struct StoredSettings {
     pub editor_font_size: Option<f32>,
     #[serde(default)]
     pub preview_rows: Option<usize>,
+    #[serde(default)]
+    pub opacity: Option<f32>,
     /// Keybinding overrides, keyed by the action id in
     /// `keybindings::REGISTRY`. Only the ones a user actually changed --
     /// everything else stays on whatever the running build defaults to.
@@ -1355,6 +1357,7 @@ open_objects = []
                 theme: Some("Dark".into()),
                 editor_font_size: Some(18.0),
                 preview_rows: Some(500),
+                opacity: Some(0.8),
                 custom_keybindings: Some(HashMap::from([(
                     "apply_edits".to_string(),
                     "cmd-shift-s".to_string(),

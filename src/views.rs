@@ -23,7 +23,7 @@ use gpui_component::{
 };
 
 use crate::{
-    Settings, Workspace,
+    Workspace,
     actions::{
         AddFilter, CancelQuery, ExplainQuery, FormatQuery, NewQuery, NewRow, NextPage,
         PreviousPage, RemoveFilter, ResetEditorZoom, RunQuery, SaveQuery, SetFilterColumn,
@@ -43,12 +43,18 @@ use crate::{
         CloseTarget, Explained, ObjectBody, ObjectTab, Profile, QueryState, StructureState, Tab,
         result_pane_is_expanded,
     },
-    theme::{FontSlot, Theme, fonts, layout, theme},
+    theme::{
+        FontSlot, OPACITY_DEFAULT, OPACITY_MAX, OPACITY_MIN, OPACITY_STEP, Theme, fonts, layout,
+        theme,
+    },
     ui::{
         Control, Tone, button, button_label, compact_count, dialog, group_thousands, icon_button,
         key_hint, keycap_for, keycap_text, object_icon, row_icon, section_label,
     },
-    workspace::{EDITOR_FONT_SIZE_MAX, EDITOR_FONT_SIZE_MIN, SettingsTab, editor_zoom_percent},
+    workspace::{
+        EDITOR_FONT_SIZE_MAX, EDITOR_FONT_SIZE_MIN, SettingsTab,
+        editor_zoom_percent,
+    },
 };
 
 pub fn render_main_content(
@@ -1977,7 +1983,7 @@ pub fn render_settings(workspace: &Workspace, cx: &mut Context<Workspace>) -> An
         ));
 
     let body = match tab {
-        SettingsTab::General => render_general_settings(&workspace.settings, cx),
+        SettingsTab::General => render_general_settings(workspace, cx),
         SettingsTab::Keybindings => render_keybindings_settings(workspace, cx),
     };
 
@@ -1998,8 +2004,8 @@ pub fn render_settings(workspace: &Workspace, cx: &mut Context<Workspace>) -> An
                 .child(body)
                 .child(div().flex().justify_end().child(
                     button("settings-done", "Done", Tone::Primary, Control::Standard, t).on_click(
-                        cx.listener(|workspace, _: &ClickEvent, _, cx| {
-                            workspace.close_settings(cx);
+                        cx.listener(|workspace, _: &ClickEvent, window, cx| {
+                            workspace.close_settings(window, cx);
                         }),
                     ),
                 )),
@@ -2009,11 +2015,11 @@ pub fn render_settings(workspace: &Workspace, cx: &mut Context<Workspace>) -> An
 
 /// The Theme / Editor zoom / Fonts / Default limit sections -- unchanged from
 /// before the Keybindings tab existed, just no longer the whole modal.
-fn render_general_settings(settings: &Settings, cx: &mut Context<Workspace>) -> AnyElement {
+fn render_general_settings(workspace: &Workspace, cx: &mut Context<Workspace>) -> AnyElement {
     let t = *theme(cx);
     let families = fonts(cx).clone();
-    let font_size = settings.editor_font_size;
-    let preview_rows = settings.preview_rows;
+    let font_size = workspace.settings.editor_font_size;
+    let preview_rows = workspace.settings.preview_rows;
 
     let themes: Vec<AnyElement> = Theme::all()
         .into_iter()
@@ -2062,6 +2068,55 @@ fn render_general_settings(settings: &Settings, cx: &mut Context<Workspace>) -> 
                     workspace.reset_editor_zoom(&ResetEditorZoom, window, cx);
                 },
             )),
+        );
+
+    // Disabled wholesale on an opaque theme rather than hidden: the setting is
+    // still remembered, it is just that a theme which paints its own chrome
+    // has no desktop behind it for this to let through.
+    let opacity = workspace.settings.opacity;
+    let transparency = div()
+        .flex()
+        .items_center()
+        .gap(px(layout::SPACE_SM))
+        .child(
+            button("opacity-down", "−", Tone::Quiet, Control::Compact, t)
+                .disabled(!t.is_glass || opacity <= OPACITY_MIN)
+                .on_click(cx.listener(|workspace, _: &ClickEvent, window, cx| {
+                    workspace.step_opacity(-OPACITY_STEP, window, cx);
+                })),
+        )
+        .child(
+            // The sign sits beside the field rather than in it. `suffix` lays
+            // out inside the width declared here and pads again on its own, so
+            // a small input carrying one leaves under twenty points for the
+            // text: at 56 the committed 95 rendered as a clipped 9 and a 5.
+            // This is the readout's own width instead -- three typed digits
+            // and the caret, since 100 is reachable on the way to a value that
+            // clamps, inside the small size's 8-point padding.
+            Input::new(&workspace.opacity_input)
+                .small()
+                .w(px(52.))
+                .disabled(!t.is_glass),
+        )
+        .child(
+            div()
+                .text_size(px(layout::TEXT_SM))
+                .text_color(t.text_faint)
+                .child("%"),
+        )
+        .child(
+            button("opacity-up", "+", Tone::Quiet, Control::Compact, t)
+                .disabled(!t.is_glass || opacity >= OPACITY_MAX)
+                .on_click(cx.listener(|workspace, _: &ClickEvent, window, cx| {
+                    workspace.step_opacity(OPACITY_STEP, window, cx);
+                })),
+        )
+        .child(
+            button("opacity-reset", "Reset", Tone::Quiet, Control::Compact, t)
+                .disabled(!t.is_glass)
+                .on_click(cx.listener(|workspace, _: &ClickEvent, window, cx| {
+                    workspace.set_opacity(OPACITY_DEFAULT, window, cx);
+                })),
         );
 
     // The palette rather than a dropdown of our own: it already lists every
@@ -2121,6 +2176,26 @@ fn render_general_settings(settings: &Settings, cx: &mut Context<Workspace>) -> 
             t,
             "Theme",
             div().flex().gap(px(layout::SPACE_XS)).children(themes),
+        ))
+        .child(settings_section(
+            t,
+            "Opacity",
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(layout::SPACE_XS))
+                .child(transparency)
+                .child(
+                    div()
+                        .text_size(px(layout::TEXT_XS))
+                        .text_color(t.text_faint)
+                        .child(
+                            "Everything else is relative to this. The chrome, \
+                             the editor and the results grid are tints over \
+                             the frost set here, so they move with it rather \
+                             than being set apiece.",
+                        ),
+                ),
         ))
         .child(settings_section(t, "Editor zoom", zoom))
         .child(settings_section(

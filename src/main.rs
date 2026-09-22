@@ -77,7 +77,7 @@ use ui::{
     Control, Tone, button, button_label, dialog, group_thousands, human_bytes, icon_button,
     object_icon, relative_age, row_icon, row_icon_tinted, row_readout, section_label, titlebar,
 };
-use workspace::{Settings, Workspace};
+use workspace::Workspace;
 
 /// The platform's window buttons, which dbdelve positions but does not draw.
 const TRAFFIC_LIGHT_DIAMETER: f32 = 14.0;
