@@ -35,7 +35,7 @@ use gpui_component::{
         InputModeKind, InputState, Position,
     },
     list::{List, ListEvent, ListItem, ListState},
-    resizable::{h_resizable, resizable_panel},
+    resizable::{ResizableState, h_resizable, resizable_panel},
     tree::tree as render_tree,
 };
 
@@ -46,8 +46,8 @@ use actions::{
     OpenSettings, PaletteNext, PalettePrevious, PreviousPage, PreviousProfile, PreviousTab, Quit,
     RefreshRelation, RemoveFilter, RequestWriteMode, ResetConfirmations, ResetEditorZoom, RunQuery,
     SaveQuery, SetDefault, SetEmpty, SetFilterColumn, SetFilterOperator, SetFilterRaw, SetMode,
-    SetNull, SetRowLimit, ShowEditor, SortColumn, ToggleFilterJoin, ToggleNextJoin, ToggleSidebar,
-    ZoomEditorIn, ZoomEditorOut,
+    SetNull, SetRowLimit, ShowEditor, SortColumn, ToggleFilterJoin, ToggleNextJoin, ToggleRowPanel,
+    ToggleSidebar, ZoomEditorIn, ZoomEditorOut,
 };
 use completion::SchemaCompletions;
 use connection_form::{ConnectionForm, default_profile_name};
@@ -275,6 +275,7 @@ fn main() {
                     disabled: false,
                     items: vec![
                         MenuItem::action("Toggle Sidebar", ToggleSidebar),
+                        MenuItem::action("Toggle Row Panel", ToggleRowPanel),
                         MenuItem::separator(),
                         MenuItem::action("Zoom In", ZoomEditorIn),
                         MenuItem::action("Zoom Out", ZoomEditorOut),

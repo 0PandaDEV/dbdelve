@@ -19,6 +19,39 @@ impl Workspace {
         cx.notify();
     }
 
+    pub(crate) fn toggle_row_panel(
+        &mut self,
+        _: &ToggleRowPanel,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // With no panel on screen, flipping the flag anyway would open the
+        // next selection already folded.
+        if !self.row_panel.on_screen.get() {
+            return;
+        }
+        let Some(profile) = self.profile_mut() else {
+            return;
+        };
+        match profile.session.active {
+            Tab::Query(id) => {
+                if let Some(tab) = profile.session.query_tab_mut(id) {
+                    tab.row_panel_folded = !tab.row_panel_folded;
+                }
+            }
+            Tab::Object(id) => {
+                if let Some(tab) = profile.session.objects.iter_mut().find(|tab| tab.id == id)
+                    && let ObjectBody::Relation {
+                        row_panel_folded, ..
+                    } = &mut tab.body
+                {
+                    *row_panel_folded = !*row_panel_folded;
+                }
+            }
+        }
+        cx.notify();
+    }
+
     pub(crate) fn cycle_tab(&mut self, step: isize, cx: &mut Context<Self>) {
         let Some(session) = self.profile().map(|profile| &profile.session) else {
             return;

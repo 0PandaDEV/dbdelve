@@ -104,6 +104,8 @@ impl Workspace {
                     offset: 0,
                     stale: false,
                     hydrated: false,
+                    row_panel_folded: false,
+                    row_panel_split: cx.new(|_| ResizableState::default()),
                 }
             }
         };
