@@ -38,6 +38,12 @@ jobs:
 
       - run: dev/package-linux.sh
 
+      # Second, not instead: the tarball installs a desktop entry and icons,
+      # the AppImage is one file that runs without installing anything, and
+      # the release carries both. Both come off the same `cargo build
+      # --release`, so this one is the packaging step alone.
+      - run: dev/package-appimage.sh
+
       # workflow_dispatch has no release to attach to, so it stops at building
       # -- the point of running it by hand is finding out whether it builds.
       # Every other run is a tag push, where `github.ref_name` is the tag.
@@ -55,7 +61,9 @@ jobs:
             echo "no release for $TAG after two minutes -- nothing to upload to" >&2
             exit 1
           fi
-          gh release upload "$TAG" target/linux/*.tar.gz --clobber
+          gh release upload "$TAG" \
+            target/linux/dbdelve-*.tar.gz target/linux/dbdelve-*.AppImage \
+            --clobber
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
