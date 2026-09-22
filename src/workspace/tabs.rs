@@ -25,7 +25,30 @@ impl Workspace {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.row_panel.hidden = !self.row_panel.hidden;
+        // With no panel on screen, flipping the flag anyway would open the
+        // next selection already folded.
+        if !self.row_panel.on_screen.get() {
+            return;
+        }
+        let Some(profile) = self.profile_mut() else {
+            return;
+        };
+        match profile.session.active {
+            Tab::Query(id) => {
+                if let Some(tab) = profile.session.query_tab_mut(id) {
+                    tab.row_panel_folded = !tab.row_panel_folded;
+                }
+            }
+            Tab::Object(id) => {
+                if let Some(tab) = profile.session.objects.iter_mut().find(|tab| tab.id == id)
+                    && let ObjectBody::Relation {
+                        row_panel_folded, ..
+                    } = &mut tab.body
+                {
+                    *row_panel_folded = !*row_panel_folded;
+                }
+            }
+        }
         cx.notify();
     }
 

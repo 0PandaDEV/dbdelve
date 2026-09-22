@@ -54,14 +54,16 @@ use crate::{
     workspace::{EDITOR_FONT_SIZE_MAX, EDITOR_FONT_SIZE_MIN, SettingsTab, editor_zoom_percent},
 };
 
-/// The row panel beside every grid. One for the window rather than one per
-/// tab, so a width dragged to or a fold made in one table holds in the next --
-/// and held as an entity rather than keyed to the element, which would forget
-/// the width every time the selection cleared and the split left the tree.
-/// Not persisted, for the same reason `sidebar_hidden` is not.
+/// What the row panel needs that is not part of any one tab: whether it is
+/// on screen right now, and what was just copied. The fold and the split's
+/// width live on the tab instead (`QueryTab`/`ObjectBody::Relation`), in
+/// memory only, so a panel folded or resized away in one tab does not touch
+/// another -- and neither survives a restart.
 pub struct RowPanel {
-    pub hidden: bool,
-    pub split: Entity<ResizableState>,
+    /// Whether the last frame drew the panel, folded or not. Cleared at the
+    /// top of every frame and set only where the panel is built, so the toggle
+    /// can ignore a fold aimed at a panel that is not there to take it.
+    pub on_screen: std::cell::Cell<bool>,
     /// The (row, column) whose value was just copied, so its button can show
     /// a tick until the timer in `copy_row_field` clears it.
     pub copied: Option<(usize, usize)>,
@@ -178,7 +180,15 @@ fn render_query_surface(
     // that is already a split leaves neither enough room to read.
     let bottom = match tab.showing_plan.then_some(tab.plan.as_ref()).flatten() {
         Some(explained) => render_plan(explained, cx),
-        None => render_results(&tab.query, &tab.results, true, row_panel, cx),
+        None => render_results(
+            &tab.query,
+            &tab.results,
+            true,
+            tab.row_panel_folded,
+            &tab.row_panel_split,
+            row_panel,
+            cx,
+        ),
     };
     render_editor_surface(
         // Keyed by the buffer rather than the profile: two query tabs are two
@@ -466,6 +476,8 @@ fn render_object(
         query,
         filters,
         next_join,
+        row_panel_folded,
+        row_panel_split,
         ..
     } = &tab.body
     else {
@@ -492,12 +504,15 @@ fn render_object(
             *next_join,
             t,
         ))
-        .child(
-            div()
-                .flex_1()
-                .min_h_0()
-                .child(render_results(query, results, false, row_panel, cx)),
-        )
+        .child(div().flex_1().min_h_0().child(render_results(
+            query,
+            results,
+            false,
+            *row_panel_folded,
+            row_panel_split,
+            row_panel,
+            cx,
+        )))
         .into_any_element()
 }
 
@@ -892,6 +907,8 @@ fn render_results(
     query: &QueryState,
     results: &Entity<TableState<ResultGrid>>,
     is_query: bool,
+    folded: bool,
+    split: &Entity<ResizableState>,
     row_panel: &RowPanel,
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
@@ -1047,15 +1064,15 @@ fn render_results(
                     .on_action(cx.listener(Workspace::follow_foreign_key))
                     .child(DataTable::new(results).bordered(false).stripe(false));
                 let body = div().flex_1().flex().min_h_0();
-                match render_row_inspector(results, row_panel, cx) {
+                match render_row_inspector(results, folded, row_panel, cx) {
                     None => body.child(data),
                     // Folded, the panel keeps a strip of the edge rather than
                     // vanishing: a selected row with nowhere to bring its
                     // values back from is a panel the user has lost.
-                    Some(folded) if row_panel.hidden => body.child(data).child(folded),
+                    Some(strip) if folded => body.child(data).child(strip),
                     Some(panel) => body.child(
                         h_resizable("row-inspector-split")
-                            .with_state(&row_panel.split)
+                            .with_state(split)
                             .child(resizable_panel().child(data))
                             .child(
                                 resizable_panel()
@@ -1092,6 +1109,7 @@ fn render_results(
 /// arrow keys move both.
 fn render_row_inspector(
     results: &Entity<TableState<ResultGrid>>,
+    folded: bool,
     row_panel: &RowPanel,
     cx: &mut Context<Workspace>,
 ) -> Option<AnyElement> {
@@ -1111,6 +1129,7 @@ fn render_row_inspector(
     if fields.is_empty() {
         return None;
     }
+    row_panel.on_screen.set(true);
 
     let fold = |id: &'static str, tooltip: &'static str, cx: &mut Context<Workspace>| {
         icon_button(id, icon::ROW_PANEL, Tone::Quiet, Control::Compact, t)
@@ -1119,7 +1138,7 @@ fn render_row_inspector(
                 workspace.toggle_row_panel(&ToggleRowPanel, window, cx);
             }))
     };
-    if row_panel.hidden {
+    if folded {
         return Some(
             div()
                 .h_full()

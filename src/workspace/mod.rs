@@ -129,8 +129,7 @@ impl Workspace {
             rebinding: None,
             sidebar_hidden: false,
             row_panel: views::RowPanel {
-                hidden: false,
-                split: cx.new(|_| ResizableState::default()),
+                on_screen: Default::default(),
                 copied: None,
             },
             pending_removal: None,
@@ -431,6 +430,7 @@ impl Workspace {
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = *theme(cx);
+        self.row_panel.on_screen.set(false);
         // Deferred to render for the `&mut Window` a background task does not
         // have: the catalog that names these tabs resolves off-thread, and a
         // grid cannot be built without a window.

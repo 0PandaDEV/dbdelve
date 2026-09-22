@@ -14,6 +14,7 @@ use std::{collections::HashMap, sync::Arc};
 use gpui::{App, AppContext, Context, Entity, Window};
 use gpui_component::{
     input::{EditorState, InputEvent, InputState},
+    resizable::ResizableState,
     table::TableState,
     tree::TreeState,
 };
@@ -651,6 +652,13 @@ pub(crate) struct QueryTab {
     /// from `plan.is_some()`: a plan that has been read and flipped away from
     /// is still worth keeping to flip back to.
     pub(crate) showing_plan: bool,
+    /// Whether this tab's row-inspector panel is folded away. Per tab, like
+    /// the panel itself (see `RowPanel`), and not persisted.
+    pub(crate) row_panel_folded: bool,
+    /// The row-inspector split's state, per tab: a width dragged to in one
+    /// tab must not resize another's. Not persisted -- a fresh tab always
+    /// starts at the built-in default.
+    pub(crate) row_panel_split: Entity<ResizableState>,
 }
 
 /// A plan, and what it is a plan of.
@@ -703,6 +711,8 @@ impl QueryTab {
             hydrated: false,
             plan: None,
             showing_plan: false,
+            row_panel_folded: false,
+            row_panel_split: cx.new(|_| ResizableState::default()),
         };
         (tab, notice)
     }
@@ -944,6 +954,12 @@ pub(crate) enum ObjectBody {
         /// Whether this tab's snapshot has been looked for yet. See
         /// [`QueryTab::hydrated`].
         hydrated: bool,
+        /// Whether this tab's row-inspector panel is folded away. Per tab:
+        /// see `RowPanel`.
+        row_panel_folded: bool,
+        /// The row-inspector split's state, per tab. See
+        /// [`QueryTab::row_panel_split`].
+        row_panel_split: Entity<ResizableState>,
     },
     Routine(Routine),
 }
