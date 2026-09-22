@@ -19,6 +19,16 @@ impl Workspace {
         cx.notify();
     }
 
+    pub(crate) fn toggle_row_panel(
+        &mut self,
+        _: &ToggleRowPanel,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.row_panel.hidden = !self.row_panel.hidden;
+        cx.notify();
+    }
+
     pub(crate) fn cycle_tab(&mut self, step: isize, cx: &mut Context<Self>) {
         let Some(session) = self.profile().map(|profile| &profile.session) else {
             return;

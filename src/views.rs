@@ -17,7 +17,7 @@ use gpui_component::{
     button::Button,
     input::{self, Editor, EditorState, Input},
     menu::DropdownMenu,
-    resizable::{resizable_panel, v_resizable},
+    resizable::{ResizableState, h_resizable, resizable_panel, v_resizable},
     spinner::Spinner,
     table::{DataTable, TableDelegate, TableState},
 };
@@ -28,7 +28,7 @@ use crate::{
         AddFilter, CancelQuery, ExplainQuery, FormatQuery, NewQuery, NewRow, NextPage,
         PreviousPage, RemoveFilter, ResetEditorZoom, RunQuery, SaveQuery, SetFilterColumn,
         SetFilterOperator, SetFilterRaw, SetRowLimit, ToggleFilterJoin, ToggleNextJoin,
-        ZoomEditorIn, ZoomEditorOut,
+        ToggleRowPanel, ZoomEditorIn, ZoomEditorOut,
     },
     db,
     db::{Engine, ExplainMode, RoutineKind},
@@ -51,20 +51,28 @@ use crate::{
         Control, Tone, button, button_label, compact_count, dialog, group_thousands, icon_button,
         key_hint, keycap_for, keycap_text, object_icon, row_icon, section_label,
     },
-    workspace::{
-        EDITOR_FONT_SIZE_MAX, EDITOR_FONT_SIZE_MIN, SettingsTab,
-        editor_zoom_percent,
-    },
+    workspace::{EDITOR_FONT_SIZE_MAX, EDITOR_FONT_SIZE_MIN, SettingsTab, editor_zoom_percent},
 };
+
+/// The row panel beside every grid. One for the window rather than one per
+/// tab, so a width dragged to or a fold made in one table holds in the next --
+/// and held as an entity rather than keyed to the element, which would forget
+/// the width every time the selection cleared and the split left the tree.
+/// Not persisted, for the same reason `sidebar_hidden` is not.
+pub struct RowPanel {
+    pub hidden: bool,
+    pub split: Entity<ResizableState>,
+}
 
 pub fn render_main_content(
     profile: &Profile,
     editor_font_size: f32,
+    row_panel: &RowPanel,
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
     let body = match profile.session.active_object() {
-        Some(tab) => render_object(tab, profile.config.engine(), cx),
-        None => render_query_surface(profile, editor_font_size, cx),
+        Some(tab) => render_object(tab, profile.config.engine(), row_panel, cx),
+        None => render_query_surface(profile, editor_font_size, row_panel, cx),
     };
 
     div()
@@ -156,6 +164,7 @@ fn render_editor_surface(
 fn render_query_surface(
     profile: &Profile,
     editor_font_size: f32,
+    row_panel: &RowPanel,
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
     let Some(tab) = profile.session.active_query_tab() else {
@@ -166,7 +175,7 @@ fn render_query_surface(
     // that is already a split leaves neither enough room to read.
     let bottom = match tab.showing_plan.then_some(tab.plan.as_ref()).flatten() {
         Some(explained) => render_plan(explained, cx),
-        None => render_results(&tab.query, &tab.results, true, cx),
+        None => render_results(&tab.query, &tab.results, true, row_panel, cx),
     };
     render_editor_surface(
         // Keyed by the buffer rather than the profile: two query tabs are two
@@ -440,7 +449,12 @@ fn round_count(value: f64) -> String {
 /// An opened object. A relation's generated `SELECT` is an ordinary buffer
 /// the user can edit and run; only a routine, which has nothing to run, is
 /// read-only.
-fn render_object(tab: &ObjectTab, engine: Engine, cx: &mut Context<Workspace>) -> AnyElement {
+fn render_object(
+    tab: &ObjectTab,
+    engine: Engine,
+    row_panel: &RowPanel,
+    cx: &mut Context<Workspace>,
+) -> AnyElement {
     let t = *theme(cx);
     let ObjectBody::Relation {
         showing_structure,
@@ -479,7 +493,7 @@ fn render_object(tab: &ObjectTab, engine: Engine, cx: &mut Context<Workspace>) -
             div()
                 .flex_1()
                 .min_h_0()
-                .child(render_results(query, results, false, cx)),
+                .child(render_results(query, results, false, row_panel, cx)),
         )
         .into_any_element()
 }
@@ -875,6 +889,7 @@ fn render_results(
     query: &QueryState,
     results: &Entity<TableState<ResultGrid>>,
     is_query: bool,
+    row_panel: &RowPanel,
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
     let t = *theme(cx);
@@ -1011,32 +1026,46 @@ fn render_results(
                     .child(quiet_line("Refreshing…".into()))
                     .child(div().ml_auto().child(cancel(cx)))
             }))
-            .child(
-                div()
-                    .flex_1()
-                    .flex()
-                    .min_h_0()
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .h_full()
-                            .font_family(grid)
-                            // The grid's own delegate has no key hook and the
-                            // focused element is the table root, so `enter` is
-                            // caught here on its way out of the Table context.
-                            .on_action(cx.listener(Workspace::edit_cell))
-                            .on_action(cx.listener(Workspace::copy_cell))
-                            .on_action(cx.listener(Workspace::set_null))
-                            .on_action(cx.listener(Workspace::set_empty))
-                            .on_action(cx.listener(Workspace::set_default))
-                            .on_action(cx.listener(Workspace::request_write_mode))
-                            .on_action(cx.listener(Workspace::delete_row))
-                            .on_action(cx.listener(Workspace::follow_foreign_key))
-                            .child(DataTable::new(results).bordered(false).stripe(false)),
-                    )
-                    .children(render_row_inspector(results, cx)),
-            )
+            .child({
+                let data = div()
+                    .size_full()
+                    .min_w_0()
+                    .font_family(grid)
+                    // The grid's own delegate has no key hook and the
+                    // focused element is the table root, so `enter` is
+                    // caught here on its way out of the Table context.
+                    .on_action(cx.listener(Workspace::edit_cell))
+                    .on_action(cx.listener(Workspace::copy_cell))
+                    .on_action(cx.listener(Workspace::set_null))
+                    .on_action(cx.listener(Workspace::set_empty))
+                    .on_action(cx.listener(Workspace::set_default))
+                    .on_action(cx.listener(Workspace::request_write_mode))
+                    .on_action(cx.listener(Workspace::delete_row))
+                    .on_action(cx.listener(Workspace::follow_foreign_key))
+                    .child(DataTable::new(results).bordered(false).stripe(false));
+                let body = div().flex_1().flex().min_h_0();
+                match render_row_inspector(results, row_panel.hidden, cx) {
+                    None => body.child(data),
+                    // Folded, the panel keeps a strip of the edge rather than
+                    // vanishing: a selected row with nowhere to bring its
+                    // values back from is a panel the user has lost.
+                    Some(folded) if row_panel.hidden => body.child(data).child(folded),
+                    Some(panel) => body.child(
+                        h_resizable("row-inspector-split")
+                            .with_state(&row_panel.split)
+                            .child(resizable_panel().child(data))
+                            .child(
+                                resizable_panel()
+                                    .size(px(layout::INSPECTOR_WIDTH))
+                                    .size_range(
+                                        px(layout::INSPECTOR_MIN_WIDTH)
+                                            ..px(layout::INSPECTOR_MAX_WIDTH),
+                                    )
+                                    .child(panel),
+                            ),
+                    ),
+                }
+            })
             .into_any_element()
     });
 
@@ -1060,6 +1089,7 @@ fn render_results(
 /// arrow keys move both.
 fn render_row_inspector(
     results: &Entity<TableState<ResultGrid>>,
+    hidden: bool,
     cx: &mut Context<Workspace>,
 ) -> Option<AnyElement> {
     let t = *theme(cx);
@@ -1079,19 +1109,41 @@ fn render_row_inspector(
         return None;
     }
 
+    let fold = |id: &'static str, tooltip: &'static str, cx: &mut Context<Workspace>| {
+        icon_button(id, icon::ROW_PANEL, Tone::Quiet, Control::Compact, t)
+            .tooltip(tooltip)
+            .on_click(cx.listener(|workspace, _, window, cx| {
+                workspace.toggle_row_panel(&ToggleRowPanel, window, cx);
+            }))
+    };
+    if hidden {
+        return Some(
+            div()
+                .h_full()
+                .flex_shrink_0()
+                .px(px(layout::SPACE_XS))
+                .border_l_1()
+                .border_color(t.border)
+                .child(
+                    div()
+                        .h(px(layout::TAB_HEIGHT))
+                        .flex()
+                        .items_center()
+                        .child(fold("show-row-inspector", "Show the row panel", cx)),
+                )
+                .into_any_element(),
+        );
+    }
+
     let table = results.clone();
     Some(
         div()
-            .w(px(layout::INSPECTOR_WIDTH))
-            .flex_shrink_0()
-            .h_full()
+            .size_full()
             .flex()
             .flex_col()
-            // The same plane as the results, separated by its edge rather
-            // than its tone: a second tint here reads as a slab pasted over
-            // the window instead of a panel inside it.
-            .border_l_1()
-            .border_color(t.border)
+            // The same plane as the results, separated by the split's seam
+            // rather than its tone: a second tint here reads as a slab pasted
+            // over the window instead of a panel inside it.
             .child(
                 div()
                     .h(px(layout::TAB_HEIGHT))
@@ -1110,19 +1162,24 @@ fn render_row_inspector(
                             )),
                     )
                     .child(
-                        div().ml_auto().child(
-                            icon_button(
-                                "close-row-inspector",
-                                icon::CLOSE,
-                                Tone::Quiet,
-                                Control::Compact,
-                                t,
-                            )
-                            .tooltip("Close the row panel")
-                            .on_click(move |_, _, cx| {
-                                table.update(cx, |table, cx| table.clear_selection(cx));
-                            }),
-                        ),
+                        div()
+                            .ml_auto()
+                            .flex()
+                            .items_center()
+                            .child(fold("hide-row-inspector", "Hide the row panel", cx))
+                            .child(
+                                icon_button(
+                                    "close-row-inspector",
+                                    icon::CLOSE,
+                                    Tone::Quiet,
+                                    Control::Compact,
+                                    t,
+                                )
+                                .tooltip("Close the row panel")
+                                .on_click(move |_, _, cx| {
+                                    table.update(cx, |table, cx| table.clear_selection(cx));
+                                }),
+                            ),
                     ),
             )
             .child(

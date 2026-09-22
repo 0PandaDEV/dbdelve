@@ -29,8 +29,8 @@ use crate::{
         FollowForeignKey, FormatQuery, FuzzyOpen, NewConnection, NewQuery, NewRow, NextPage,
         NextProfile, NextTab, OpenSettings, PaletteNext, PalettePrevious, PreviousPage,
         PreviousProfile, PreviousTab, Quit, RefreshRelation, ResetEditorZoom, RunQuery, SaveQuery,
-        SetDefault, SetEmpty, SetNull, ShowEditor, ToggleNextJoin, ToggleSidebar, ZoomEditorIn,
-        ZoomEditorOut,
+        SetDefault, SetEmpty, SetNull, ShowEditor, ToggleNextJoin, ToggleRowPanel, ToggleSidebar,
+        ZoomEditorIn, ZoomEditorOut,
     },
     db::ExplainMode,
 };
@@ -140,6 +140,7 @@ registry! {
     ("set_null", "Set Cell to NULL", Some("Table"), ["secondary-backspace"], SetNull),
     ("accept_completion", "Accept Completion", Some("Editor > Input"), ["tab"], AcceptCompletion),
     ("toggle_sidebar", "Toggle Sidebar", None, ["secondary-shift-s"], ToggleSidebar),
+    ("toggle_row_panel", "Toggle Row Panel", None, ["secondary-shift-i"], ToggleRowPanel),
     ("quit", "Quit dbdelve", None, ["secondary-q"], Quit),
     // Click or command-palette only today; listed so they can be given a
     // chord for the first time.

@@ -79,6 +79,7 @@ pub(crate) struct Workspace {
     /// Whether the explorer column is folded away. Not persisted: a hidden
     /// sidebar is a thing done for the next minute, not a preference.
     pub(crate) sidebar_hidden: bool,
+    pub(crate) row_panel: views::RowPanel,
     pub(crate) pending_removal: Option<String>,
     /// Whether `store::load_profiles` failed outright rather than finding no
     /// file. Set once at startup and never cleared, because the file it could
@@ -127,6 +128,10 @@ impl Workspace {
             settings_tab: SettingsTab::default(),
             rebinding: None,
             sidebar_hidden: false,
+            row_panel: views::RowPanel {
+                hidden: false,
+                split: cx.new(|_| ResizableState::default()),
+            },
             pending_removal: None,
             store_unreadable: false,
             next_generation: 0,
@@ -605,6 +610,7 @@ impl Render for Workspace {
             .child(views::render_main_content(
                 profile,
                 self.settings.editor_font_size,
+                &self.row_panel,
                 cx,
             ));
         // With the sidebar folded there is nothing to split, and a split with
@@ -671,6 +677,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::palette_next))
             .on_action(cx.listener(Self::palette_previous))
             .on_action(cx.listener(Self::toggle_sidebar))
+            .on_action(cx.listener(Self::toggle_row_panel))
             .on_action(cx.listener(Self::accept_completion))
             .on_action(cx.listener(Self::open_settings))
             .size_full()

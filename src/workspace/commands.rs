@@ -235,6 +235,7 @@ impl Workspace {
             Command::PickFont(slot) => self.open_palette(PaletteMode::Font(slot), window, cx),
             Command::SetFont(slot, family) => self.set_font(slot, family, cx),
             Command::ToggleSidebar => self.toggle_sidebar(&ToggleSidebar, window, cx),
+            Command::ToggleRowPanel => self.toggle_row_panel(&ToggleRowPanel, window, cx),
             Command::ResetEditorZoom => self.reset_editor_zoom(&ResetEditorZoom, window, cx),
             Command::OpenSettings => self.open_settings(&OpenSettings, window, cx),
         }

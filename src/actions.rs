@@ -123,6 +123,7 @@ actions!(
         PalettePrevious,
         CloseTab,
         ToggleSidebar,
+        ToggleRowPanel,
         AcceptCompletion,
         OpenSettings,
         ResetConfirmations,
