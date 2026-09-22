@@ -96,15 +96,13 @@ pub(crate) fn mode_pill(t: Theme, mode: Mode) -> Button {
 /// anything interactive goes in `leading`, outside it.
 ///
 /// On Linux the window wears a real system titlebar instead, so this row keeps
-/// only the job the system one cannot do — saying which database is in front of
-/// you. Nothing is inset for buttons that are drawn above rather than over it,
-/// and moving the window belongs to the bar the compositor drew.
+/// only the job the system one cannot do — saying, through the connection
+/// switcher in `leading`, which database is in front of you. Nothing is inset
+/// for buttons that are drawn above rather than over it, and moving the window
+/// belongs to the bar the compositor drew.
 pub(crate) fn titlebar(
-    t: Theme,
-    subtitle: Option<String>,
-    color: Option<ConnectionColor>,
     mode: Option<AnyElement>,
-    leading: Option<AnyElement>,
+    leading: Vec<AnyElement>,
 ) -> impl IntoElement {
     div()
         .h(px(layout::TITLEBAR_HEIGHT))
@@ -132,30 +130,6 @@ pub(crate) fn titlebar(
                 .flex()
                 .items_center()
                 .gap(px(layout::SPACE_SM))
-                .children(subtitle.map(|subtitle| {
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(layout::SPACE_XS))
-                        .text_size(px(layout::TEXT_SM))
-                        .text_color(t.text_faint)
-                        .child(row_icon_tinted(t, icon::DATABASE, color))
-                        .child(subtitle)
-                        // With a colour the name is the one thing in the
-                        // titlebar wearing it, so it stops being a subtitle and
-                        // becomes the label of a pill filled with its own hue.
-                        // The fill and the icon carry the colour; the text does
-                        // not, because the same hue at text size on a tint of
-                        // itself is the one arrangement nobody can read.
-                        .when_some(color, |pill, color| {
-                            pill.px(px(layout::SPACE_SM))
-                                .py(px(layout::SPACE_XS))
-                                .rounded(px(layout::RADIUS_CONTROL))
-                                .bg(color.fill())
-                                .text_color(t.text)
-                                .font_weight(FontWeight::MEDIUM)
-                        })
-                }))
                 .children(mode),
         )
 }

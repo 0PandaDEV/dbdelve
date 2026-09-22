@@ -525,7 +525,7 @@ impl Render for Workspace {
                 .on_action(cx.listener(Self::previous_profile))
                 // Without a titlebar of its own the form has no drag handle at
                 // all, since the platform's is transparent.
-                .child(titlebar(t, None, None, None, None))
+                .child(titlebar(None, Vec::new()))
                 .child(
                     div()
                         .flex_1()
@@ -544,9 +544,10 @@ impl Render for Workspace {
                 t.text_muted,
             ),
             // Connected is the one state worth spending on decoration: every
-            // other one is news, and news beats which connection this is.
+            // other one is news, and news beats where the connection points.
+            // Its name is already on the switcher in the titlebar.
             ProfileState::Connected(_) => (
-                format!("{} · {}", profile.name, profile.config.endpoint()),
+                profile.config.endpoint(),
                 profile.color.map_or(t.success, ConnectionColor::swatch),
             ),
             ProfileState::Failed(message) => (message.clone(), t.danger),
@@ -682,9 +683,6 @@ impl Render for Workspace {
             .flex()
             .flex_col()
             .child(titlebar(
-                t,
-                Some(profile.name.clone()),
-                profile.color,
                 Some({
                     let mode = profile.mode;
                     let silenced = profile.confirmed.clone();
@@ -720,7 +718,7 @@ impl Render for Workspace {
                         })
                         .into_any_element()
                 }),
-                Some(
+                vec![
                     icon_button(
                         "toggle-sidebar",
                         icon::SIDEBAR,
@@ -732,7 +730,8 @@ impl Render for Workspace {
                         workspace.toggle_sidebar(&ToggleSidebar, window, cx);
                     }))
                     .into_any_element(),
-                ),
+                    self.render_profile_switcher(cx),
+                ],
             ))
             .child(div().flex_1().min_h_0().child(main_pane))
             .child(

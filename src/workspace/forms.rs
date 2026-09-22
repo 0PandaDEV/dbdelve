@@ -766,9 +766,10 @@ impl Workspace {
         )
     }
 
-    /// The connection switcher: a bottom-anchored row that opens a floating
-    /// panel above itself, the way an account switcher floats over a sidebar,
-    /// rather than an accordion that shoves the tree around.
+    /// The connection switcher: the titlebar's name for the database in front
+    /// of you, which drops a floating panel below itself rather than an
+    /// accordion that shoves the tree around. It is the one place the
+    /// connection is named, so it stays reachable with the sidebar folded.
     pub(crate) fn render_profile_switcher(&self, cx: &mut Context<Self>) -> AnyElement {
         let t = *theme(cx);
         let workspace = cx.entity().downgrade();
@@ -911,9 +912,10 @@ impl Workspace {
                     // out.
                     cx.stop_propagation();
                 })
-                .bottom(px(layout::SWITCHER_HEIGHT + layout::SPACE_XS))
-                .left(px(layout::SPACE_SM))
-                .right(px(layout::SPACE_SM))
+                .top_full()
+                .mt(px(layout::SPACE_XS))
+                .left_0()
+                .w(px(layout::SIDEBAR_DEFAULT_WIDTH))
                 .p(px(layout::SPACE_XS))
                 .bg(t.overlay_glass())
                 .border_1()
@@ -971,24 +973,36 @@ impl Workspace {
             .child(
                 div()
                     .id("profile-switcher")
-                    .h(px(layout::SWITCHER_HEIGHT))
                     .flex()
                     .items_center()
-                    .gap(px(layout::SPACE_SM))
-                    .px(px(layout::SPACE_MD))
-                    .hover(|style| style.bg(t.element_hover))
+                    .gap(px(layout::SPACE_XS))
+                    .px(px(layout::SPACE_SM))
+                    .py(px(layout::SPACE_XS))
+                    .rounded(px(layout::RADIUS_CONTROL))
+                    .text_size(px(layout::TEXT_SM))
+                    .text_color(t.text_faint)
+                    .hover(|style| style.bg(t.element_hover).text_color(t.text))
                     .child(row_icon_tinted(t, icon::DATABASE, active_color))
                     .child(
                         div()
-                            .flex_1()
-                            .min_w_0()
+                            .max_w(px(layout::SIDEBAR_DEFAULT_WIDTH))
                             .overflow_hidden()
                             .text_ellipsis()
                             .whitespace_nowrap()
-                            .font_weight(FontWeight::MEDIUM)
                             .child(active_name),
                     )
-                    .child(row_icon(t, icon::SWITCHER))
+                    .child(row_icon(t, icon::CHEVRON_DOWN))
+                    // With a colour the name is the one thing in the titlebar
+                    // wearing it, so it stops being a subtitle and becomes the
+                    // label of a pill filled with its own hue. The fill and the
+                    // icon carry the colour; the text does not, because the
+                    // same hue at text size on a tint of itself is the one
+                    // arrangement nobody can read.
+                    .when_some(active_color, |pill, color| {
+                        pill.bg(color.fill())
+                            .text_color(t.text)
+                            .font_weight(FontWeight::MEDIUM)
+                    })
                     // While the panel is open its `on_mouse_down_out` already
                     // owns closing, and it fires on the press. Carrying a click
                     // handler here too would reopen on the release, so the open
@@ -1145,6 +1159,5 @@ impl Workspace {
                     .py(px(layout::SPACE_XS))
                     .child(content),
             )
-            .child(self.render_profile_switcher(cx))
     }
 }
