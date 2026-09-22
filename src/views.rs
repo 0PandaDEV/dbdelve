@@ -52,7 +52,7 @@ use crate::{
         key_hint, keycap_for, keycap_text, object_icon, row_icon, section_label,
     },
     workspace::{
-        EDITOR_FONT_SIZE_MAX, EDITOR_FONT_SIZE_MIN, SettingsTab, adjusted_opacity,
+        EDITOR_FONT_SIZE_MAX, EDITOR_FONT_SIZE_MIN, SettingsTab,
         editor_zoom_percent,
     },
 };
@@ -2004,8 +2004,8 @@ pub fn render_settings(workspace: &Workspace, cx: &mut Context<Workspace>) -> An
                 .child(body)
                 .child(div().flex().justify_end().child(
                     button("settings-done", "Done", Tone::Primary, Control::Standard, t).on_click(
-                        cx.listener(|workspace, _: &ClickEvent, _, cx| {
-                            workspace.close_settings(cx);
+                        cx.listener(|workspace, _: &ClickEvent, window, cx| {
+                            workspace.close_settings(window, cx);
                         }),
                     ),
                 )),
@@ -2081,8 +2081,8 @@ fn render_general_settings(workspace: &Workspace, cx: &mut Context<Workspace>) -
         .child(
             button("opacity-down", "−", Tone::Quiet, Control::Compact, t)
                 .disabled(!t.is_glass || opacity <= OPACITY_MIN)
-                .on_click(cx.listener(move |workspace, _: &ClickEvent, window, cx| {
-                    workspace.set_opacity(adjusted_opacity(opacity, -OPACITY_STEP), window, cx);
+                .on_click(cx.listener(|workspace, _: &ClickEvent, window, cx| {
+                    workspace.step_opacity(-OPACITY_STEP, window, cx);
                 })),
         )
         .child(
@@ -2107,8 +2107,8 @@ fn render_general_settings(workspace: &Workspace, cx: &mut Context<Workspace>) -
         .child(
             button("opacity-up", "+", Tone::Quiet, Control::Compact, t)
                 .disabled(!t.is_glass || opacity >= OPACITY_MAX)
-                .on_click(cx.listener(move |workspace, _: &ClickEvent, window, cx| {
-                    workspace.set_opacity(adjusted_opacity(opacity, OPACITY_STEP), window, cx);
+                .on_click(cx.listener(|workspace, _: &ClickEvent, window, cx| {
+                    workspace.step_opacity(OPACITY_STEP, window, cx);
                 })),
         )
         .child(

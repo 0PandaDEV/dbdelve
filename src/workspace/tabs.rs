@@ -114,8 +114,23 @@ impl Workspace {
         self.set_opacity(opacity, window, cx);
     }
 
+    /// A step is a step from what the field says, not from whatever was last
+    /// committed: the step buttons do not take focus, so typing 79 and
+    /// pressing + never blurs the field, and stepping the committed 72 would
+    /// land on 77 and drop the 79 on the way.
+    pub(crate) fn step_opacity(&mut self, delta: f32, window: &mut Window, cx: &mut Context<Self>) {
+        self.commit_opacity_input(window, cx);
+        let stepped = adjusted_opacity(self.settings.opacity, delta);
+        self.set_opacity(stepped, window, cx);
+    }
+
     /// Return to the editor, backing out of whatever is in front of it.
-    pub(crate) fn show_editor(&mut self, _: &ShowEditor, _: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn show_editor(
+        &mut self,
+        _: &ShowEditor,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.form.is_some() && !self.profiles.is_empty() {
             self.form = None;
             cx.notify();
@@ -132,7 +147,7 @@ impl Workspace {
         if self.close_palette(cx) {
             return;
         }
-        if self.close_settings(cx) {
+        if self.close_settings(window, cx) {
             return;
         }
         if self.cancel_discard_close(cx) {

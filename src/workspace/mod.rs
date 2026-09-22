@@ -266,7 +266,21 @@ impl Workspace {
                     // modal could be typed into, and a field that cannot see
                     // a keystroke is a field nobody can fill. A capture in
                     // progress still outranks it -- that is the arm above.
-                    (None, _) if workspace.opacity_input.focus_handle(cx).is_focused(window) => {
+                    //
+                    // Only what the field can actually consume, though: every
+                    // chord the app binds is `secondary-`, so passing those on
+                    // too would close the tab behind the modal on `cmd-w`. The
+                    // clipboard keys are the exception -- the input binds them
+                    // in its own context, which dispatch reaches before
+                    // anything global.
+                    (None, _)
+                        if workspace.opacity_input.focus_handle(cx).is_focused(window)
+                            && (!keystroke.modifiers.secondary()
+                                || matches!(
+                                    keystroke.key.as_str(),
+                                    "a" | "c" | "v" | "x" | "z"
+                                )) =>
+                    {
                         return;
                     }
                     (None, _) => {}

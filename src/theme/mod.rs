@@ -490,14 +490,14 @@ impl Theme {
         themes[index]
     }
 
-    /// The window frost: the chrome tone over the blurred desktop, and the
-    /// plane every other surface is layered on. Chrome — sidebar, titlebar, tab
-    /// strip, status bar — paints nothing of its own and is this.
     pub fn with_opacity(mut self, opacity: f32) -> Self {
         self.opacity = opacity;
         self
     }
 
+    /// The window frost: the chrome tone over the blurred desktop, and the
+    /// plane every other surface is layered on. Chrome — sidebar, titlebar, tab
+    /// strip, status bar — paints nothing of its own and is this.
     pub fn frost(self) -> Rgba {
         self.surface.alpha(self.tint(self.opacity))
     }
