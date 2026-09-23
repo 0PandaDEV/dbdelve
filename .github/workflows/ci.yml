@@ -27,7 +27,8 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
 
   tests:
-    runs-on: ubuntu-22.04
+    # Not 22.04: its sqlite3 (3.37) predates unhex(), which the dev seed uses.
+    runs-on: ubuntu-24.04
     env:
       PGHOST: 127.0.0.1
       PGPORT: "55432"
