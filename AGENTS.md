@@ -309,8 +309,8 @@ Four things in the script are load-bearing:
 - **The font licences ship inside the bundle**, because the fonts are compiled
   into the binary and the OFL asks the licence to travel with them.
 
-**There is still no notarization and no Developer ID**, and releasing no
-longer needs this machine. `dev/release.sh` only pushes the `v$VERSION` tag;
+**There is still no notarization and no Developer ID.** `dev/release.sh`
+only pushes the `v$VERSION` tag;
 `.github/workflows/release.yml` checks the tag against `Cargo.toml`, builds
 the Linux tarballs and AppImages and, on a macOS runner, `dev/bundle.sh`
 (`DBDELVE_CHANNEL=release DBDELVE_SIGN_ID=-`) wrapped into
@@ -320,8 +320,8 @@ publishes the release only once every asset exists, then rewrites
 `TAP_TOKEN` secret. A tag with a hyphen (`v0.2.0-rc.1`) is a pre-release and
 leaves the cask alone; `workflow_dispatch` builds everything and publishes
 nothing. A release still signs ad-hoc rather than with
-`dev/identity.sh`'s certificate: that certificate is trusted only on this
-machine, and to Gatekeeper an issuer nobody trusts reads worse than no issuer
+`dev/identity.sh`'s certificate: that certificate is trusted only on the
+machine that created it, and to Gatekeeper an issuer nobody trusts reads worse than no issuer
 at all. The trade is that the ad-hoc hash moves with every release, so an
 update costs one fresh Keychain prompt. Installing still means clearing
 quarantine by hand — `xattr -dr com.apple.quarantine /Applications/DBDelve.app`
