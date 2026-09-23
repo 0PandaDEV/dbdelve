@@ -112,10 +112,7 @@ pub(crate) fn mode_pill(t: Theme, mode: Mode) -> Button {
 /// switcher in `leading`, which database is in front of you. Nothing is inset
 /// for buttons that are drawn above rather than over it, and moving the window
 /// belongs to the bar the compositor drew.
-pub(crate) fn titlebar(
-    mode: Option<AnyElement>,
-    leading: Vec<AnyElement>,
-) -> impl IntoElement {
+pub(crate) fn titlebar(mode: Option<AnyElement>, leading: Vec<AnyElement>) -> impl IntoElement {
     div()
         .h(px(layout::TITLEBAR_HEIGHT))
         .w_full()
