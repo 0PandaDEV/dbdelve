@@ -275,7 +275,7 @@ builds **two variants from one script**, and neither of them installs:
   the released app, which is meant to stay open alongside.
 - **Release, under `DBDELVE_CHANNEL=release`.** `target/DBDelve.app`, named
   `DBDelve`, id `com.shayanabbas.dbdelve`, no `LSEnvironment`. Only
-  `dev/release.sh` sets it, and the DMG's drag-to-Applications is the install.
+  the release workflow sets it, and the DMG's drag-to-Applications is the install.
 
 **The two variants share nothing on disk.** `DBDELVE_VARIANT` moves both the
 support directory and the Keychain service together — unset or empty is
@@ -309,13 +309,17 @@ Four things in the script are load-bearing:
 - **The font licences ship inside the bundle**, because the fonts are compiled
   into the binary and the OFL asks the licence to travel with them.
 
-**There is still no notarization and no Developer ID**, but the app is no
-longer stuck on this machine. `dev/release.sh` builds with `dev/bundle.sh`
-(`DBDELVE_CHANNEL=release DBDELVE_SIGN_ID=-`), wraps `target/DBDelve.app` into `target/DBDelve-$VERSION.dmg` with an
-`/Applications` symlink alongside it, publishes the DMG with
-`gh release create`, and rewrites `Casks/dbdelve.rb` in the
-`ShayanAbbas1/homebrew-dbdelve` tap (found at `../homebrew-dbdelve`, override with
-`DBDELVE_TAP`) to point at it. A release still signs ad-hoc rather than with
+**There is still no notarization and no Developer ID**, and releasing no
+longer needs this machine. `dev/release.sh` only pushes the `v$VERSION` tag;
+`.github/workflows/release.yml` checks the tag against `Cargo.toml`, builds
+the Linux tarballs and AppImages and, on a macOS runner, `dev/bundle.sh`
+(`DBDELVE_CHANNEL=release DBDELVE_SIGN_ID=-`) wrapped into
+`DBDelve-$VERSION.dmg` with an `/Applications` symlink alongside it. It
+publishes the release only once every asset exists, then rewrites
+`Casks/dbdelve.rb` in the `ShayanAbbas1/homebrew-dbdelve` tap through the
+`TAP_TOKEN` secret. A tag with a hyphen (`v0.2.0-rc.1`) is a pre-release and
+leaves the cask alone; `workflow_dispatch` builds everything and publishes
+nothing. A release still signs ad-hoc rather than with
 `dev/identity.sh`'s certificate: that certificate is trusted only on this
 machine, and to Gatekeeper an issuer nobody trusts reads worse than no issuer
 at all. The trade is that the ad-hoc hash moves with every release, so an
