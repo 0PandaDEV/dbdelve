@@ -309,16 +309,17 @@ Four things in the script are load-bearing:
 - **The font licences ship inside the bundle**, because the fonts are compiled
   into the binary and the OFL asks the licence to travel with them.
 
-**There is still no notarization and no Developer ID.** `dev/release.sh`
-only pushes the `v$VERSION` tag;
-`.github/workflows/release.yml` checks the tag against `Cargo.toml`, builds
-the Linux tarballs and AppImages and, on a macOS runner, `dev/bundle.sh`
-(`DBDELVE_CHANNEL=release DBDELVE_SIGN_ID=-`) wrapped into
-`DBDelve-$VERSION.dmg` with an `/Applications` symlink alongside it. It
-publishes the release only once every asset exists, then rewrites
-`Casks/dbdelve.rb` in the `ShayanAbbas1/homebrew-dbdelve` tap through the
-`TAP_TOKEN` secret. A tag with a hyphen (`v0.2.0-rc.1`) is a pre-release and
-leaves the cask alone; `workflow_dispatch` builds everything and publishes
+**There is still no notarization and no Developer ID.** A release is cut from
+the Actions tab: run `.github/workflows/release.yml` on main with **publish**
+ticked. It builds the Linux tarballs and AppImages and, on a macOS runner,
+`dev/bundle.sh` (`DBDELVE_CHANNEL=release DBDELVE_SIGN_ID=-`) wrapped into
+`DBDelve-$VERSION.dmg` with an `/Applications` symlink alongside it. Only once
+every asset exists does it tag the commit `v$VERSION` and publish the release,
+then it rewrites `Casks/dbdelve.rb` in the `ShayanAbbas1/homebrew-dbdelve` tap
+through the `TAP_TOKEN` secret. The version comes from `Cargo.toml`, so bump it
+first: a version that is already tagged fails before anything builds. A version
+with a hyphen (`0.2.0-rc.1`) is a pre-release, may run from any branch and
+leaves the cask alone. Unticked, the workflow builds everything and publishes
 nothing. A release still signs ad-hoc rather than with
 `dev/identity.sh`'s certificate: that certificate is trusted only on the
 machine that created it, and to Gatekeeper an issuer nobody trusts reads worse than no issuer

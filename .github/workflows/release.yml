@@ -1,35 +1,56 @@
 name: release
 
-# A tag push builds every asset, publishes the release once all of them exist,
-# and repoints the Homebrew cask. workflow_dispatch builds the same assets and
-# stops there -- the point of running it by hand is finding out whether they
-# build. A release made in the web UI creates its tag through the API, which
-# raises no push event, so tags have to be pushed with git (dev/release.sh).
+# Run from the Actions tab. Unticked, it builds every asset and publishes
+# nothing -- the point is finding out whether they build. Ticked, it tags the
+# commit as v<Cargo.toml version>, publishes the release once every asset
+# exists, and repoints the Homebrew cask. A version with a hyphen
+# (0.2.0-rc.1) is published as a pre-release, may come from any branch, and
+# leaves the cask alone.
 on:
-  push:
-    tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the release (unticked builds only)
+        type: boolean
+        default: false
 
 permissions:
   contents: write
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   version:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
     steps:
       - uses: actions/checkout@v4
-      # Before any build, so a tag that disagrees with Cargo.toml fails in
-      # seconds instead of after every asset has been built under the wrong
-      # version.
-      - if: github.event_name == 'push'
+      # Before any build, so a release that cannot go out fails in seconds
+      # instead of after every asset has been built.
+      - id: version
         run: |
           VERSION="$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
-          if [[ "$TAG" != "v$VERSION" ]]; then
-            echo "tag $TAG does not match Cargo.toml version $VERSION" >&2
+          PRERELEASE=false
+          [[ "$VERSION" == *-* ]] && PRERELEASE=true
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+          [[ "$PUBLISH" == true ]] || exit 0
+          # An existing tag means Cargo.toml was not bumped since the last
+          # release, and publishing would reuse a tag on a different commit.
+          if [[ -n "$(git ls-remote --tags origin "refs/tags/v$VERSION")" ]]; then
+            echo "v$VERSION is already tagged -- bump the version in Cargo.toml" >&2
+            exit 1
+          fi
+          if [[ "$PRERELEASE" == false && "$GITHUB_REF" != refs/heads/main ]]; then
+            echo "$VERSION is a stable version -- publish it from main" >&2
             exit 1
           fi
         env:
-          TAG: ${{ github.ref_name }}
+          PUBLISH: ${{ inputs.publish }}
 
   linux:
     needs: version
@@ -100,8 +121,8 @@ jobs:
           if-no-files-found: error
 
   release:
-    needs: [linux, macos]
-    if: github.event_name == 'push'
+    needs: [version, linux, macos]
+    if: inputs.publish
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -114,7 +135,6 @@ jobs:
       # that quietly lost one fails before anything goes public rather than
       # publishing a release that is missing it.
       - run: |
-          VERSION="${TAG#v}"
           for ASSET in "DBDelve-$VERSION.dmg" \
             "dbdelve-$VERSION-linux-x86_64.tar.gz" "dbdelve-$VERSION-x86_64.AppImage" \
             "dbdelve-$VERSION-linux-aarch64.tar.gz" "dbdelve-$VERSION-aarch64.AppImage"; do
@@ -124,19 +144,22 @@ jobs:
               exit 1
             fi
           done
-          PRERELEASE=()
-          [[ "$TAG" == *-* ]] && PRERELEASE=(--prerelease)
-          gh release create "$TAG" assets/* --title "DBDelve $VERSION" \
-            --generate-notes --verify-tag "${PRERELEASE[@]}"
+          PRERELEASE_FLAG=()
+          [[ "$PRERELEASE" == true ]] && PRERELEASE_FLAG=(--prerelease)
+          # --target creates the tag on the commit that was built. A tag made
+          # with github.token starts no other workflow run.
+          gh release create "v$VERSION" assets/* --target "$GITHUB_SHA" \
+            --title "DBDelve $VERSION" --generate-notes "${PRERELEASE_FLAG[@]}"
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.version.outputs.version }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
 
   cask:
-    needs: release
+    needs: [version, release]
     # A pre-release is for testing the pipeline, and Homebrew users would get it
     # as an ordinary update.
-    if: ${{ !contains(github.ref_name, '-') }}
+    if: needs.version.outputs.prerelease == 'false'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -152,7 +175,6 @@ jobs:
           path: tap
 
       - run: |
-          VERSION="${TAG#v}"
           SHA="$(sha256sum "DBDelve-$VERSION.dmg" | cut -d' ' -f1)"
           mkdir -p tap/Casks
           # Rewritten whole rather than patched in place: two substitutions that
@@ -186,4 +208,4 @@ jobs:
           git commit -m "DBDelve $VERSION"
           git push
         env:
-          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.version.outputs.version }}
