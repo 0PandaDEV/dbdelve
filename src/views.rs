@@ -39,6 +39,7 @@ use crate::{
     palette::{Command, Mode as PaletteMode},
     result_grid,
     result_grid::ResultGrid,
+    scroller::{SmoothScrollable, smooth},
     session::{
         CloseTarget, Explained, ObjectBody, ObjectTab, Profile, QueryState, QueryTab,
         StructureState, Tab, result_pane_is_expanded,
@@ -447,6 +448,7 @@ fn render_plan(
                 .flex_1()
                 .min_h_0()
                 .overflow_y_scroll()
+                .smooth_scroll(&smooth("plan-nodes", cx))
                 .p(px(layout::SPACE_SM))
                 .flex()
                 .flex_col()
@@ -920,6 +922,7 @@ fn render_routine(tab: &ObjectTab, cx: &mut Context<Workspace>) -> AnyElement {
                 .flex_1()
                 .min_h_0()
                 .overflow_y_scroll()
+                .smooth_scroll(&smooth("routine-definition", cx))
                 .p(px(layout::SPACE_LG))
                 .font_family(code)
                 .child(routine.definition.clone()),
@@ -1305,6 +1308,7 @@ fn render_row_inspector(
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
+                    .smooth_scroll(&smooth("row-inspector", cx))
                     .px(px(layout::SPACE_SM))
                     .pb(px(layout::SPACE_SM))
                     .flex()
@@ -1532,6 +1536,7 @@ fn render_structure(state: &StructureState, cx: &mut Context<Workspace>) -> AnyE
         .id("structure")
         .size_full()
         .overflow_y_scroll()
+        .smooth_scroll(&smooth("structure", cx))
         .p(px(layout::SPACE_LG))
         .font_family(code)
         .flex()
@@ -2506,6 +2511,7 @@ fn render_keybindings_settings(workspace: &Workspace, cx: &mut Context<Workspace
         .gap(px(layout::SPACE_XS))
         .max_h(px(360.))
         .overflow_y_scroll()
+        .smooth_scroll(&smooth("saved-queries", cx))
         .children(rows)
         .into_any_element()
 }
