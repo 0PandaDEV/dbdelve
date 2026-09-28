@@ -40,25 +40,8 @@ pub const NULL_LABEL: SharedString = SharedString::new_static("NULL");
 /// cell that painted one of them for the other would be lying about the write.
 const DEFAULT_LABEL: SharedString = SharedString::new_static("DEFAULT");
 
-/// The advance width of one character in the grid's monospaced face.
-///
-/// ponytail: a character count times one advance, not real text measurement --
-/// `TableDelegate` is asked for a column width long before there is a text
-/// system to measure with. It is exact for ASCII, which is what column names
-/// and most values are, and a column of wide glyphs is one drag from right.
-const CHAR_WIDTH: f32 = 7.8;
-
-/// Room for the sort control that rides at the trailing edge of a header, so a
-/// column sized to its own name still shows the whole name.
-const HEADER_CONTROL_WIDTH: f32 = 20.0;
-
-const MIN_COLUMN_WIDTH: f32 = 56.0;
-const MAX_COLUMN_WIDTH: f32 = 480.0;
-
-/// ponytail: the widest of the first rows, not of every row. A column width is
-/// a first impression and a drag corrects a wrong one, so measuring 5,000 rows
-/// of geometry to place a column is time the user waits through for nothing.
-const WIDTH_SAMPLE_ROWS: usize = 200;
+/// Where every column starts and the narrowest a drag can leave it.
+const MIN_COLUMN_WIDTH: f32 = 180.0;
 
 /// A row's schema and table, and its primary key as column/value pairs — what a
 /// one-row `DELETE` needs and nothing else.
@@ -211,7 +194,8 @@ impl ResultGrid {
             .enumerate()
             .map(|(index, column)| {
                 Column::new(index.to_string(), column.name.clone())
-                    .width(fitted_width(&column.name, &display, index))
+                    .width(px(MIN_COLUMN_WIDTH))
+                    .min_width(px(MIN_COLUMN_WIDTH))
                     .resizable(true)
                     .movable(false)
                     // The cell padding is dbdelve's, applied in `render_td` and
@@ -282,14 +266,12 @@ impl ResultGrid {
             mode,
         );
 
-        // Over the widths `new` just fitted, which measured the capped rows
-        // rather than the layout the user was actually looking at.
-        for (column, width) in grid.columns.iter_mut().zip(&stored.widths) {
-            column.width = px(*width);
-        }
         // The headers say what the rows are ordered by. `sortable` stays false:
         // whether a header click can do anything is a fact about the statement,
         // and a snapshot is not a statement -- the next run settles it.
+        for (column, width) in grid.columns.iter_mut().zip(&stored.widths) {
+            column.width = px(width.max(MIN_COLUMN_WIDTH));
+        }
         grid.sort = stored.sort.clone();
         let (rows, columns) = (grid.result.rows.len(), grid.columns.len());
         // A snapshot is capped, so the cell that was active may be past the
@@ -379,8 +361,7 @@ impl ResultGrid {
     }
 
     /// The widths the table is drawing, which is where a drag lands: the
-    /// library resizes its own copy of the columns, so without this a snapshot
-    /// would keep the width every column was first fitted to.
+    /// library resizes its own copy of the columns.
     pub fn set_widths(&mut self, widths: &[gpui::Pixels]) {
         for (column, width) in self.columns.iter_mut().zip(widths) {
             column.width = *width;
@@ -976,29 +957,6 @@ fn step_target(
         Step::Cols(by) => (row, col.checked_add_signed(by).filter(|&c| c < cols)?),
     };
     Some(to)
-}
-
-/// A column wide enough for what it holds. One fixed width for every column
-/// wastes the screen on a boolean and hides most of a UUID; a table's own
-/// shape is the only thing that knows how wide its columns want to be.
-fn fitted_width(name: &str, display: &[Vec<Option<SharedString>>], col_ix: usize) -> gpui::Pixels {
-    let widest = display
-        .iter()
-        .take(WIDTH_SAMPLE_ROWS)
-        .filter_map(|row| row.get(col_ix))
-        // A NULL still paints a word, so an all-NULL column is not zero wide.
-        .map(|cell| {
-            cell.as_ref()
-                .map_or(NULL_LABEL.len(), |value| value.chars().count())
-        })
-        .max()
-        .unwrap_or(0);
-
-    let values = widest as f32 * CHAR_WIDTH;
-    let header = name.chars().count() as f32 * CHAR_WIDTH + HEADER_CONTROL_WIDTH;
-    let padding = 2.0 * layout::SPACE_SM;
-
-    px((values.max(header) + padding).clamp(MIN_COLUMN_WIDTH, MAX_COLUMN_WIDTH))
 }
 
 /// What a cell paints: one line, cut to the display limit.
@@ -1745,7 +1703,7 @@ mod tests {
         // the ring on another cell.
         let mut grid = editable_grid();
         grid.sort = vec![(2, false), (0, true)];
-        grid.set_widths(&[px(120.), px(64.), px(200.)]);
+        grid.set_widths(&[px(200.), px(190.), px(240.)]);
         grid.set_active(1, 2);
         // An edit nobody applied stays with the session that typed it.
         assert!(grid.set_pending(0, 1, value("changed")));
@@ -1766,7 +1724,7 @@ mod tests {
                 .iter()
                 .map(|column| column.width)
                 .collect::<Vec<_>>(),
-            [px(120.), px(64.), px(200.)]
+            [px(200.), px(190.), px(240.)]
         );
         assert_eq!(restored.result.rows, grid.result.rows);
         assert_eq!(restored.sort, vec![(2, false), (0, true)]);
@@ -2551,20 +2509,24 @@ mod tests {
     }
 
     #[test]
-    fn a_column_is_as_wide_as_what_it_holds() {
-        let display = vec![
-            vec![Some(SharedString::from("t")), Some("a longer value".into())],
-            vec![Some("f".into()), Some("x".into())],
-        ];
-        let narrow = fitted_width("ok", &display, 0);
-        let wide = fitted_width("note", &display, 1);
+    fn a_column_starts_at_the_minimum_width_and_a_restore_never_goes_below_it() {
+        let mut grid = editable_grid();
+        assert!(
+            grid.columns
+                .iter()
+                .all(|column| column.width == px(MIN_COLUMN_WIDTH))
+        );
 
-        assert!(narrow < wide, "{narrow:?} should be narrower than {wide:?}");
-        // Clamped at both ends: a boolean column still has to be clickable,
-        // and one JSONB document must not take the whole pane.
-        assert!(f32::from(narrow) >= MIN_COLUMN_WIDTH);
-        let document = vec![vec![Some(SharedString::from("y".repeat(9_000)))]];
-        assert!(f32::from(fitted_width("x", &document, 0)) <= MAX_COLUMN_WIDTH);
+        grid.set_widths(&[px(100.), px(190.), px(240.)]);
+        let restored = ResultGrid::restored(&grid.stored(), Mode::ReadWrite);
+        assert_eq!(
+            restored
+                .columns
+                .iter()
+                .map(|column| column.width)
+                .collect::<Vec<_>>(),
+            [px(MIN_COLUMN_WIDTH), px(190.), px(240.)]
+        );
     }
 
     #[test]
