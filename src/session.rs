@@ -975,6 +975,10 @@ pub(crate) fn routine_name(routine: &Routine) -> String {
     format!("{}({})", routine.name, routine.identity_arguments)
 }
 
+// One per open tab, and a routine tab is the rarity: boxing the relation's
+// fields would put an indirection on every one of them to save a few hundred
+// bytes per tab.
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum ObjectBody {
     /// An opened relation: its rows, full height, with the relation's
     /// definition behind the Structure toggle (spec §3.2).
@@ -1031,8 +1035,38 @@ pub(crate) enum ObjectBody {
         /// The row-inspector split's state, per tab. See
         /// [`QueryTab::row_panel_split`].
         row_panel_split: Entity<ResizableState>,
+        /// `COUNT(*)` under the current `filter`, fetched behind the preview
+        /// rather than with it: on a large table it is the slow half.
+        count: RowCount,
     },
     Routine(Routine),
+}
+
+/// A relation's row count, each state carrying the filter it was asked under so
+/// that an answer for an older filter is never shown under a newer one.
+pub(crate) enum RowCount {
+    Unasked,
+    Counting(String),
+    Counted(String, u64),
+    Failed(String),
+}
+
+impl RowCount {
+    pub(crate) fn answers(&self, filter: &str) -> bool {
+        match self {
+            Self::Unasked => false,
+            Self::Counting(asked) | Self::Counted(asked, _) | Self::Failed(asked) => {
+                asked == filter
+            }
+        }
+    }
+
+    pub(crate) fn rows(&self) -> Option<u64> {
+        match self {
+            Self::Counted(_, rows) => Some(*rows),
+            _ => None,
+        }
+    }
 }
 
 pub(crate) enum StructureState {
@@ -1223,6 +1257,16 @@ pub(crate) fn result_pane_is_expanded(query: &QueryState) -> bool {
 mod tests {
     use super::*;
     use crate::sql;
+
+    #[test]
+    fn a_count_answers_only_the_filter_it_was_asked_under() {
+        let count = RowCount::Counted("id > 3".into(), 40);
+        assert!(count.answers("id > 3"));
+        assert!(!count.answers(""));
+        assert!(!RowCount::Unasked.answers(""));
+        assert_eq!(count.rows(), Some(40));
+        assert_eq!(RowCount::Counting(String::new()).rows(), None);
+    }
 
     #[test]
     fn one_relation_and_one_filter_is_one_tab() {

@@ -106,6 +106,7 @@ impl Workspace {
                     hydrated: false,
                     row_panel_folded: false,
                     row_panel_split: cx.new(|_| ResizableState::default()),
+                    count: RowCount::Unasked,
                 }
             }
         };
