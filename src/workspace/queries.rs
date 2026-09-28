@@ -1039,6 +1039,9 @@ impl Workspace {
                     // marked again from the structure the tab already holds.
                     if succeeded && let Tab::Object(object) = tab {
                         workspace.mark_columns(object, cx);
+                        // The rows are in; only now is the count worth asking
+                        // for.
+                        workspace.count_relation(object, cx);
                     }
                     cx.notify();
 
