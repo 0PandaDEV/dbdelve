@@ -305,7 +305,12 @@ impl Workspace {
         cx.intercept_keystrokes(move |event, window, cx| {
             let keystroke = event.keystroke.clone();
             this.update(cx, |workspace, cx| {
-                if !workspace.settings_open || keybindings::is_modifier(&keystroke.key) {
+                // The palette opens over the modal (a font is picked from it) and
+                // holds the keyboard while it does.
+                if !workspace.settings_open
+                    || workspace.palette.is_some()
+                    || keybindings::is_modifier(&keystroke.key)
+                {
                     return;
                 }
                 match (workspace.rebinding, keystroke.key.as_str()) {
