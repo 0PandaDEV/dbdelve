@@ -10,9 +10,9 @@ use crate::tls;
 
 use super::ssh::{Tunnel, tunnelled};
 use super::{
-    Catalog, Cell, Column, DbError, EditTarget, QueryResult, ServerConfig, Sizes, Structure,
-    assemble_catalog, assemble_foreign_keys, assemble_sizes, assemble_structure, non_utf8_error,
-    required_cell,
+    Catalog, Cell, Column, DbError, EditTarget, QueryResult, Reference, ServerConfig, Sizes,
+    Structure, assemble_catalog, assemble_foreign_keys, assemble_references, assemble_sizes,
+    assemble_structure, non_utf8_error, required_cell,
 };
 
 /// The port the server listens on when the profile does not say.
@@ -247,6 +247,37 @@ WHERE namespace.nspname = {schema}
     AND class.relname = {relation}
     AND table_constraint.contype = 'f'
 ORDER BY table_constraint.conname, key.key_position
+";
+
+// The same catalog read from the referenced side: who points at this relation.
+const REFERENCES_SQL: &str = "
+SELECT
+    namespace.nspname AS source_schema,
+    class.relname AS source_table,
+    source_attribute.attname AS column_name,
+    referenced_attribute.attname AS referenced_column,
+    table_constraint.conname AS constraint_name
+FROM pg_catalog.pg_constraint AS table_constraint
+JOIN pg_catalog.pg_class AS class
+    ON class.oid = table_constraint.conrelid
+JOIN pg_catalog.pg_namespace AS namespace
+    ON namespace.oid = class.relnamespace
+JOIN pg_catalog.pg_class AS referenced_class
+    ON referenced_class.oid = table_constraint.confrelid
+JOIN pg_catalog.pg_namespace AS referenced_namespace
+    ON referenced_namespace.oid = referenced_class.relnamespace
+CROSS JOIN LATERAL unnest(table_constraint.conkey, table_constraint.confkey)
+    WITH ORDINALITY AS key(source_attnum, referenced_attnum, key_position)
+JOIN pg_catalog.pg_attribute AS source_attribute
+    ON source_attribute.attrelid = table_constraint.conrelid
+    AND source_attribute.attnum = key.source_attnum
+JOIN pg_catalog.pg_attribute AS referenced_attribute
+    ON referenced_attribute.attrelid = table_constraint.confrelid
+    AND referenced_attribute.attnum = key.referenced_attnum
+WHERE referenced_namespace.nspname = {schema}
+    AND referenced_class.relname = {relation}
+    AND table_constraint.contype = 'f'
+ORDER BY namespace.nspname, class.relname, table_constraint.conname, key.key_position
 ";
 
 // Keyed by oid rather than by name: two schemas can hold a table of the same
@@ -597,6 +628,14 @@ impl Connection {
     pub fn sizes(&self) -> Result<Sizes, DbError> {
         let side = Self::connect(&self.server, self.tunnel.clone())?;
         assemble_sizes(side.internal_query(SIZES_SQL)?)
+    }
+
+    pub fn references(&self, schema: &str, relation: &str) -> Result<Vec<Reference>, DbError> {
+        assemble_references(&self.internal_query(&structure_sql(
+            REFERENCES_SQL,
+            schema,
+            relation,
+        ))?)
     }
 
     pub fn structure(&self, schema: &str, relation: &str) -> Result<Structure, DbError> {
@@ -1827,6 +1866,28 @@ mod tests {
             .expect("query should succeed");
 
         assert!(result.edit.is_none());
+    }
+
+    #[test]
+    #[ignore = "requires a local Postgres server configured through PG*"]
+    fn live_a_relation_lists_the_single_column_keys_that_point_at_it() {
+        let connection = Connection::open(&live_config()).expect("connection should open");
+        let references = connection
+            .references("public", "accounts")
+            .expect("references should load");
+
+        assert!(references.contains(&Reference {
+            schema: "public".into(),
+            table: "orders".into(),
+            column: "account_id".into(),
+            referenced_column: "id".into(),
+        }));
+        assert!(
+            references
+                .iter()
+                .all(|reference| reference.referenced_column != "number"),
+            "a composite key names no single column: {references:?}"
+        );
     }
 
     #[test]

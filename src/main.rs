@@ -61,8 +61,8 @@ use explorer::{ExplorerTarget, ObjectKind, PREVIEW_ROW_LIMIT, tree as build_expl
 use export::Format;
 use filter::{
     Conjunction, FilterBar, FilterRow, Operator, changed_filter, cycle, derived_filter,
-    filter_bars, filter_row, foreign_key_filter, relation_sql, restored_filter, sort_columns,
-    sort_expression, value_placeholder,
+    filter_bars, filter_row, foreign_key_filter, reference_filter, relation_sql, restored_filter,
+    sort_columns, sort_expression, value_placeholder,
 };
 use icons::{Icons, icon};
 use palette::{Command, Mode as PaletteMode, Palette};

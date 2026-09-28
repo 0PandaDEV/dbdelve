@@ -844,6 +844,20 @@ impl Connection {
         }
     }
 
+    /// The foreign keys of other relations that point at this one, for the
+    /// arrow that opens them. Snowflake declares its keys and enforces none of
+    /// them, and its exported-keys listing is not one this has been checked
+    /// against, so it answers nothing rather than a guess.
+    pub fn references(&self, schema: &str, relation: &str) -> Result<Vec<Reference>, DbError> {
+        match self {
+            Self::Postgres(connection) => connection.references(schema, relation),
+            Self::MySql(connection) => connection.references(schema, relation),
+            Self::SqlServer(connection) => connection.references(schema, relation),
+            Self::Sqlite(connection) => connection.references(schema, relation),
+            Self::Snowflake(_) => Ok(Vec::new()),
+        }
+    }
+
     pub fn structure(&self, schema: &str, relation: &str) -> Result<Structure, DbError> {
         match self {
             Self::Postgres(connection) => connection.structure(schema, relation),
@@ -1094,6 +1108,11 @@ pub struct Structure {
     pub indexes: Vec<NamedDefinition>,
     pub constraints: Vec<NamedDefinition>,
     pub foreign_keys: Vec<ForeignKey>,
+    /// The single-column foreign keys of other relations that point at this one.
+    /// Filled by `load_structure` from [`Connection::references`], not by
+    /// [`Connection::structure`]: completion calls that one per relation it
+    /// sees, and has no use for who points back.
+    pub referenced_by: Vec<Reference>,
 }
 
 impl Structure {
@@ -1102,24 +1121,36 @@ impl Structure {
     /// rendering. Empty when none reads back as columns the relation has --
     /// a name holding `, ` cannot be told from two names, and is not guessed at.
     pub fn row_key(&self) -> Vec<String> {
-        let key = |prefix: &str| {
-            self.constraints.iter().find_map(|constraint| {
-                let names: Vec<String> = constraint
-                    .definition
-                    .strip_prefix(prefix)?
-                    .strip_suffix(')')?
-                    .split(", ")
-                    .map(str::to_string)
-                    .collect();
-                names
-                    .iter()
-                    .all(|name| self.columns.iter().any(|column| &column.name == name))
-                    .then_some(names)
-            })
-        };
-        key("PRIMARY KEY (")
-            .or_else(|| key("UNIQUE ("))
+        self.key_of("PRIMARY KEY (", false)
+            .or_else(|| self.key_of("UNIQUE (", false))
             .unwrap_or_default()
+    }
+
+    /// The primary key's columns alone, where [`Structure::row_key`] falls back
+    /// to a unique constraint. Read through any quoting the rendering carries:
+    /// SQLite writes `PRIMARY KEY ("id")`, and this is for marking columns
+    /// rather than for writing SQL.
+    pub fn primary_key(&self) -> Vec<String> {
+        self.key_of("PRIMARY KEY (", true).unwrap_or_default()
+    }
+
+    fn key_of(&self, prefix: &str, unquote: bool) -> Option<Vec<String>> {
+        self.constraints.iter().find_map(|constraint| {
+            let names: Vec<String> = constraint
+                .definition
+                .strip_prefix(prefix)?
+                .strip_suffix(')')?
+                .split(", ")
+                .map(|name| match unquote {
+                    true => name.trim_matches(['"', '`', '[', ']']).to_string(),
+                    false => name.to_string(),
+                })
+                .collect();
+            names
+                .iter()
+                .all(|name| self.columns.iter().any(|column| &column.name == name))
+                .then_some(names)
+        })
     }
 }
 
@@ -1160,6 +1191,18 @@ pub struct ForeignKey {
     pub column: String,
     pub referenced_schema: String,
     pub referenced_table: String,
+    pub referenced_column: String,
+}
+
+/// A foreign key seen from the relation it points at: `column` of `schema.table`
+/// holds values of this relation's `referenced_column`. Single-column keys only,
+/// because a filter on one column of a composite key matches rows that do not
+/// reference the row it was asked from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Reference {
+    pub schema: String,
+    pub table: String,
+    pub column: String,
     pub referenced_column: String,
 }
 
@@ -1343,6 +1386,37 @@ pub(super) fn assemble_foreign_keys(result: &QueryResult) -> Result<Vec<ForeignK
             })
         })
         .collect()
+}
+
+/// The rows of a reverse foreign-key query: `source_schema`, `source_table`,
+/// `column_name`, `referenced_column` and `constraint_name`, one row per column
+/// of each key. Keys of more than one column are dropped here, once, for every
+/// engine that reads them this way.
+pub(super) fn assemble_references(result: &QueryResult) -> Result<Vec<Reference>, DbError> {
+    let mut keys: Vec<((String, String, String), Vec<Reference>)> = Vec::new();
+    for row in &result.rows {
+        let reference = Reference {
+            schema: required_cell(result, row, "source_schema")?.to_string(),
+            table: required_cell(result, row, "source_table")?.to_string(),
+            column: required_cell(result, row, "column_name")?.to_string(),
+            referenced_column: required_cell(result, row, "referenced_column")?.to_string(),
+        };
+        let name = (
+            reference.schema.clone(),
+            reference.table.clone(),
+            required_cell(result, row, "constraint_name")?.to_string(),
+        );
+        match keys.iter_mut().find(|(key, _)| *key == name) {
+            Some((_, columns)) => columns.push(reference),
+            None => keys.push((name, vec![reference])),
+        }
+    }
+    let mut references: Vec<Reference> = keys
+        .into_iter()
+        .filter_map(|(_, mut columns)| (columns.len() == 1).then(|| columns.remove(0)))
+        .collect();
+    references.dedup();
+    Ok(references)
 }
 
 fn schema<'a>(
@@ -2255,7 +2329,13 @@ mod tests {
                 })
                 .collect(),
             foreign_keys: Vec::new(),
+            referenced_by: Vec::new(),
         };
+        assert_eq!(
+            structure(&["UNIQUE (code)", "PRIMARY KEY (\"id\", `code`)"]).primary_key(),
+            ["id", "code"]
+        );
+        assert!(structure(&["UNIQUE (code)"]).primary_key().is_empty());
         assert_eq!(
             structure(&["UNIQUE (code)", "PRIMARY KEY (id, code)"]).row_key(),
             ["id", "code"]

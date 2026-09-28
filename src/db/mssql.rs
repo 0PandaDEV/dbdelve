@@ -32,9 +32,9 @@ use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
 
 use super::ssh::{Tunnel, tunnelled};
 use super::{
-    Catalog, Cell, Column, DbError, EditTarget, Engine, QueryResult, ServerConfig, SslMode,
-    Structure, assemble_catalog, assemble_foreign_keys, assemble_structure, plain_error,
-    required_cell,
+    Catalog, Cell, Column, DbError, EditTarget, Engine, QueryResult, Reference, ServerConfig,
+    SslMode, Structure, assemble_catalog, assemble_foreign_keys, assemble_references,
+    assemble_structure, plain_error, required_cell,
 };
 
 const RELATIONS_SQL: &str = "
@@ -282,6 +282,26 @@ JOIN sys.columns AS referenced_column
     AND referenced_column.column_id = fc.referenced_column_id
 WHERE fc.parent_object_id = {object}
 ORDER BY f.name, fc.constraint_column_id
+";
+
+// The same catalog read from the referenced side: who points at this relation.
+const REFERENCES_SQL: &str = "
+SELECT
+    OBJECT_SCHEMA_NAME(fc.parent_object_id) AS source_schema,
+    OBJECT_NAME(fc.parent_object_id) AS source_table,
+    source_column.name AS column_name,
+    referenced_column.name AS referenced_column,
+    f.name AS constraint_name
+FROM sys.foreign_key_columns AS fc
+JOIN sys.foreign_keys AS f ON f.object_id = fc.constraint_object_id
+JOIN sys.columns AS source_column
+    ON source_column.object_id = fc.parent_object_id
+    AND source_column.column_id = fc.parent_column_id
+JOIN sys.columns AS referenced_column
+    ON referenced_column.object_id = fc.referenced_object_id
+    AND referenced_column.column_id = fc.referenced_column_id
+WHERE fc.referenced_object_id = {object}
+ORDER BY source_schema, source_table, f.name, fc.constraint_column_id
 ";
 
 // An inner join on the primary index is what makes a table without one return
@@ -853,6 +873,14 @@ impl Connection {
             QueryResult::default(),
             self.internal_query(&ROUTINES_SQL.replace("{type}", TYPE_SQL))?,
         )
+    }
+
+    pub fn references(&self, schema: &str, relation: &str) -> Result<Vec<Reference>, DbError> {
+        assemble_references(&self.internal_query(&structure_sql(
+            REFERENCES_SQL,
+            schema,
+            relation,
+        ))?)
     }
 
     pub fn structure(&self, schema: &str, relation: &str) -> Result<Structure, DbError> {
