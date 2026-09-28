@@ -647,7 +647,7 @@ impl Render for Workspace {
                 .on_action(cx.listener(Self::previous_profile))
                 // Without a titlebar of its own the form has no drag handle at
                 // all, since the platform's is transparent.
-                .child(titlebar(t, Vec::new(), Vec::new()))
+                .child(titlebar(t, Vec::new(), Vec::new(), Vec::new()))
                 .child(
                     div()
                         .flex_1()
@@ -1156,6 +1156,20 @@ impl Render for Workspace {
                     }))
                     .into_any_element(),
                     self.render_profile_switcher(cx),
+                ],
+                vec![
+                    icon_button(
+                        "open-settings",
+                        icon::SETTINGS,
+                        Tone::Quiet,
+                        Control::Compact,
+                        t,
+                    )
+                    .tooltip("Settings")
+                    .on_click(|_, window, cx| {
+                        window.dispatch_action(Box::new(OpenSettings), cx);
+                    })
+                    .into_any_element(),
                 ],
             ))
             .child(div().flex_1().min_h_0().child(main_pane))

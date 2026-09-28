@@ -156,6 +156,7 @@ pub(crate) fn titlebar(
     t: Theme,
     pills: Vec<AnyElement>,
     leading: Vec<AnyElement>,
+    trailing: Vec<AnyElement>,
 ) -> impl IntoElement {
     div()
         .h(px(layout::TITLEBAR_HEIGHT))
@@ -188,6 +189,7 @@ pub(crate) fn titlebar(
                 .gap(px(layout::SPACE_SM))
                 .children(pills),
         )
+        .children(trailing)
         .when(cfg!(target_os = "windows"), |row| {
             row.child(caption_buttons(t))
         })
