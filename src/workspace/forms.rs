@@ -471,6 +471,69 @@ impl Workspace {
     }
 
     /// What `cmd+w` asks before it takes unapplied cell edits with the tab.
+    pub(crate) fn render_reference_popup(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let t = *theme(cx);
+        let popup = self.reference_popup.as_ref()?;
+        let rows: Vec<AnyElement> = match &popup.choices {
+            None => vec![note(t, "Checking…")],
+            Some(choices) if choices.is_empty() => {
+                vec![note(t, "No rows reference this key.")]
+            }
+            Some(choices) => choices
+                .iter()
+                .map(|(index, label)| {
+                    let index = *index;
+                    div()
+                        .id(("reference-choice", index))
+                        .px(px(layout::SPACE_SM))
+                        .py(px(layout::SPACE_XS))
+                        .rounded(px(layout::RADIUS_CONTROL))
+                        .text_size(px(layout::TEXT_SM))
+                        .text_color(t.text)
+                        .cursor_pointer()
+                        .hover(|row| row.bg(t.element_hover))
+                        .child(label.clone())
+                        .on_click(cx.listener(move |workspace, _, window, cx| {
+                            workspace.reference_popup = None;
+                            workspace.open_reference(&OpenReference { index }, window, cx);
+                        }))
+                        .into_any_element()
+                })
+                .collect(),
+        };
+
+        Some(
+            div()
+                .id("reference-backdrop")
+                .absolute()
+                .inset_0()
+                .occlude()
+                .on_mouse_down(
+                    gpui::MouseButton::Left,
+                    cx.listener(|workspace, _, _, cx| {
+                        workspace.reference_popup = None;
+                        cx.notify();
+                    }),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .left(popup.at.x)
+                        .top(popup.at.y)
+                        .min_w(px(180.))
+                        .p(px(layout::SPACE_XS))
+                        .flex()
+                        .flex_col()
+                        .rounded(px(layout::RADIUS_CONTROL))
+                        .bg(t.overlay)
+                        .border_1()
+                        .border_color(t.border)
+                        .children(rows),
+                )
+                .into_any_element(),
+        )
+    }
+
     pub(crate) fn render_discard_confirmation(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let t = *theme(cx);
         self.profile()?.session.pending_discard.as_ref()?;
@@ -1457,4 +1520,14 @@ impl Workspace {
                     .child(content),
             )
     }
+}
+
+fn note(t: Theme, text: &'static str) -> AnyElement {
+    div()
+        .px(px(layout::SPACE_SM))
+        .py(px(layout::SPACE_XS))
+        .text_size(px(layout::TEXT_SM))
+        .text_color(t.text_muted)
+        .child(text)
+        .into_any_element()
 }

@@ -967,7 +967,16 @@ impl Render for Workspace {
             .children(self.render_stale_edit(cx))
             .children(self.settings_open.then(|| views::render_settings(self, cx)))
             .children(self.render_palette(cx))
+            .children(self.render_reference_popup(cx))
     }
+}
+
+/// What a reference arrow opened: where it hangs, and the relations that turned
+/// out to hold rows for the key. `None` while the lookup is still out.
+pub(crate) struct ReferencePopup {
+    pub(crate) at: gpui::Point<gpui::Pixels>,
+    pub(crate) choices: Option<Vec<(usize, gpui::SharedString)>>,
+    check: u64,
 }
 
 pub(crate) const EDITOR_FONT_SIZE_DEFAULT: f32 = 14.0;
