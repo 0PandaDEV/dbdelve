@@ -371,7 +371,10 @@ pub(crate) fn button_label(
     t: Theme,
 ) -> impl IntoElement {
     div()
-        .flex_none()
+        .min_w_0()
+        .overflow_hidden()
+        .text_ellipsis()
+        .whitespace_nowrap()
         // Or the descenders decide where the text sits in the box.
         .line_height(gpui::relative(1.))
         .text_size(px(size.text_size()))
