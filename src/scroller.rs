@@ -1,0 +1,333 @@
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    rc::Rc,
+    time::{Duration, Instant},
+};
+
+use gpui::{
+    App, DispatchPhase, Global, HitboxBehavior, ParentElement, Pixels, Point, ScrollHandle,
+    ScrollWheelEvent, StatefulInteractiveElement, Styled, Window, canvas, point, px,
+};
+use gpui_component::scroll::ScrollbarHandle;
+
+const EASE: f32 = 0.12;
+const HERTZ: f32 = 180.0;
+const MAX_FRAME_TIME: Duration = Duration::from_millis(64);
+const REST: Pixels = px(0.5);
+
+type Motion = Rc<RefCell<ScrollMotion>>;
+
+#[derive(Default)]
+struct Registry {
+    handles: HashMap<&'static str, ScrollHandle>,
+    motions: HashMap<&'static str, (Motion, Motion)>,
+}
+
+impl Global for Registry {}
+
+#[derive(Clone)]
+pub struct Smooth {
+    scroll: Rc<dyn ScrollbarHandle>,
+    across: Rc<dyn ScrollbarHandle>,
+    track: Option<ScrollHandle>,
+    motion: Motion,
+    across_motion: Motion,
+    /// Whether the element's own scrolling has to be taken over in the capture
+    /// phase because something beneath it consumes the wheel first.
+    intercept: bool,
+}
+
+pub fn smooth(id: &'static str, cx: &mut App) -> Smooth {
+    let registry = cx.default_global::<Registry>();
+    let handle = registry.handles.entry(id).or_default().clone();
+    let (motion, across_motion) = registry.motions.entry(id).or_default().clone();
+    Smooth {
+        scroll: Rc::new(handle.clone()),
+        across: Rc::new(handle.clone()),
+        track: Some(handle),
+        motion,
+        across_motion,
+        intercept: false,
+    }
+}
+
+#[derive(Default)]
+struct ScrollMotion {
+    shown: Point<Pixels>,
+    target: Point<Pixels>,
+    active: bool,
+    frame_pending: bool,
+    last_frame: Option<Instant>,
+}
+
+impl ScrollMotion {
+    #[cfg(test)]
+    fn new(offset: Point<Pixels>) -> Self {
+        Self {
+            shown: offset,
+            target: offset,
+            active: false,
+            frame_pending: false,
+            last_frame: None,
+        }
+    }
+
+    fn stop(&mut self, offset: Point<Pixels>) {
+        self.shown = offset;
+        self.target = offset;
+        self.active = false;
+        self.last_frame = None;
+    }
+
+    fn sync(&mut self, offset: Point<Pixels>, maximum: Point<Pixels>) {
+        if !self.active || offset != clamp_offset(self.shown, maximum) {
+            self.stop(offset);
+        }
+    }
+
+    fn nudge(&mut self, offset: Point<Pixels>, maximum: Point<Pixels>) {
+        let delta = offset - self.shown;
+        let from = if self.active { self.target } else { self.shown };
+        self.target = clamp_offset(from + delta, maximum);
+        self.shown = clamp_offset(self.shown, maximum);
+        self.active = self.target != self.shown;
+        if !self.active {
+            self.last_frame = None;
+        }
+    }
+
+    fn advance(&mut self, elapsed: Duration, maximum: Point<Pixels>) -> Point<Pixels> {
+        self.target = clamp_offset(self.target, maximum);
+        let distance = self.target - self.shown;
+        if distance.x.abs() < REST && distance.y.abs() < REST {
+            self.stop(self.target);
+        } else {
+            let ease = 1.0 - (1.0 - EASE).powf(elapsed.min(MAX_FRAME_TIME).as_secs_f32() * HERTZ);
+            self.shown = clamp_offset(self.shown + distance * ease, maximum);
+        }
+        self.shown
+    }
+}
+
+fn max_offset(scroll: &dyn ScrollbarHandle) -> Point<Pixels> {
+    let extent = scroll.content_size() - scroll.viewport_bounds().size;
+    point(
+        extent.width.max(Pixels::ZERO),
+        extent.height.max(Pixels::ZERO),
+    )
+}
+
+fn clamp_offset(offset: Point<Pixels>, maximum: Point<Pixels>) -> Point<Pixels> {
+    point(
+        offset.x.clamp(-maximum.x.max(Pixels::ZERO), Pixels::ZERO),
+        offset.y.clamp(-maximum.y.max(Pixels::ZERO), Pixels::ZERO),
+    )
+}
+
+fn schedule_frame(motion: &Motion, scroll: Rc<dyn ScrollbarHandle>, window: &mut Window) {
+    {
+        let mut state = motion.borrow_mut();
+        if !state.active || state.frame_pending {
+            return;
+        }
+        state.frame_pending = true;
+    }
+
+    let motion = motion.clone();
+    window.on_next_frame(move |window, _| {
+        {
+            let mut state = motion.borrow_mut();
+            state.frame_pending = false;
+            let maximum = max_offset(&*scroll);
+            state.sync(scroll.offset(), maximum);
+            if !state.active {
+                return;
+            }
+            let now = Instant::now();
+            let elapsed = state
+                .last_frame
+                .replace(now)
+                .map(|last| now.duration_since(last))
+                .unwrap_or(Duration::from_secs_f32(1.0 / HERTZ));
+            scroll.set_offset(state.advance(elapsed, maximum));
+        }
+        window.refresh();
+        schedule_frame(&motion, scroll.clone(), window);
+    });
+}
+
+pub trait SmoothScrollable: StatefulInteractiveElement + ParentElement + Sized {
+    fn smooth_scroll(self, smooth: &Smooth) -> Self {
+        let Smooth {
+            scroll,
+            across,
+            track,
+            motion,
+            across_motion,
+            intercept,
+        } = smooth.clone();
+        let this = match &track {
+            Some(handle) => self.track_scroll(handle),
+            None => self,
+        };
+        this.capture_any_mouse_down({
+            let motion = motion.clone();
+            let scroll = scroll.clone();
+            let across_motion = across_motion.clone();
+            let across = across.clone();
+            move |_, _, _| {
+                motion.borrow_mut().stop(scroll.offset());
+                across_motion.borrow_mut().stop(across.offset());
+            }
+        })
+        .child({
+            let (scroll, across) = (scroll.clone(), across.clone());
+            let (motion, across_motion) = (motion.clone(), across_motion.clone());
+            canvas(
+                // A hitbox, so a modal drawn over this is known to be in the
+                // way: a bounds check alone would keep scrolling the table
+                // behind it.
+                |bounds, window, _| window.insert_hitbox(bounds, HitboxBehavior::Normal),
+                move |_, hitbox, window, _| {
+                    let (scroll, across) = (scroll.clone(), across.clone());
+                    let (motion, across_motion) = (motion.clone(), across_motion.clone());
+                    window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
+                        if phase != DispatchPhase::Capture || !hitbox.should_handle_scroll(window) {
+                            return;
+                        }
+                        let horizontal = event.modifiers.secondary();
+                        if !horizontal && !intercept {
+                            return;
+                        }
+                        let (handle, state) = match horizontal {
+                            true => (&across, &across_motion),
+                            false => (&scroll, &motion),
+                        };
+                        let maximum = max_offset(&**handle);
+                        let room = match horizontal {
+                            true => maximum.x,
+                            false => maximum.y,
+                        };
+                        let delta = event.delta.pixel_delta(window.line_height());
+                        if room <= REST || (!horizontal && delta.x.abs() > delta.y.abs()) {
+                            return;
+                        }
+                        let offset = handle.offset();
+                        let moved = match horizontal {
+                            true => point(offset.x + delta.x + delta.y, offset.y),
+                            false => point(offset.x, offset.y + delta.y),
+                        };
+                        if event.delta.precise() && !horizontal {
+                            state.borrow_mut().stop(offset);
+                            return;
+                        }
+                        cx.stop_propagation();
+                        handle.set_offset(clamp_offset(moved, maximum));
+                        {
+                            let mut state = state.borrow_mut();
+                            if event.delta.precise() {
+                                state.stop(handle.offset());
+                            } else {
+                                state.nudge(handle.offset(), maximum);
+                                handle.set_offset(state.shown);
+                            }
+                        }
+                        schedule_frame(state, handle.clone(), window);
+                        window.refresh();
+                    });
+                },
+            )
+            .absolute()
+            .size_full()
+        })
+        .on_scroll_wheel(move |event: &ScrollWheelEvent, window, _| {
+            {
+                let mut state = motion.borrow_mut();
+                if event.delta.precise() {
+                    state.stop(scroll.offset());
+                } else {
+                    state.nudge(scroll.offset(), max_offset(&*scroll));
+                    scroll.set_offset(state.shown);
+                }
+            }
+            schedule_frame(&motion, scroll.clone(), window);
+        })
+    }
+}
+
+impl<E: StatefulInteractiveElement + ParentElement> SmoothScrollable for E {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn offset(y: f32) -> Point<Pixels> {
+        point(px(0.0), px(y))
+    }
+
+    #[test]
+    fn repeated_wheel_events_accumulate_and_reverse() {
+        let mut motion = ScrollMotion::new(offset(0.0));
+        motion.nudge(offset(-60.0), offset(1000.0));
+        motion.advance(Duration::from_millis(16), offset(1000.0));
+        assert!(motion.shown.y < px(0.0) && motion.shown.y > px(-60.0));
+        motion.nudge(motion.shown + offset(-60.0), offset(1000.0));
+        assert_eq!(motion.target, offset(-120.0));
+        motion.nudge(motion.shown + offset(90.0), offset(1000.0));
+        assert_eq!(motion.target, offset(-30.0));
+    }
+
+    #[test]
+    fn easing_is_independent_of_refresh_rate() {
+        let run = |frames, seconds| {
+            let mut motion = ScrollMotion::new(offset(0.0));
+            motion.nudge(offset(-1000.0), offset(2000.0));
+            for _ in 0..frames {
+                motion.advance(Duration::from_secs_f32(seconds), offset(2000.0));
+            }
+            motion.shown.y
+        };
+        assert!((run(6, 1.0 / 60.0) - run(18, 1.0 / 180.0)).abs() < px(0.01));
+    }
+
+    #[test]
+    fn scroll_bounds_clamp_targets_and_shrinking_content() {
+        let mut motion = ScrollMotion::new(offset(-100.0));
+        motion.nudge(offset(-500.0), offset(200.0));
+        assert_eq!(motion.target, offset(-200.0));
+        let shown = motion.advance(Duration::from_millis(16), offset(40.0));
+        assert_eq!(shown, offset(-40.0));
+        motion.advance(Duration::from_millis(16), offset(40.0));
+        assert!(!motion.active);
+        motion.nudge(offset(500.0), offset(40.0));
+        assert_eq!(motion.target, offset(0.0));
+    }
+
+    #[test]
+    fn direct_input_and_programmatic_jumps_cancel_motion() {
+        let mut motion = ScrollMotion::new(offset(0.0));
+        motion.nudge(offset(-100.0), offset(1000.0));
+        motion.stop(offset(-25.0));
+        assert!(!motion.active);
+        motion.nudge(offset(-50.0), offset(1000.0));
+        motion.sync(offset(-800.0), offset(1000.0));
+        assert!(!motion.active);
+        assert_eq!(motion.shown, offset(-800.0));
+    }
+
+    #[test]
+    fn motion_settles_exactly_and_empty_regions_stay_idle() {
+        let mut motion = ScrollMotion::new(offset(0.0));
+        motion.nudge(offset(-80.0), offset(0.0));
+        assert!(!motion.active);
+        motion.nudge(offset(-80.0), offset(1000.0));
+        for _ in 0..120 {
+            if motion.active {
+                motion.advance(Duration::from_millis(16), offset(1000.0));
+            }
+        }
+        assert!(!motion.active);
+        assert_eq!(motion.shown, offset(-80.0));
+    }
+}

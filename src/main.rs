@@ -8,6 +8,7 @@ mod export;
 mod filter;
 mod palette;
 mod result_grid;
+mod scroller;
 mod session;
 mod sql;
 mod store;
