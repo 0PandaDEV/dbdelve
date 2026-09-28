@@ -1583,6 +1583,128 @@ fn render_structure(state: &StructureState, cx: &mut Context<Workspace>) -> AnyE
         .into_any_element()
 }
 
+/// The preview's row limit and pager, centred in the status bar: what the
+/// relation's rows were asked for, and the way to the ones after them. `None`
+/// on anything but a relation's rows.
+pub(crate) fn render_paging(profile: &Profile, cx: &mut Context<Workspace>) -> Option<AnyElement> {
+    let t = *theme(cx);
+    let session = &profile.session;
+    // What the preview asked the server for, and the only control over it.
+    // Beside the Data | Structure pair because it belongs to the same view:
+    // it is a property of these rows, not of the window.
+    let preview = session.active_object().and_then(|tab| match &tab.body {
+        ObjectBody::Relation {
+            limit,
+            offset,
+            query,
+            showing_structure: false,
+            ..
+        } => Some((
+            *limit,
+            *offset,
+            // A full page may have another behind it; a short one is the
+            // relation's end. The same gate `turn_page` holds, read here only
+            // to decide whether the button is worth drawing.
+            matches!(query, QueryState::Complete { rows, .. } if *rows >= *limit),
+        )),
+        _ => None,
+    });
+    let row_limit = preview.map(|(limit, _, _)| {
+        let chips: Vec<_> = ROW_LIMITS
+            .into_iter()
+            .map(|rows| row_limit_chip(rows, rows == limit, cx))
+            .collect();
+        div()
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .gap(px(layout::SPACE_XS))
+            .child(
+                div()
+                    .text_size(px(layout::TEXT_SM))
+                    .text_color(t.text_faint)
+                    .child("Rows"),
+            )
+            .children(chips)
+    });
+    // The pager appears only once there is somewhere to go: a first page
+    // shorter than its limit is the whole relation, and arrows over it are
+    // controls that can do nothing.
+    let pager = preview.and_then(|(_, offset, full_page)| {
+        (offset > 0 || full_page).then(|| {
+            div()
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .gap(px(layout::SPACE_XS))
+                .children((offset > 0).then(|| {
+                    icon_button(
+                        "previous-page",
+                        icon::CHEVRON_LEFT,
+                        Tone::Quiet,
+                        Control::Compact,
+                        t,
+                    )
+                    .tooltip("Previous page")
+                    .on_click(move |_, window, cx| {
+                        window.dispatch_action(Box::new(PreviousPage), cx);
+                    })
+                }))
+                .child(
+                    // Dressed as the row-limit chips beside it rather than as
+                    // the library's field: its own fill is the frost again,
+                    // which stacks to a black slab on this strip. A wash lets
+                    // the glass through and is a faint step on opaque themes.
+                    div()
+                        .h(px(layout::CONTROL_HEIGHT_COMPACT))
+                        .w(px(44.))
+                        .px(px(layout::SPACE_SM))
+                        .flex()
+                        .items_center()
+                        .rounded(px(layout::RADIUS_CONTROL))
+                        .bg(t.element_active)
+                        // The strong edge is what says "type here": on glass
+                        // the wash alone is close to the strip behind it.
+                        .border_1()
+                        .border_color(t.border_strong)
+                        .text_size(px(layout::TEXT_SM))
+                        .text_color(t.text)
+                        .child(
+                            Input::new(&session.page_input)
+                                .appearance(false)
+                                .px_0()
+                                .h_full()
+                                .text_size(px(layout::TEXT_SM)),
+                        ),
+                )
+                .children(full_page.then(|| {
+                    icon_button(
+                        "next-page",
+                        icon::CHEVRON_RIGHT,
+                        Tone::Quiet,
+                        Control::Compact,
+                        t,
+                    )
+                    .tooltip("Next page")
+                    .on_click(move |_, window, cx| {
+                        window.dispatch_action(Box::new(NextPage), cx);
+                    })
+                }))
+        })
+    });
+
+    preview.map(|_| {
+        div()
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .gap(px(layout::SPACE_MD))
+            .children(row_limit)
+            .children(pager)
+            .into_any_element()
+    })
+}
+
 /// The tab strip. It sits directly above the editor and starts where the
 /// editor's text does, so a tab labels the surface under it rather than the
 /// window: the active one is lifted to the editor's tone, the rest are names
