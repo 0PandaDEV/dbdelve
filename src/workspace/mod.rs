@@ -657,6 +657,10 @@ impl Render for Workspace {
             .session
             .active_results()
             .map(|results| results.read(cx).delegate().result().rows.len());
+        let column_count = profile
+            .session
+            .active_results()
+            .map(|results| results.read(cx).delegate().columns().len());
         let snapshot_age = profile
             .session
             .active_results()
@@ -671,6 +675,7 @@ impl Render for Workspace {
                 .session
                 .active_query_tab()
                 .is_some_and(|tab| tab.last_query.is_some());
+        let paging = views::render_paging(profile, cx);
         let query_status = match profile.session.active_query() {
             Some(QueryState::Complete {
                 rows,
@@ -678,7 +683,15 @@ impl Render for Workspace {
                 elapsed,
                 ..
             }) => {
-                let count = row_readout(showing.unwrap_or(*rows), *rows);
+                // The pager already says how many rows a relation's page holds,
+                // so only a result without one carries its row count here.
+                let count = paging
+                    .is_none()
+                    .then(|| row_readout(showing.unwrap_or(*rows), *rows));
+                let joined = |rest: String| match count {
+                    Some(count) => format!("{count} \u{b7} {rest}"),
+                    None => rest,
+                };
                 // A snapshot knows neither how many bytes crossed the wire nor
                 // how long it took, so reporting `0 B · 0.0ns` invents two
                 // numbers. What it does know is when it was taken.
@@ -686,9 +699,12 @@ impl Render for Workspace {
                 // buffer's statement is the user's to run again, and nothing
                 // else would tell them the rows are waiting on it.
                 Some(match snapshot_age {
-                    Some(age) if stale_buffer => format!("{count} · from {age} ago"),
-                    Some(age) => format!("{count} · snapshot from {age} ago"),
-                    None => format!("{count} · {} · {elapsed:.1?}", human_bytes(*bytes as u64)),
+                    Some(age) if stale_buffer => joined(format!("from {age} ago")),
+                    Some(age) => joined(format!("snapshot from {age} ago")),
+                    None => joined(format!(
+                        "{} \u{b7} {elapsed:.1?}",
+                        human_bytes(*bytes as u64)
+                    )),
                 })
             }
             // The plan's own rows are not this tab's result and never reached
@@ -699,6 +715,61 @@ impl Render for Workspace {
                 Some(format!("{} · {elapsed:.1?}", mode.label()))
             }
             _ => None,
+        };
+        let row_count = match profile.session.active {
+            Tab::Object(id) => profile
+                .session
+                .objects
+                .iter()
+                .find(|tab| tab.id == id)
+                .and_then(|tab| match &tab.body {
+                    ObjectBody::Relation { count, .. } => count.rows(),
+                    ObjectBody::Routine(_) => None,
+                }),
+            Tab::Query(_) => None,
+        }
+        .map(|rows| row_readout(rows as usize, rows as usize));
+        let left_stats = [
+            row_count,
+            column_count.filter(|columns| *columns > 0).map(|columns| {
+                format!(
+                    "{columns} {}",
+                    if columns == 1 { "column" } else { "columns" }
+                )
+            }),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+        let left_stats = (!left_stats.is_empty()).then(|| left_stats.join(" \u{b7} "));
+        // The dot carries the state and the text carries the words. A whole
+        // status line in green shouts about being connected, which is the
+        // least interesting thing dbdelve can tell you.
+        let status_group = div()
+            .flex()
+            .items_center()
+            .gap(px(layout::SPACE_SM))
+            .min_w_0()
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .size(px(layout::SPACE_XS + 2.))
+                    .rounded_full()
+                    .bg(status_color),
+            )
+            .child(
+                div()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .whitespace_nowrap()
+                    .text_color(if failed { t.danger } else { t.text_muted })
+                    .child(status),
+            );
+        let (sidebar_status, inline_status) = if self.sidebar_hidden {
+            (None, Some(status_group))
+        } else {
+            (Some(status_group), None)
         };
         let notice = profile.session.notice.clone();
         let newer_release = self.newer_release.clone();
@@ -711,29 +782,216 @@ impl Render for Workspace {
         let json_workspace = apply_workspace.clone();
         let refresh_workspace = apply_workspace.clone();
 
+        // Chrome for content, not a fixture of the window: with no tab open
+        // every field below is empty, and an empty bar is a background and a
+        // hairline with nothing on either side of them.
+        let bar_has_content = inline_status.is_some()
+            || left_stats.is_some()
+            || notice.is_some()
+            || paging.is_some()
+            || query_status.is_some()
+            || refreshable_snapshot
+            || has_results
+            || has_pending;
+
+        let results_status = bar_has_content.then(|| {
+            div()
+                .h(px(layout::STATUS_HEIGHT))
+                .flex_shrink_0()
+                .border_t_1()
+                .border_color(t.border)
+                .text_size(px(layout::TEXT_SM))
+                .min_w_0()
+                .flex()
+                .items_center()
+                .gap(px(layout::SPACE_SM))
+                .px(px(layout::SPACE_MD))
+                .bg(t.data_glass())
+                .children(inline_status)
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .items_center()
+                        .gap(px(layout::SPACE_SM))
+                        .children(left_stats.map(|stats| {
+                            div()
+                                .flex_shrink_0()
+                                .whitespace_nowrap()
+                                .text_color(t.text_faint)
+                                .child(stats)
+                        }))
+                        .children(notice.map(|notice| {
+                            div()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .whitespace_nowrap()
+                                .text_color(t.text_muted)
+                                .child(notice)
+                        })),
+                )
+                // Between two sides that share the free space equally, so
+                // it sits at the middle of the bar whatever either holds.
+                .children(paging)
+                // One right-hand cluster taking the other half of that
+                // space, so the readout stays against the edge.
+                //
+                // Each control appears only when it does something. A pair
+                // of buttons that do nothing is a pair to read past --
+                // see `apply_edits` for its `cmd+s` binding.
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .justify_end()
+                        .flex()
+                        .items_center()
+                        .gap(px(layout::SPACE_SM))
+                        .children(query_status.map(|query_status| {
+                            div()
+                                .text_color(match stale_buffer {
+                                    true => t.text_muted,
+                                    false => t.text_faint,
+                                })
+                                .child(query_status)
+                        }))
+                        // Through the stale-rows prompt rather than straight
+                        // to a run, so the statement is read before it is
+                        // sent.
+                        .children(refreshable_snapshot.then(|| {
+                            button(
+                                "refresh-snapshot",
+                                "Refresh…",
+                                Tone::Quiet,
+                                Control::Compact,
+                                t,
+                            )
+                            .on_click(move |_, _, cx| {
+                                _ = refresh_workspace.update(cx, |workspace, cx| {
+                                    workspace.ask_refresh_stale(cx);
+                                });
+                            })
+                        }))
+                        .children(has_results.then(|| {
+                            button(
+                                "copy-results",
+                                "Copy Results",
+                                Tone::Quiet,
+                                Control::Compact,
+                                t,
+                            )
+                            .on_click(move |_, _, cx| {
+                                _ = copy_workspace.update(cx, |workspace, cx| {
+                                    workspace.copy_results_as(Format::Tsv, cx);
+                                });
+                            })
+                        }))
+                        // Named, not one button over a menu: the choice is
+                        // between two things, and a control that opens
+                        // another control to ask which is a click spent on
+                        // nothing. It also puts the format on screen, which
+                        // a lone "Export" left to the file extension.
+                        .children(has_results.then(|| {
+                            button("export-csv", "Export CSV", Tone::Quiet, Control::Compact, t)
+                                .on_click(move |_, _, cx| {
+                                    _ = csv_workspace.update(cx, |workspace, cx| {
+                                        workspace.export_results(Format::Csv, cx);
+                                    });
+                                })
+                        }))
+                        .children(has_results.then(|| {
+                            button(
+                                "export-json",
+                                "Export JSON",
+                                Tone::Quiet,
+                                Control::Compact,
+                                t,
+                            )
+                            .on_click(move |_, _, cx| {
+                                _ = json_workspace.update(cx, |workspace, cx| {
+                                    workspace.export_results(Format::Json, cx);
+                                });
+                            })
+                        }))
+                        .children(has_pending.then(|| {
+                            button("discard-edits", "Discard", Tone::Quiet, Control::Compact, t)
+                                .on_click(move |_, window, cx| {
+                                    _ = discard_workspace.update(cx, |workspace, cx| {
+                                        workspace.discard_edits(&DiscardEdits, window, cx);
+                                    });
+                                })
+                        }))
+                        .children(has_pending.then(|| {
+                            button(
+                                "apply-edits",
+                                "Apply edits",
+                                Tone::Primary,
+                                Control::Compact,
+                                t,
+                            )
+                            .on_click(move |_, window, cx| {
+                                _ = apply_workspace.update(cx, |workspace, cx| {
+                                    workspace.apply_edits(&ApplyEdits, window, cx);
+                                });
+                            })
+                        })),
+                )
+        });
+
         let content = div()
             // Flush, not a floating card: the split handle already draws the
             // one seam, and the planes inside separate by tone.
             .size_full()
             .min_w_0()
-            .child(views::render_main_content(
+            .flex()
+            .flex_col()
+            .child(div().flex_1().min_h_0().child(views::render_main_content(
                 profile,
                 self.settings.editor_font_size,
                 &self.row_panel,
                 self.plan_copied,
                 cx,
-            ));
+            )))
+            .children(results_status);
         // With the sidebar folded there is nothing to split, and a split with
         // one panel still paints the handle it no longer divides anything with.
         let main_pane = if self.sidebar_hidden {
             content.into_any_element()
         } else {
             h_resizable("workspace-shell-split")
+                .with_state(&self.shell_split)
                 .child(
                     resizable_panel()
                         .size(px(layout::SIDEBAR_DEFAULT_WIDTH))
+                        .flex_none()
                         .size_range(px(layout::SIDEBAR_MIN_WIDTH)..px(layout::SIDEBAR_MAX_WIDTH))
-                        .child(self.render_explorer(profile, cx)),
+                        .child(
+                            div()
+                                .size_full()
+                                .flex()
+                                .flex_col()
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_h_0()
+                                        .child(self.render_explorer(profile, cx)),
+                                )
+                                .child(
+                                    div()
+                                        .h(px(layout::STATUS_HEIGHT))
+                                        .flex_shrink_0()
+                                        .flex()
+                                        .items_center()
+                                        .px(px(layout::SPACE_MD))
+                                        .border_t_1()
+                                        .border_color(t.border)
+                                        .text_size(px(layout::TEXT_SM))
+                                        .overflow_hidden()
+                                        .children(sidebar_status),
+                                ),
+                        ),
                 )
                 .child(resizable_panel().child(content))
                 .into_any_element()
@@ -873,133 +1131,6 @@ impl Render for Workspace {
                 ],
             ))
             .child(div().flex_1().min_h_0().child(main_pane))
-            .child(
-                div()
-                    .h(px(layout::STATUS_HEIGHT))
-                    .w_full()
-                    .flex()
-                    .items_center()
-                    .gap(px(layout::SPACE_SM))
-                    .px(px(layout::SPACE_MD))
-                    .text_size(px(layout::TEXT_SM))
-                    // The dot carries the state and the text carries the words.
-                    // A whole status line in green shouts about being connected,
-                    // which is the least interesting thing dbdelve can tell you.
-                    .child(
-                        div()
-                            .size(px(layout::SPACE_XS + 2.))
-                            .rounded_full()
-                            .bg(status_color),
-                    )
-                    .child(
-                        div()
-                            .text_color(if failed { t.danger } else { t.text_muted })
-                            .child(status),
-                    )
-                    .children(notice.map(|notice| div().text_color(t.text_muted).child(notice)))
-                    // One right-hand cluster, so there is a single `ml_auto`
-                    // in the row: two of them split the free space between
-                    // them and strand the readout in the middle of the bar.
-                    //
-                    // Each control appears only when it does something. A pair
-                    // of buttons that do nothing is a pair to read past --
-                    // see `apply_edits` for its `cmd+s` binding.
-                    .child(
-                        div()
-                            .ml_auto()
-                            .flex()
-                            .items_center()
-                            .gap(px(layout::SPACE_SM))
-                            .children(query_status.map(|query_status| {
-                                div()
-                                    .text_color(match stale_buffer {
-                                        true => t.text_muted,
-                                        false => t.text_faint,
-                                    })
-                                    .child(query_status)
-                            }))
-                            // Through the stale-rows prompt rather than straight
-                            // to a run, so the statement is read before it is
-                            // sent.
-                            .children(refreshable_snapshot.then(|| {
-                                button(
-                                    "refresh-snapshot",
-                                    "Refresh…",
-                                    Tone::Quiet,
-                                    Control::Compact,
-                                    t,
-                                )
-                                .on_click(move |_, _, cx| {
-                                    _ = refresh_workspace.update(cx, |workspace, cx| {
-                                        workspace.ask_refresh_stale(cx);
-                                    });
-                                })
-                            }))
-                            // Named, not one button over a menu: the choice is
-                            // between two things, and a control that opens
-                            // another control to ask which is a click spent on
-                            // nothing. It also puts the format on screen, which
-                            // a lone "Export" left to the file extension.
-                            .children(has_results.then(|| {
-                                button(
-                                    "copy-results",
-                                    "Copy Results",
-                                    Tone::Quiet,
-                                    Control::Compact,
-                                    t,
-                                )
-                                .on_click(move |_, _, cx| {
-                                    _ = copy_workspace.update(cx, |workspace, cx| {
-                                        workspace.copy_results_as(Format::Tsv, cx);
-                                    });
-                                })
-                            }))
-                            .children(has_results.then(|| {
-                                button("export-csv", "Export CSV", Tone::Quiet, Control::Compact, t)
-                                    .on_click(move |_, _, cx| {
-                                        _ = csv_workspace.update(cx, |workspace, cx| {
-                                            workspace.export_results(Format::Csv, cx);
-                                        });
-                                    })
-                            }))
-                            .children(has_results.then(|| {
-                                button(
-                                    "export-json",
-                                    "Export JSON",
-                                    Tone::Quiet,
-                                    Control::Compact,
-                                    t,
-                                )
-                                .on_click(move |_, _, cx| {
-                                    _ = json_workspace.update(cx, |workspace, cx| {
-                                        workspace.export_results(Format::Json, cx);
-                                    });
-                                })
-                            }))
-                            .children(has_pending.then(|| {
-                                button("discard-edits", "Discard", Tone::Quiet, Control::Compact, t)
-                                    .on_click(move |_, window, cx| {
-                                        _ = discard_workspace.update(cx, |workspace, cx| {
-                                            workspace.discard_edits(&DiscardEdits, window, cx);
-                                        });
-                                    })
-                            }))
-                            .children(has_pending.then(|| {
-                                button(
-                                    "apply-edits",
-                                    "Apply edits",
-                                    Tone::Primary,
-                                    Control::Compact,
-                                    t,
-                                )
-                                .on_click(move |_, window, cx| {
-                                    _ = apply_workspace.update(cx, |workspace, cx| {
-                                        workspace.apply_edits(&ApplyEdits, window, cx);
-                                    });
-                                })
-                            })),
-                    ),
-            )
             .children(views::render_new_row_form(self, cx))
             .children(self.render_apply_review(cx))
             .children(self.render_close_confirmation(cx))
