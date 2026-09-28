@@ -76,7 +76,10 @@ pub mod layout {
     /// confirm come out the same size instead of one word wide each.
     pub const CONTROL_MIN_WIDTH: f32 = 76.0;
 
-    pub const TITLEBAR_HEIGHT: f32 = 38.0;
+    /// The bars across the window -- titlebar, tab strip, filter rows -- are one
+    /// compact control high with `SPACE_SM` of air on every side, so their
+    /// heights are that sum and nothing else.
+    pub const TITLEBAR_HEIGHT: f32 = CONTROL_HEIGHT_COMPACT + 2.0 * SPACE_SM;
     /// Where the titlebar's own content can start without colliding with the
     /// platform's window buttons, which are drawn over it.
     pub const TITLEBAR_LEADING_INSET: f32 = 78.0;
@@ -84,10 +87,10 @@ pub mod layout {
     /// lives in this strip, and a button wedged edge to edge in its own bar
     /// reads as something that overflowed rather than something placed.
     pub const STATUS_HEIGHT: f32 = 32.0;
-    pub const TAB_HEIGHT: f32 = 34.0;
+    pub const TAB_HEIGHT: f32 = CONTROL_HEIGHT_COMPACT + 2.0 * SPACE_SM;
     /// A tab is a chip inside the strip, so it gets a chip height rather than
     /// the full bar.
-    pub const TAB_CHIP_HEIGHT: f32 = 26.0;
+    pub const TAB_CHIP_HEIGHT: f32 = CONTROL_HEIGHT_COMPACT;
     pub const EDITOR_EMPTY_HEIGHT: f32 = 680.0;
     pub const EDITOR_DEFAULT_HEIGHT: f32 = 420.0;
     pub const EDITOR_MIN_HEIGHT: f32 = 120.0;
