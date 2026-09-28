@@ -253,15 +253,7 @@ pub fn preview_sql(
     limit: usize,
     offset: usize,
 ) -> String {
-    let mut sql = format!("SELECT * FROM {}", engine.qualified(schema, relation));
-    // The `WHERE` is emitted here rather than spliced in later: this function
-    // owns the `FROM`, so it is the one place that knows where the clause goes.
-    // `sql::with_order_by` anchors on the `limit` node, so the sort still lands
-    // after the filter without knowing a filter exists.
-    let filter = filter.trim();
-    if !filter.is_empty() {
-        sql.push_str(&format!(" WHERE {filter}"));
-    }
+    let mut sql = format!("SELECT *{}", from_where(engine, schema, relation, filter));
     sql.push_str(&format!(" LIMIT {limit}"));
     // `OFFSET` after `LIMIT`: the one order all three engines accept, and the
     // one the statement grammar reads -- it nests `offset` inside the `limit`
@@ -270,6 +262,27 @@ pub fn preview_sql(
     // statement previews have always run.
     if offset > 0 {
         sql.push_str(&format!(" OFFSET {offset}"));
+    }
+    sql
+}
+
+/// The size of what `preview_sql` would page through, for the status bar.
+pub fn count_sql(engine: Engine, schema: &str, relation: &str, filter: &str) -> String {
+    format!(
+        "SELECT COUNT(*){}",
+        from_where(engine, schema, relation, filter)
+    )
+}
+
+/// The `WHERE` is emitted here rather than spliced in later: this is the one
+/// place that knows where the clause goes. `sql::with_order_by` anchors on the
+/// `limit` node, so the sort still lands after the filter without knowing a
+/// filter exists.
+fn from_where(engine: Engine, schema: &str, relation: &str, filter: &str) -> String {
+    let mut sql = format!(" FROM {}", engine.qualified(schema, relation));
+    let filter = filter.trim();
+    if !filter.is_empty() {
+        sql.push_str(&format!(" WHERE {filter}"));
     }
     sql
 }
@@ -294,6 +307,30 @@ mod tests {
     use crate::db::{Catalog, Relation, RelationKind, Routine, RoutineKind, Schema};
 
     use super::*;
+
+    #[test]
+    fn a_count_counts_what_the_preview_pages_through_and_passes_the_select_gate() {
+        for engine in [
+            Engine::Postgres,
+            Engine::MySql,
+            Engine::Sqlite,
+            Engine::Snowflake,
+            Engine::SqlServer,
+        ] {
+            let all = count_sql(engine, "public", "orders", "");
+            assert_eq!(
+                all,
+                format!(
+                    "SELECT COUNT(*) FROM {}",
+                    engine.qualified("public", "orders")
+                )
+            );
+            let narrowed = count_sql(engine, "public", "orders", " id > 3 ");
+            assert!(narrowed.ends_with(" WHERE id > 3"));
+            assert!(crate::sql::is_generated_select(&all));
+            assert!(crate::sql::is_generated_select(&narrowed));
+        }
+    }
 
     fn catalog() -> Catalog {
         Catalog {
