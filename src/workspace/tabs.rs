@@ -367,6 +367,14 @@ impl Workspace {
     /// Carry out a close that has been decided on. A saved query asks its own
     /// question from here: closing its tab deletes its file.
     pub(crate) fn close_now(&mut self, target: CloseTarget, cx: &mut Context<Self>) {
+        // A tab that is still loading takes its statement to the grave: left
+        // running, it holds the connection while nothing is left to show it.
+        if let Some(tab) = self
+            .profile()
+            .and_then(|profile| target.tab(&profile.session))
+        {
+            self.stop_run(tab, cx);
+        }
         match target {
             CloseTarget::Object(id) => self.close_object(id, cx),
             CloseTarget::Buffer(id) => self.close_buffer(id, cx),
@@ -377,6 +385,25 @@ impl Workspace {
                 cx.notify();
             }
         }
+    }
+
+    /// Ask the server to stop what `tab` is running, if it is running something.
+    fn stop_run(&mut self, tab: Tab, cx: &mut Context<Self>) {
+        let Some(connection) = self.profile().and_then(Profile::connection) else {
+            return;
+        };
+        let Some(profile) = self.profile_mut() else {
+            return;
+        };
+        let Some((QueryState::Running { cancel, .. }, _)) = profile.session.slot(tab) else {
+            return;
+        };
+        let cancel = cancel.clone();
+        cx.background_executor()
+            .spawn(async move {
+                let _ = connection.cancel(&cancel);
+            })
+            .detach();
     }
 
     /// Close the tab the discard prompt was raised over, edits and all.
