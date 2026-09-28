@@ -7,6 +7,7 @@ use gpui_component::checkbox::Checkbox;
 
 use super::*;
 use crate::connection_form::ConnectionTest;
+use crate::scroller::{SmoothScrollable, smooth};
 use crate::sql::{Destructive, Stop};
 
 impl Workspace {
@@ -40,6 +41,7 @@ impl Workspace {
             .id("connection-form-scroll")
             .size_full()
             .overflow_y_scroll()
+            .smooth_scroll(&smooth("connection-form-scroll", cx))
             .p(px(layout::SPACE_LG))
             .flex()
             .flex_col()
@@ -1037,6 +1039,7 @@ impl Workspace {
                                 .id("apply-review-sql")
                                 .max_h(px(220.))
                                 .overflow_y_scroll()
+                                .smooth_scroll(&smooth("apply-review-sql", cx))
                                 .font_family(code)
                                 .text_size(px(layout::TEXT_SM))
                                 // Line by line: a single child carrying newlines
