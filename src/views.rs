@@ -1147,6 +1147,7 @@ fn render_results(
                     .on_action(cx.listener(Workspace::edit_cell))
                     .on_action(cx.listener(Workspace::copy_cell))
                     .on_action(cx.listener(Workspace::copy_row))
+                    .on_action(cx.listener(Workspace::copy_rows))
                     .on_action(cx.listener(Workspace::copy_results))
                     .on_action(cx.listener(Workspace::set_null))
                     .on_action(cx.listener(Workspace::set_empty))
