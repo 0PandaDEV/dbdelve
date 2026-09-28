@@ -164,14 +164,16 @@ pub(crate) fn titlebar(
         .flex()
         .flex_shrink_0()
         .items_center()
-        .gap(px(layout::SPACE_MD))
+        .gap(px(layout::SPACE_SM))
+        .border_b_1()
+        .border_color(t.border)
         .pl(px(if cfg!(target_os = "macos") {
             layout::TITLEBAR_LEADING_INSET
         } else {
-            layout::SPACE_MD
+            layout::SPACE_SM
         }))
         .when(!cfg!(target_os = "windows"), |row| {
-            row.pr(px(layout::SPACE_MD))
+            row.pr(px(layout::SPACE_SM))
         })
         .children(leading)
         .child(
