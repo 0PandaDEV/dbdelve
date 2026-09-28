@@ -191,7 +191,16 @@ fn render_query_surface(
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
     let Some(tab) = profile.session.active_query_tab() else {
-        return div().into_any_element();
+        let t = *theme(cx);
+        return div()
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_size(px(layout::TEXT_SM))
+            .text_color(t.text_faint)
+            .child("Open a table from the sidebar, or start a new query.")
+            .into_any_element();
     };
     // The plan stands in for the rows rather than beside them: the pane is one
     // answer about the buffer above it, and two scrolling regions in a split
