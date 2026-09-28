@@ -587,6 +587,9 @@ fn render_filter_bar(
         .flex_shrink_0()
         .flex()
         .flex_col()
+        // Between the filters and the headers of the grid under them.
+        .border_b_1()
+        .border_color(t.border)
         .children(filters.iter().enumerate().map(|(row, filter)| {
             filter_bar_row()
                 // The first bar joins to nothing above it.
@@ -744,8 +747,7 @@ fn filter_bar_row() -> gpui::Div {
         .flex()
         .items_center()
         .gap(px(layout::SPACE_XS))
-        .pl(px(layout::SPACE_MD))
-        .pr(px(layout::SPACE_SM))
+        .px(px(layout::SPACE_SM))
 }
 
 /// The "New row" form (spec §4), in the place the row panel takes beside the
@@ -2212,10 +2214,10 @@ fn render_tab_strip(
         .flex()
         .items_center()
         .gap(px(layout::SPACE_SM))
-        // Starts where the editor's text does, so a tab lines up with the
-        // buffer it names.
-        .pl(px(layout::SPACE_LG))
-        .pr(px(layout::SPACE_SM))
+        .px(px(layout::SPACE_SM))
+        // Between the tabs and whatever is under them, the filters or the grid.
+        .border_b_1()
+        .border_color(t.border)
         .text_size(px(layout::TEXT_SM))
         .child(
             div()
