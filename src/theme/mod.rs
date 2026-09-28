@@ -606,31 +606,15 @@ impl Theme {
         component.colors.secondary_foreground = self.text.into();
         component.colors.secondary_hover = control_hover.into();
         component.colors.secondary_active = control_active.into();
-        // What a ghost button washes with on hover -- the tab pair lives on it.
-        // The completion popup's selected row, and the highlight on a
-        // right-click menu item. Was `element_hover` flattened onto `panel`: a
-        // ~5% wash, and computed against the wrong plane, since both of those
-        // surfaces paint on `overlay`. A selected suggestion was therefore
-        // indistinguishable from an unselected one. `selection` is what a
-        // selected row already wears in the explorer tree and the result grid,
-        // so autocomplete now agrees with the rest of dbdelve.
-        //
-        // A tint rather than the accent at full strength, deliberately: the
-        // popup paints a suggestion's matched prefix in `blue` and its detail
-        // in `muted_foreground` whatever the selection state, so a saturated
-        // fill behind them would win the row and lose the text.
-        // Half strength, and the prefix is what sets it: the popup paints a
-        // suggestion's matched characters in `blue` -- dbdelve's accent, just
-        // above -- so an accent wash behind them is accent on accent. At full
-        // `selection` that prefix measures 2.65 against the fill in the dark
-        // theme, under the 3.0 floor for UI text; halved it reaches 3.25 while
-        // the fill still steps 13.5 sRGB levels off the popover plane, well
-        // clear of the 8 that `the_three_planes_are_told_apart_at_a_glance`
-        // treats as visible. Graded in
-        // `a_selected_suggestion_is_told_apart_from_an_unselected_one`.
-        let mut selected_row = self.selection;
-        selected_row.a *= 0.5;
-        component.colors.accent = selected_row.into();
+        // One highlight for everything that lights up under the pointer, so a
+        // ghost button, a menu item and dbdelve's own chips agree: the library
+        // washes all of them with `accent` (a ghost button at half strength on
+        // dark themes), and dbdelve's own hovers are `element_hover`, so this
+        // is the gray wash and never the blue of a selection. The completion
+        // popup's selected row and a right-click menu's highlighted item take
+        // it too; `selection` stays what a selected row in the tree and the
+        // grid wears.
+        component.colors.accent = self.element_active.into();
         component.colors.accent_foreground = self.text.into();
         component.colors.danger = self.danger.into();
         component.colors.danger_foreground = self.on_accent.into();
