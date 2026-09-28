@@ -85,6 +85,9 @@ pub(crate) struct Workspace {
     /// Whether the explorer column is folded away. Not persisted: a hidden
     /// sidebar is a thing done for the next minute, not a preference.
     pub(crate) sidebar_hidden: bool,
+    /// The list a reference arrow opens, and which lookup it is waiting on.
+    pub(crate) reference_popup: Option<ReferencePopup>,
+    pub(crate) reference_checks: u64,
     pub(crate) row_panel: views::RowPanel,
     /// Whether the plan pane's copy button was just used, so it can show a
     /// tick the way `row_panel.copied` does. One flag rather than a keyed
@@ -139,6 +142,8 @@ impl Workspace {
             settings_tab: SettingsTab::default(),
             rebinding: None,
             sidebar_hidden: false,
+            reference_popup: None,
+            reference_checks: 0,
             row_panel: views::RowPanel {
                 on_screen: Default::default(),
                 copied: None,
