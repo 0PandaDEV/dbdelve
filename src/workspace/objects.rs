@@ -892,11 +892,19 @@ impl Workspace {
             if let Some(key) = snapshot {
                 let _ = store::remove_grid(&profile_id, &key);
             }
-            if profile.session.active == Tab::Object(id)
-                && let Some(first) = profile.session.queries.first().map(|tab| tab.id)
-            {
-                profile.session.active = Tab::Query(first);
-                profile.session.editor_needs_focus = true;
+            if profile.session.active == Tab::Object(id) {
+                let next = match profile.session.queries.first().map(|tab| tab.id) {
+                    Some(first) => Some(Tab::Query(first)),
+                    None => profile
+                        .session
+                        .objects
+                        .last()
+                        .map(|tab| Tab::Object(tab.id)),
+                };
+                if let Some(next) = next {
+                    profile.session.active = next;
+                    profile.session.editor_needs_focus = true;
+                }
             }
         }
         self.remember_profiles(cx);
