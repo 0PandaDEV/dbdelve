@@ -223,12 +223,23 @@ impl ResultGrid {
     }
 
     pub fn new(result: QueryResult, mode: Mode) -> Self {
+        let numeric: Vec<bool> = result
+            .columns
+            .iter()
+            .map(|column| column.data_type.as_deref().is_some_and(db::is_numeric_type))
+            .collect();
         let display: Vec<Vec<Option<SharedString>>> = result
             .rows
             .iter()
             .map(|row| {
                 row.iter()
-                    .map(|cell| cell.as_deref().map(|value| clip(value).into()))
+                    .enumerate()
+                    .map(|(col, cell)| {
+                        cell.as_deref().map(|value| match numeric.get(col) {
+                            Some(true) => clip(&grouped_digits(value)).into(),
+                            _ => clip(value).into(),
+                        })
+                    })
                     .collect()
             })
             .collect();
@@ -747,16 +758,6 @@ impl ResultGrid {
                 .is_some_and(|data_type| self.engine.is_binary_type(data_type))
     }
 
-    /// Whether a column's values want their last digit lined up with the one
-    /// above — see [`db::is_numeric_type`].
-    ///
-    /// Never a foreign key, whatever it is typed as: that column carries the
-    /// follow affordance at its trailing edge, and a number flushed against it
-    /// would sit under the icon.
-    fn is_numeric(&self, col: usize) -> bool {
-        !self.follows_a_key(col) && self.is_numeric_column(col)
-    }
-
     fn is_numeric_column(&self, col: usize) -> bool {
         self.result
             .columns
@@ -1144,6 +1145,38 @@ fn step_target(
     Some(to)
 }
 
+/// A plain number with its integer digits in threes, `1723858791` as
+/// `1'723'858'791`. Display only: `display` is what the cell paints and the
+/// copy, the inspector and every statement read the value as fetched. Anything
+/// that is not a bare decimal -- an exponent, a currency sign -- is left alone.
+fn grouped_digits(value: &str) -> String {
+    let (sign, unsigned) = match value.strip_prefix(['-', '+']) {
+        Some(rest) => (&value[..1], rest),
+        None => ("", value),
+    };
+    let (whole, fraction) = match unsigned.split_once('.') {
+        Some((whole, fraction)) => (whole, Some(fraction)),
+        None => (unsigned, None),
+    };
+    let digits = |part: &str| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit());
+    if !digits(whole) || fraction.is_some_and(|fraction| !digits(fraction)) || whole.len() <= 3 {
+        return value.to_string();
+    }
+    let mut grouped = String::with_capacity(value.len() + whole.len() / 3);
+    grouped.push_str(sign);
+    for (index, digit) in whole.chars().enumerate() {
+        if index > 0 && (whole.len() - index).is_multiple_of(3) {
+            grouped.push('\'');
+        }
+        grouped.push(digit);
+    }
+    if let Some(fraction) = fraction {
+        grouped.push('.');
+        grouped.push_str(fraction);
+    }
+    grouped
+}
+
 /// What a cell paints: one line, cut to the display limit.
 ///
 /// A row is one line tall, and a value with line breaks in it was laid out over
@@ -1486,8 +1519,6 @@ impl ResultGrid {
                     .min_w_0()
                     .overflow_hidden()
                     .text_ellipsis()
-                    // Against the values it names, not the edge of the cell.
-                    .when(self.is_numeric(col_ix), |name| name.ml_auto())
                     .child(self.columns[col_ix].name.clone()),
             )
             .child(
@@ -1539,9 +1570,16 @@ impl ResultGrid {
         window: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        let (text, faint, edited_bg, active_ring, palette) = {
+        let (text, faint, edited_bg, active_ring, number, palette) = {
             let t = theme(cx);
-            (t.text, t.text_faint, t.edited, t.accent, *t)
+            (
+                t.text,
+                t.text_faint,
+                t.edited,
+                t.accent,
+                t.syntax_function,
+                *t,
+            )
         };
         let base = div()
             .id(("cell", row_ix * self.columns.len() + col_ix))
@@ -1693,11 +1731,11 @@ impl ResultGrid {
         base.overflow_hidden()
             .whitespace_nowrap()
             .text_ellipsis()
-            // A column of numbers is read down its last digit, and left-aligned
-            // it has no last digit to read down: 9 and 1000 start in the same
-            // place and end nowhere near each other.
-            .when(self.is_numeric(col_ix), |cell| cell.justify_end())
-            .text_color(if cell.is_some() { text } else { faint })
+            .text_color(match (cell.is_some(), self.is_numeric_column(col_ix)) {
+                (false, _) => faint,
+                (true, true) => number,
+                (true, false) => text,
+            })
             // Italic so a NULL cannot be mistaken for the four-letter string.
             .when(cell.is_none(), |cell| cell.italic())
             .when(pending.is_some(), |cell| cell.bg(edited_bg))
@@ -1714,7 +1752,6 @@ impl ResultGrid {
                             .min_w_0()
                             .overflow_hidden()
                             .text_ellipsis()
-                            .when(self.is_numeric(col_ix), |value| value.text_right())
                             .child(value),
                     ),
                     false => this.child(value),
@@ -2029,6 +2066,24 @@ mod tests {
         assert_eq!(grid_with_a_null_key().row_key(0), None);
         // The same row is nameable when it is a non-key column that is NULL.
         assert!(grid_with_a_null().row_key(0).is_some());
+    }
+
+    #[test]
+    fn digits_are_grouped_in_threes_and_only_when_the_value_is_a_plain_number() {
+        for (value, shown) in [
+            ("1723858791", "1'723'858'791"),
+            ("-1234.5678", "-1'234.5678"),
+            ("+1000", "+1'000"),
+            ("999", "999"),
+            ("12", "12"),
+            ("1e10", "1e10"),
+            ("$1234", "$1234"),
+            ("1234abc", "1234abc"),
+            ("", ""),
+            (".5", ".5"),
+        ] {
+            assert_eq!(grouped_digits(value), shown, "{value}");
+        }
     }
 
     #[test]
