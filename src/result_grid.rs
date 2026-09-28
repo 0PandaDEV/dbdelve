@@ -1498,7 +1498,11 @@ impl ResultGrid {
             // lives at its trailing edge.
             .flex_1()
             .min_w_0()
-            .px(px(layout::SPACE_SM))
+            // A body cell's text starts a border's width in from its padding,
+            // and a header name that did not would sit a pixel left of every
+            // value under it.
+            .pl(px(layout::SPACE_SM + 1.))
+            .pr(px(layout::SPACE_SM))
             .flex()
             .items_center()
             .gap(px(layout::SPACE_XS))
@@ -1520,6 +1524,22 @@ impl ResultGrid {
                     .overflow_hidden()
                     .text_ellipsis()
                     .child(self.columns[col_ix].name.clone()),
+            )
+            .children(
+                self.result
+                    .columns
+                    .get(col_ix)
+                    .and_then(|column| column.data_type.clone())
+                    .map(|data_type| {
+                        div()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .text_size(px(layout::TEXT_XS))
+                            .font_weight(gpui::FontWeight::NORMAL)
+                            .text_color(faint)
+                            .child(data_type.to_uppercase())
+                    }),
             )
             .child(
                 div()
@@ -1570,19 +1590,21 @@ impl ResultGrid {
         window: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        let (text, faint, edited_bg, active_ring, number, palette) = {
+        let (text, faint, edited_bg, active_ring, divider, number, palette) = {
             let t = theme(cx);
             (
                 t.text,
                 t.text_faint,
                 t.edited,
                 t.accent,
+                t.border,
                 t.syntax_function,
                 *t,
             )
         };
         let base = div()
             .id(("cell", row_ix * self.columns.len() + col_ix))
+            .relative()
             .size_full()
             .px(px(layout::SPACE_SM))
             // A ring rather than a wash: the pending-edit wash is taken, and
@@ -1596,6 +1618,18 @@ impl ResultGrid {
             })
             .flex()
             .items_center()
+            .child(
+                div()
+                    .absolute()
+                    // Out over the cell's own border, which insets every edge
+                    // by a pixel: the header's hairline sits on the column edge
+                    // and runs the height of the row.
+                    .top(px(-1.))
+                    .bottom(px(-1.))
+                    .right(px(-1.))
+                    .w(px(1.))
+                    .bg(divider),
+            )
             // The row menu is the library's, and it records the row a right
             // click landed on and never the column, so the cell is pinned here
             // the way the left click pins it. Focus with it: the menu dispatches
@@ -1722,12 +1756,6 @@ impl ResultGrid {
             .then(|| self.follow_group(col_ix).cloned())
             .flatten();
 
-        // Faint on hover over any cell of the column, and always on the active
-        // one, so the gesture is reachable from the keyboard as well as the
-        // mouse. Present either way rather than added on hover: a cell that
-        // reflows under the pointer is a cell that moves as it is read.
-        let active = self.active == Some((row_ix, col_ix));
-
         base.overflow_hidden()
             .whitespace_nowrap()
             .text_ellipsis()
@@ -1739,24 +1767,20 @@ impl ResultGrid {
             // Italic so a NULL cannot be mistaken for the four-letter string.
             .when(cell.is_none(), |cell| cell.italic())
             .when(pending.is_some(), |cell| cell.bg(edited_bg))
-            // Beside an arrow the value is the child that gives way. Bare text
-            // in a row does not shrink, so a value as wide as its column --
-            // every cell of a column of 32-character keys -- pushed the arrow
-            // past the clipped edge, where it could be neither seen nor found.
-            .map(|this| {
-                let value = cell.unwrap_or(keyword);
-                match group.is_some() {
-                    true => this.child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .child(value),
-                    ),
-                    false => this.child(value),
-                }
-            })
+            // The value is the child that gives way, beside an arrow or not.
+            // Bare text in a row does not shrink and a flex container does not
+            // ellipsise its own text, so a value as wide as its column -- every
+            // cell of a column of 32-character keys -- either pushed the arrow
+            // past the clipped edge or was cut with no ellipsis.
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
+                    .child(cell.unwrap_or(keyword)),
+            )
             // A NULL is referenced by nothing, so it has no arrow either.
             .children(
                 self.cell(row_ix, col_ix)
@@ -1791,8 +1815,7 @@ impl ResultGrid {
             )
             // The workspace owns the statement and the tabs and the grid owns
             // neither, so this leaves exactly as a header's sort click does.
-            .when_some(group.clone(), |cell, group| cell.group(group))
-            .children(group.map(|group| {
+            .children(group.map(|_| {
                 div()
                     .id(("follow-key", row_ix * self.columns.len() + col_ix))
                     // A square at the trailing edge rather than a glyph
@@ -1809,11 +1832,6 @@ impl ResultGrid {
                     .justify_center()
                     .text_color(faint)
                     .hover(|button| button.text_color(text))
-                    .when(!active, |hidden| {
-                        hidden
-                            .opacity(0.)
-                            .group_hover(group, |shown| shown.opacity(1.))
-                    })
                     .child(icon(icon::FOLLOW_KEY).size(px(14.)))
                     .on_click(cx.listener(move |table, _, window, cx| {
                         // The action follows the active cell, and this one is
