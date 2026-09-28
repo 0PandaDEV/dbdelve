@@ -1173,7 +1173,6 @@ impl Render for Workspace {
                 ],
             ))
             .child(div().flex_1().min_h_0().child(main_pane))
-            .children(views::render_new_row_form(self, cx))
             .children(self.render_apply_review(cx))
             .children(self.render_close_confirmation(cx))
             .children(self.render_discard_confirmation(cx))
