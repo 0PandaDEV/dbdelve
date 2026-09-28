@@ -1,12 +1,12 @@
 use gpui::{
-    App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
-    MouseButton, ParentElement, SharedString, StatefulInteractiveElement, Styled, Window, div,
-    prelude::FluentBuilder, px,
+    App, AppContext, Context, Div, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
+    MouseButton, ParentElement, SharedString, Stateful, StatefulInteractiveElement, Styled, Window,
+    div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
     InteractiveElementExt,
     input::{Input, InputState},
-    menu::PopupMenu,
+    menu::{PopupMenu, PopupMenuItem},
     table::TableEvent,
     table::{Column, TableDelegate, TableState},
 };
@@ -14,6 +14,7 @@ use gpui_component::{
 use crate::{
     Workspace,
     db::{self, EditTarget, QueryResult},
+    export::{self, RowsAs},
     icons::icon,
     sql::Mode,
     store::{GRID_ROW_CAP, StoredGrid, captured_at},
@@ -42,6 +43,24 @@ const DEFAULT_LABEL: SharedString = SharedString::new_static("DEFAULT");
 
 /// Where every column starts and the narrowest a drag can leave it.
 const MIN_COLUMN_WIDTH: f32 = 180.0;
+
+/// The table's column 0 is the row-number gutter, which is not part of the
+/// result: every index the library hands the delegate is one past the result's
+/// own, and every index the delegate hands back is put one past it.
+const GUTTER: usize = 1;
+/// One digit's advance in the grid's monospaced face, near enough to size the
+/// row-number column to its widest number.
+const DIGIT_WIDTH: f32 = 8.0;
+
+/// A gutter cell: the row number's box, evenly padded. It draws no divider of
+/// its own -- the library closes a fixed column with one.
+fn gutter_cell() -> Div {
+    div()
+        .flex()
+        .items_center()
+        .justify_center()
+        .px(px(layout::SPACE_SM))
+}
 
 /// A row's schema and table, and its primary key as column/value pairs — what a
 /// one-row `DELETE` needs and nothing else.
@@ -109,6 +128,13 @@ pub struct ResultGrid {
     /// every frame under a no-allocation rule, and a group named there would be
     /// a `format!` per cell per frame.
     follow_groups: Vec<SharedString>,
+    /// The rows picked out by clicks in the gutter or cells, for a multi-row copy.
+    /// Separate from `active`, which is the single cell the keyboard and the
+    /// single-cell gestures act on.
+    selected_rows: std::collections::BTreeSet<usize>,
+    /// The row a plain click lands on, which a shift-click
+    /// extends a range from.
+    row_selection_anchor: Option<usize>,
     /// The connection's mode, cached because `editable` is asked by the grid's
     /// own double-click handler, which has no route back to the profile.
     /// `Workspace::set_mode` is the only thing that writes it after construction.
@@ -221,6 +247,8 @@ impl ResultGrid {
             not_nullable: Vec::new(),
             has_default: Vec::new(),
             follow_groups: Vec::new(),
+            selected_rows: std::collections::BTreeSet::new(),
+            row_selection_anchor: None,
             mode,
             engine: db::Engine::default(),
             focus: None,
@@ -389,6 +417,42 @@ impl ResultGrid {
             .collect();
     }
 
+    /// Wide enough for the last row's number and no wider, padded the same on
+    /// both sides.
+    fn gutter_width(&self) -> f32 {
+        let digits = self.result.rows.len().max(1).to_string().len() as f32;
+        digits * DIGIT_WIDTH + 2.0 * layout::SPACE_SM
+    }
+
+    /// Cells and the gutter share one anchor, so Shift can be pressed after
+    /// the first click and a range can be extended from either surface.
+    fn click_row(&mut self, row: usize, shift: bool, toggle: bool) {
+        if shift {
+            let anchor = *self.row_selection_anchor.get_or_insert(row);
+            let (start, end) = (anchor.min(row), anchor.max(row));
+            if !toggle {
+                self.selected_rows.clear();
+            }
+            self.selected_rows.extend(start..=end);
+            return;
+        }
+        if toggle {
+            if !self.selected_rows.remove(&row) {
+                self.selected_rows.insert(row);
+            }
+            self.row_selection_anchor = Some(row);
+            return;
+        }
+        self.selected_rows.clear();
+        self.selected_rows.insert(row);
+        self.row_selection_anchor = Some(row);
+    }
+
+    pub fn clear_row_selection(&mut self) {
+        self.selected_rows.clear();
+        self.row_selection_anchor = None;
+    }
+
     /// Record which of this result's columns the server declared `NOT NULL`
     /// and which it gave a default, so the cell menu can drop an entry that
     /// would only ever be refused.
@@ -478,6 +542,42 @@ impl ResultGrid {
     /// not folded in, because this is the result set, not the grid's view of it.
     pub fn result(&self) -> &QueryResult {
         &self.result
+    }
+
+    /// The selected rows as text in `kind`'s shape: what "Copy Rows As" puts on
+    /// the clipboard. The whole values, not the clipped ones the cells paint,
+    /// in row order. Every row of a multi-row selection, or else the active
+    /// cell's row alone -- so the entry works exactly as it did before there
+    /// was a selection to make plural.
+    pub fn rows_as(&self, kind: RowsAs) -> Option<String> {
+        let rows = self.selected_row_indices();
+        if rows.is_empty() {
+            return None;
+        }
+        let result = QueryResult {
+            columns: self.result.columns.clone(),
+            rows: rows
+                .iter()
+                .filter_map(|&row| self.result.rows.get(row).cloned())
+                .collect(),
+            ..QueryResult::default()
+        };
+        let table = self
+            .result
+            .edit
+            .as_ref()
+            .map(|edit| (edit.schema.as_str(), edit.table.as_str()));
+        Some(export::render_rows_as(kind, self.engine, table, &result))
+    }
+
+    /// The rows "Copy Rows As" and the row-number gutter's own highlight agree
+    /// on: every row the user has selected there, in order, or the active
+    /// cell's row alone when nothing has been.
+    pub fn selected_row_indices(&self) -> Vec<usize> {
+        if self.row_selection_anchor.is_some() {
+            return self.selected_rows.iter().copied().collect();
+        }
+        self.active.map(|(row, _)| vec![row]).unwrap_or_default()
     }
 
     /// The whole value behind the active cell, which is what `cmd+c` copies —
@@ -940,7 +1040,7 @@ fn commit_and_step(
     table.delegate_mut().begin_edit(to.0, to.1);
     match step {
         Step::Rows(_) => table.set_selected_row(to.0, cx),
-        Step::Cols(_) => table.set_selected_col(to.1, cx),
+        Step::Cols(_) => table.set_selected_col(to.1 + GUTTER, cx),
     }
 }
 
@@ -1054,18 +1154,210 @@ fn clip_to(value: &str, limit: usize) -> String {
 
 impl TableDelegate for ResultGrid {
     fn columns_count(&self, _: &App) -> usize {
-        self.columns.len()
+        self.columns.len() + GUTTER
     }
 
     fn rows_count(&self, _: &App) -> usize {
         self.result.rows.len()
     }
 
+    /// A wash across the row, for one the gutter has picked out. Painted here
+    /// rather than per cell, so it reaches the gutter's own padding too and
+    /// reads as one row rather than a strip of separately-tinted cells.
+    ///
+    /// A child rather than the row's own `bg`: the library wraps every row in
+    /// its own `.hover()`, which it skips only for its single `selected_row`,
+    /// not for the rest of a multi-row selection here. Anywhere else in that
+    /// selection, its hover style replaces the row's background outright,
+    /// turning the blue tint gray. A child paints above that background
+    /// regardless of which one the library chose, so the tint survives.
+    fn render_tr(
+        &mut self,
+        row_ix: usize,
+        _window: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) -> Stateful<Div> {
+        let t = *theme(cx);
+        // The library draws every row's own border, and its own hover wash,
+        // the full width of the row -- which is the table's whole width, not
+        // the columns actually in it. Past the last column that is a line
+        // (and a wash) running on to the edge of the screen over nothing.
+        // Painted over here rather than fought in the library: a mask the
+        // width of the empty margin, in the same tone the table already
+        // shows through everywhere it has no row.
+        let content_width = self.gutter_width()
+            + self
+                .columns
+                .iter()
+                .map(|column| f32::from(column.width))
+                .sum::<f32>();
+        let row = div().id(("row", row_ix)).relative().child(
+            div()
+                .absolute()
+                .left(px(content_width))
+                .right(px(0.))
+                .top(px(0.))
+                .bottom(px(0.))
+                .bg(t.data_glass()),
+        );
+        if !self.selected_rows.contains(&row_ix) {
+            return row;
+        }
+        row.child(div().absolute().size_full().bg(t.selection))
+    }
+
     fn column(&self, col_ix: usize, _: &App) -> Column {
-        self.columns[col_ix].clone()
+        match col_ix.checked_sub(GUTTER) {
+            Some(col) => self.columns[col].clone(),
+            None => Column::new("row-number", "#")
+                .width(px(self.gutter_width()))
+                .resizable(false)
+                .movable(false)
+                .selectable(false)
+                .fixed_left()
+                .p_0(),
+        }
     }
 
     fn render_th(
+        &mut self,
+        col_ix: usize,
+        window: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) -> impl IntoElement {
+        match col_ix.checked_sub(GUTTER) {
+            Some(col) => self.data_th(col, window, cx).into_any_element(),
+            None => {
+                let faint = theme(cx).text_faint;
+                gutter_cell()
+                    .size_full()
+                    // The library reserves a sort icon's room on the right of
+                    // every header, which leaves this one off-centre unless
+                    // the left side reserves the same.
+                    .pl(px(layout::SPACE_SM)
+                        + gpui_component::Size::Medium.table_cell_padding().right)
+                    .text_size(px(layout::TEXT_SM))
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .text_color(faint)
+                    .child("#")
+                    .into_any_element()
+            }
+        }
+    }
+
+    fn render_td(
+        &mut self,
+        row_ix: usize,
+        col_ix: usize,
+        window: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) -> impl IntoElement {
+        match col_ix.checked_sub(GUTTER) {
+            Some(col) => self.data_td(row_ix, col, window, cx).into_any_element(),
+            None => {
+                let (faint, text, selected_bg) = {
+                    let t = theme(cx);
+                    (t.text_faint, t.text, t.selection)
+                };
+                let selected = self.selected_rows.contains(&row_ix);
+                gutter_cell()
+                    .id(("row-number", row_ix))
+                    .size_full()
+                    .when(selected, |cell| cell.bg(selected_bg))
+                    .text_color(if selected { text } else { faint })
+                    .child((row_ix + 1).to_string())
+                    // Left click only: a right click still opens the cell
+                    // menu the row's own cells offer, and a gutter with two
+                    // different rules for the two buttons would be a gutter
+                    // nobody could predict.
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |table, event: &gpui::MouseDownEvent, window, cx| {
+                            click_row(table, row_ix, event, window, cx);
+                        }),
+                    )
+                    .on_click(|_, _, cx| cx.stop_propagation())
+                    .into_any_element()
+            }
+        }
+    }
+
+    /// The mouse's way to the writes a cell input cannot express. An input
+    /// cannot be typed empty into a `NULL`, and neither the empty string nor
+    /// `DEFAULT` can be typed into the other two (spec §3) -- so the gesture is
+    /// this menu, which reaches the same actions the keystroke and the palette
+    /// reach.
+    ///
+    /// Flat rather than nested under "Set Value": a submenu has to be an
+    /// entity wired to its parent, and the delegate hook is handed a
+    /// `Context<TableState>` that cannot build one.
+    ///
+    /// Nothing at all without an active cell; an empty menu is not opened. A
+    /// cell that cannot be written still offers the copy, because copying is
+    /// not a write. A mode too low withholds nothing: the entry is offered and
+    /// the prompt is what answers it, the way the keystroke behaves.
+    fn context_menu(
+        &mut self,
+        _: usize,
+        menu: PopupMenu,
+        window: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) -> PopupMenu {
+        // The right click that opened this pinned the cell on its way past
+        // `render_td`, so the column the library never records is known here.
+        let Some((row, col)) = self.active else {
+            return menu;
+        };
+        let stages: Vec<(&str, Box<dyn gpui::Action>)> = match self.editable(row, col) {
+            false => Vec::new(),
+            true => [
+                self.offers_null(col)
+                    .then(|| ("Set Value to NULL", Box::new(crate::SetNull) as _)),
+                self.offers_empty(col)
+                    .then(|| ("Set Value to Empty", Box::new(crate::SetEmpty) as _)),
+                self.offers_default(col)
+                    .then(|| ("Set Value to Default", Box::new(crate::SetDefault) as _)),
+            ]
+            .into_iter()
+            .flatten()
+            .collect(),
+        };
+
+        // Built here rather than through `PopupMenu::submenu`, which wants the
+        // menu's own context and a delegate is handed the table's. The
+        // library wires the parent of a submenu added this way when it paints.
+        let focus = self.focus.clone();
+        let rows_as = PopupMenu::build(window, cx, move |submenu, _, _| {
+            RowsAs::ALL.into_iter().fold(
+                submenu.when_some(focus.clone(), PopupMenu::action_context),
+                |submenu, kind| {
+                    submenu
+                        .when(kind == RowsAs::Csv, PopupMenu::separator)
+                        .when(kind == RowsAs::Json, PopupMenu::separator)
+                        .menu(kind.label(), Box::new(crate::CopyRows { kind }))
+                },
+            )
+        });
+        // "Copy Row" is redundant beside this once it reads as one row: the
+        // submenu's own "Text" entry already puts the same TSV on the
+        // clipboard.
+        let rows_as_label = match self.selected_row_indices().len() {
+            1 => "Copy Row As",
+            _ => "Copy Rows As",
+        };
+        let menu = menu
+            .when_some(self.focus.clone(), PopupMenu::action_context)
+            .menu("Copy Cell", Box::new(crate::CopyCell))
+            .item(PopupMenuItem::submenu(rows_as_label, rows_as))
+            .when(!stages.is_empty(), PopupMenu::separator);
+        stages
+            .into_iter()
+            .fold(menu, |menu, (label, action)| menu.menu(label, action))
+    }
+}
+
+impl ResultGrid {
+    fn data_th(
         &mut self,
         col_ix: usize,
         _window: &mut Window,
@@ -1154,58 +1446,7 @@ impl TableDelegate for ResultGrid {
         }))
     }
 
-    /// The mouse's way to the writes a cell input cannot express. An input
-    /// cannot be typed empty into a `NULL`, and neither the empty string nor
-    /// `DEFAULT` can be typed into the other two (spec §3) -- so the gesture is
-    /// this menu, which reaches the same actions the keystroke and the palette
-    /// reach.
-    ///
-    /// Flat rather than nested under "Set Value": a submenu has to be an
-    /// entity wired to its parent, and the delegate hook is handed a
-    /// `Context<TableState>` that cannot build one.
-    ///
-    /// Nothing at all without an active cell; an empty menu is not opened. A
-    /// cell that cannot be written still offers the copy, because copying is
-    /// not a write. A mode too low withholds nothing: the entry is offered and
-    /// the prompt is what answers it, the way the keystroke behaves.
-    fn context_menu(
-        &mut self,
-        _: usize,
-        menu: PopupMenu,
-        _: &mut Window,
-        _: &mut Context<TableState<Self>>,
-    ) -> PopupMenu {
-        // The right click that opened this pinned the cell on its way past
-        // `render_td`, so the column the library never records is known here.
-        let Some((row, col)) = self.active else {
-            return menu;
-        };
-        let stages: Vec<(&str, Box<dyn gpui::Action>)> = match self.editable(row, col) {
-            false => Vec::new(),
-            true => [
-                self.offers_null(col)
-                    .then(|| ("Set Value to NULL", Box::new(crate::SetNull) as _)),
-                self.offers_empty(col)
-                    .then(|| ("Set Value to Empty", Box::new(crate::SetEmpty) as _)),
-                self.offers_default(col)
-                    .then(|| ("Set Value to Default", Box::new(crate::SetDefault) as _)),
-            ]
-            .into_iter()
-            .flatten()
-            .collect(),
-        };
-
-        let menu = menu
-            .when_some(self.focus.clone(), PopupMenu::action_context)
-            .menu("Copy Cell", Box::new(crate::CopyCell))
-            .menu("Copy Row", Box::new(crate::CopyRow))
-            .when(!stages.is_empty(), PopupMenu::separator);
-        stages
-            .into_iter()
-            .fold(menu, |menu, (label, action)| menu.menu(label, action))
-    }
-
-    fn render_td(
+    fn data_td(
         &mut self,
         row_ix: usize,
         col_ix: usize,
@@ -1244,6 +1485,15 @@ impl TableDelegate for ResultGrid {
                     grid.set_active(row_ix, col_ix);
                     grid.focus = Some(handle);
                     cx.notify();
+                }),
+            )
+            // A plain cell click must establish the anchor before Shift is
+            // pressed, exactly as a click on its row number does.
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |table, event: &gpui::MouseDownEvent, window, cx| {
+                    table.delegate_mut().set_active(row_ix, col_ix);
+                    click_row(table, row_ix, event, window, cx);
                 }),
             );
 
@@ -1347,6 +1597,7 @@ impl TableDelegate for ResultGrid {
         let group = follows_a_key
             .then(|| self.follow_group(col_ix).cloned())
             .flatten();
+
         // Faint on hover over any cell of the column, and always on the active
         // one, so the gesture is reachable from the keyboard as well as the
         // mouse. Present either way rather than added on hover: a cell that
@@ -1429,19 +1680,32 @@ impl TableDelegate for ResultGrid {
                 window.dispatch_action(Box::new(crate::EditCell), cx);
                 cx.notify();
             }))
-            // What `Enter` will act on. The library records the row of a cell
-            // click and never the column, so the coordinate is set here whole.
-            // The row it does record arrives as `SelectRow` and folds back in
-            // keeping this column, so the two orders converge on the same cell.
-            // Runs on the first click of a double click too, and
-            // `set_active` on the cell an editor just opened on is a no-op --
-            // same coordinates, so `editing` survives -- which is what keeps
-            // the second listener from closing what the first just opened.
-            .on_click(cx.listener(move |table, _, _, cx| {
-                table.delegate_mut().set_active(row_ix, col_ix);
-                cx.notify();
-            }))
+            // The library's row click would select a toggled-off row again.
+            .on_click(|_, _, cx| cx.stop_propagation())
     }
+}
+
+fn click_row(
+    table: &mut TableState<ResultGrid>,
+    row: usize,
+    event: &gpui::MouseDownEvent,
+    window: &mut Window,
+    cx: &mut Context<TableState<ResultGrid>>,
+) {
+    table.focus_handle(cx).focus(window, cx);
+    table
+        .delegate_mut()
+        .click_row(row, event.modifiers.shift, event.modifiers.secondary());
+    // Both states paint blue. Updating the library on mouse-up leaves its
+    // old highlight behind, indefinitely if the button is released elsewhere.
+    if table.delegate().selected_rows.contains(&row) {
+        table.set_selected_row(row, cx);
+    } else {
+        table.clear_selection(cx);
+    }
+    // set_selected_row consumes the event; the cell still needs mouse-down
+    // for its click and double-click handlers.
+    cx.propagate();
 }
 
 pub(crate) fn new_grid(
@@ -1476,19 +1740,18 @@ pub(crate) fn new_grid(
                 cx.notify();
             });
         }
+        TableEvent::ColumnWidthsChanged(widths) => {
+            let widths = widths.get(GUTTER..).unwrap_or_default().to_vec();
+            table.update(cx, |table, _| table.delegate_mut().set_widths(&widths));
+        }
         TableEvent::SelectColumn(col) => {
-            let col = *col;
+            let Some(col) = col.checked_sub(GUTTER) else {
+                return;
+            };
             table.update(cx, |table, cx| {
                 table.delegate_mut().select_col(col);
                 cx.notify();
             });
-        }
-        // The library resizes its own copy of the columns, so a drag is only
-        // in the delegate -- the thing a snapshot is taken from -- if it is
-        // written back here.
-        TableEvent::ColumnWidthsChanged(widths) => {
-            let widths = widths.clone();
-            table.update(cx, |table, _| table.delegate_mut().set_widths(&widths));
         }
         _ => {}
     })
@@ -2527,6 +2790,100 @@ mod tests {
                 .collect::<Vec<_>>(),
             [px(MIN_COLUMN_WIDTH), px(190.), px(240.)]
         );
+    }
+
+    fn four_row_grid() -> ResultGrid {
+        ResultGrid::new(
+            QueryResult {
+                columns: vec![column("id")],
+                rows: (0..4).map(|row| vec![Some(row.to_string())]).collect(),
+                ..QueryResult::default()
+            },
+            Mode::ReadWrite,
+        )
+    }
+
+    #[test]
+    fn a_plain_click_replaces_the_selection_a_shift_click_extends_it_and_a_toggle_click_adds_or_removes_one()
+     {
+        let mut grid = four_row_grid();
+        grid.click_row(1, false, false);
+        assert_eq!(grid.selected_row_indices(), vec![1]);
+
+        grid.click_row(3, true, false);
+        assert_eq!(grid.selected_row_indices(), vec![1, 2, 3]);
+
+        grid.click_row(0, false, true);
+        assert_eq!(grid.selected_row_indices(), vec![0, 1, 2, 3]);
+
+        // Toggling an already-selected row removes just that one.
+        grid.click_row(2, false, true);
+        assert_eq!(grid.selected_row_indices(), vec![0, 1, 3]);
+
+        // A plain click replaces the whole selection with the one row.
+        grid.click_row(3, false, false);
+        assert_eq!(grid.selected_row_indices(), vec![3]);
+
+        grid.clear_row_selection();
+        assert!(grid.selected_row_indices().is_empty());
+    }
+
+    #[test]
+    fn with_nothing_selected_the_active_cells_row_is_what_copies() {
+        let mut grid = four_row_grid();
+        assert!(grid.selected_row_indices().is_empty());
+        grid.set_active(2, 0);
+        assert_eq!(grid.selected_row_indices(), vec![2]);
+    }
+
+    #[test]
+    fn shift_click_keeps_the_first_click_as_anchor_when_the_range_shrinks_or_reverses() {
+        let mut grid = four_row_grid();
+        grid.click_row(1, false, false);
+        grid.set_active(1, 0);
+        grid.select_row(1);
+
+        for (row, expected) in [(3, vec![1, 2, 3]), (2, vec![1, 2]), (0, vec![0, 1])] {
+            grid.click_row(row, true, false);
+            grid.set_active(row, 0);
+            grid.select_row(row);
+            assert_eq!(grid.selected_row_indices(), expected);
+            assert_eq!(grid.row_selection_anchor, Some(1));
+        }
+    }
+
+    #[test]
+    fn toggle_can_remove_the_last_row_without_copying_the_active_cell_instead() {
+        let mut grid = four_row_grid();
+        grid.click_row(1, false, false);
+        grid.set_active(1, 0);
+        grid.click_row(1, false, true);
+        assert!(grid.selected_row_indices().is_empty());
+        assert!(grid.rows_as(RowsAs::Text).is_none());
+    }
+
+    #[test]
+    fn shift_alone_replaces_disjoint_rows_and_secondary_shift_adds_a_range() {
+        let mut grid = four_row_grid();
+        grid.click_row(0, false, false);
+        grid.click_row(2, false, true);
+        grid.click_row(3, true, true);
+        assert_eq!(grid.selected_row_indices(), vec![0, 2, 3]);
+        grid.click_row(3, true, false);
+        assert_eq!(grid.selected_row_indices(), vec![2, 3]);
+
+        grid.clear_row_selection();
+        grid.click_row(1, true, false);
+        grid.click_row(3, true, false);
+        assert_eq!(grid.selected_row_indices(), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn copy_rows_as_text_joins_every_selected_row_in_order() {
+        let mut grid = four_row_grid();
+        grid.click_row(2, false, false);
+        grid.click_row(0, true, false);
+        assert_eq!(grid.rows_as(RowsAs::Text).as_deref(), Some("0\n1\n2"));
     }
 
     #[test]
