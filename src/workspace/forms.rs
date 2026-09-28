@@ -1505,23 +1505,23 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .gap(px(layout::SPACE_XS))
-                    .pl(px(layout::SPACE_MD))
-                    .pr(px(layout::SPACE_SM))
+                    .px(px(layout::SPACE_SM))
+                    .border_b_1()
+                    .border_color(t.border)
                     .child(row_icon(t, icon::SEARCH))
+                    // Clipped by a box of its own: the input lays its placeholder
+                    // out at its full width and ellipsises it against that,
+                    // so without a clip the text runs on past the row.
                     .child(
-                        Input::new(&profile.session.explorer_filter)
-                            .min_w_0()
-                            .flex_1()
-                            .appearance(false),
+                        div().flex_1().min_w_0().overflow_hidden().child(
+                            Input::new(&profile.session.explorer_filter)
+                                .w_full()
+                                .min_w_0()
+                                .appearance(false),
+                        ),
                     ),
             )
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .py(px(layout::SPACE_XS))
-                    .child(content),
-            )
+            .child(div().flex_1().min_h_0().child(content))
     }
 }
 
