@@ -85,6 +85,14 @@ pub(crate) struct Workspace {
     /// Whether the explorer column is folded away. Not persisted: a hidden
     /// sidebar is a thing done for the next minute, not a preference.
     pub(crate) sidebar_hidden: bool,
+    pub(crate) shell_split: Entity<ResizableState>,
+    /// Where the sidebar's edge is unless a drag has moved it. The library
+    /// rescales every panel by its share when the window changes size, so this
+    /// is what puts the sidebar back.
+    pub(crate) sidebar_width: std::cell::Cell<gpui::Pixels>,
+    /// The window's width the last time the sidebar was put right, which is how
+    /// a window resize is told from a drag of the handle.
+    pub(crate) sidebar_container: std::cell::Cell<gpui::Pixels>,
     /// The list a reference arrow opens, and which lookup it is waiting on.
     pub(crate) reference_popup: Option<ReferencePopup>,
     pub(crate) reference_checks: u64,
@@ -142,6 +150,9 @@ impl Workspace {
             settings_tab: SettingsTab::default(),
             rebinding: None,
             sidebar_hidden: false,
+            shell_split: cx.new(|_| ResizableState::default()),
+            sidebar_width: std::cell::Cell::new(px(layout::SIDEBAR_DEFAULT_WIDTH)),
+            sidebar_container: std::cell::Cell::new(px(0.)),
             reference_popup: None,
             reference_checks: 0,
             row_panel: views::RowPanel {
@@ -477,9 +488,39 @@ impl Workspace {
     }
 }
 
+impl Workspace {
+    /// Puts the sidebar back at its width after a window resize, and takes the
+    /// width a drag has left it at.
+    fn settle_sidebar(&self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.sidebar_hidden {
+            return;
+        }
+        let (target, last_container) = (self.sidebar_width.get(), self.sidebar_container.get());
+        self.shell_split.update(cx, |state, cx| {
+            let container = state.container_size();
+            if container <= px(1.) || state.sizes().len() != 2 {
+                return;
+            }
+            if container != last_container {
+                // The window changed size and the library rescaled every
+                // panel by its share: the sidebar goes back to its width.
+                self.sidebar_container.set(container);
+                if (state.sizes()[0] - target).abs() > px(0.5) {
+                    state.resize_panel(0, target, window, cx);
+                }
+            } else {
+                // Nothing else moves the handle, so a width that is not
+                // the one held is the user's.
+                self.sidebar_width.set(state.sizes()[0]);
+            }
+        });
+    }
+}
+
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = *theme(cx);
+        self.settle_sidebar(window, cx);
         self.row_panel.on_screen.set(false);
         // Deferred to render for the `&mut Window` a background task does not
         // have: the catalog that names these tabs resolves off-thread, and a
