@@ -334,14 +334,10 @@ impl Workspace {
             return;
         };
         let session = &profile.session;
-        let unsaved = session
-            .queries
-            .iter()
-            .filter(|tab| tab.open_query.is_none())
-            .count();
-        let Some(target) = close_target(session.active, session.open_query(), unsaved) else {
+        if session.active_query_tab().is_none() && session.active_object().is_none() {
             return;
-        };
+        }
+        let target = close_target(session.active, session.open_query());
         self.ask_before_close(target, cx);
     }
 

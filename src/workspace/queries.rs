@@ -490,6 +490,9 @@ impl Workspace {
             if let Some(next) = next {
                 profile.session.active = Tab::Query(next);
                 profile.session.editor_needs_focus = true;
+            } else if let Some(object) = profile.session.objects.last().map(|tab| tab.id) {
+                profile.session.active = Tab::Object(object);
+                profile.session.editor_needs_focus = true;
             }
         }
 
@@ -653,23 +656,24 @@ impl Workspace {
             // is what was deleted -- keeping it in an untitled buffer would
             // leave `cmd+w` looking like it had done nothing.
             if let Some(open) = was_open {
-                if profile.session.queries.len() > 1 {
-                    profile.session.queries.retain(|tab| tab.id != open);
-                    // With the tab, as in `close_buffer`: a snapshot with no
-                    // tab left to come back to is rows the next buffer to be
-                    // handed this id would show as its own.
-                    let _ = store::remove_grid(&id, &store::query_grid_key(open));
-                    if profile.session.active == Tab::Query(open)
-                        && let Some(next) = profile.session.queries.first().map(|tab| tab.id)
-                    {
-                        profile.session.active = Tab::Query(next);
+                profile.session.queries.retain(|tab| tab.id != open);
+                // With the tab, as in `close_buffer`: a snapshot with no
+                // tab left to come back to is rows the next buffer to be
+                // handed this id would show as its own.
+                let _ = store::remove_grid(&id, &store::query_grid_key(open));
+                if profile.session.active == Tab::Query(open) {
+                    let next = match profile.session.queries.first().map(|tab| tab.id) {
+                        Some(next) => Some(Tab::Query(next)),
+                        None => profile
+                            .session
+                            .objects
+                            .last()
+                            .map(|tab| Tab::Object(tab.id)),
+                    };
+                    if let Some(next) = next {
+                        profile.session.active = next;
                         profile.session.editor_needs_focus = true;
                     }
-                } else if let Some(tab) = profile.session.query_tab_mut(open) {
-                    // The only buffer. A profile always has somewhere to write,
-                    // so it is unnamed from here rather than closed, and the
-                    // strip keeps a place to type in.
-                    tab.open_query = None;
                 }
             }
         }

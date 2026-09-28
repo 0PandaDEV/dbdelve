@@ -171,9 +171,9 @@ pub(crate) enum ProfileState {
 /// create, and the connection resolves on a task that has none — so this is
 /// built before the spawn and moved in once the connection opens.
 pub(crate) struct Session {
-    /// The open query buffers, in strip order. Never empty: a profile always
-    /// has somewhere to write, so the last unsaved buffer has no closed state
-    /// to go to.
+    /// The open query buffers, in strip order. Empty when the last one has been
+    /// closed; `active` may then name a tab that no longer exists, which every
+    /// lookup by id already answers with `None`.
     pub(crate) queries: Vec<QueryTab>,
     pub(crate) objects: Vec<ObjectTab>,
     pub(crate) active: Tab,
@@ -391,26 +391,20 @@ impl Session {
         let saved_queries = store::saved_queries(&id);
         // A tab naming a query whose file has gone comes back as the unsaved
         // buffer it now is, rather than as a tab pointing at nothing.
-        let mut stored_queries = stored_queries
+        let stored_queries = stored_queries
             .into_iter()
             .map(|mut stored| {
                 stored.name = stored.name.filter(|name| saved_queries.contains(name));
                 stored
             })
             .collect::<Vec<_>>();
-        if stored_queries.is_empty() {
-            stored_queries.push(store::StoredQueryTab {
-                id: 0,
-                name: None,
-                active: true,
-            });
-        }
-
+        // No tab is a state a profile can be in: closing the last one leaves
+        // the strip empty, and it comes back empty.
         let active = stored_queries
             .iter()
             .find(|stored| stored.active)
-            .unwrap_or(&stored_queries[0])
-            .id;
+            .or(stored_queries.first())
+            .map_or(0, |stored| stored.id);
         let next_query_id = next_query_id(stored_next_query_id, &stored_queries);
 
         let mut notice = None;
@@ -684,8 +678,7 @@ pub(crate) enum CloseTarget {
     /// Ask first. A saved query is listed while its file exists and gone when
     /// it does not, so closing its tab is deleting it.
     SavedQuery(String),
-    /// Close it. An unsaved buffer that is not the last one is a scratch pad
-    /// someone is done with; its text goes with it, which is what closing an
+    /// Close it. An unsaved buffer is a scratch pad someone is done with; its text goes with it, which is what closing an
     /// unnamed buffer means everywhere else.
     Buffer(u64),
 }
@@ -703,18 +696,11 @@ impl CloseTarget {
     }
 }
 
-/// `None` for the last unsaved buffer, which is always in the strip: a profile
-/// always has somewhere to write, so there is no closed state for it to go to
-/// and `cmd+w` on it does nothing rather than inventing one.
-pub(crate) fn close_target(
-    active: Tab,
-    open_query: Option<&str>,
-    unsaved: usize,
-) -> Option<CloseTarget> {
+pub(crate) fn close_target(active: Tab, open_query: Option<&str>) -> CloseTarget {
     match (active, open_query) {
-        (Tab::Object(id), _) => Some(CloseTarget::Object(id)),
-        (Tab::Query(_), Some(name)) => Some(CloseTarget::SavedQuery(name.to_string())),
-        (Tab::Query(id), None) => (unsaved > 1).then_some(CloseTarget::Buffer(id)),
+        (Tab::Object(id), _) => CloseTarget::Object(id),
+        (Tab::Query(_), Some(name)) => CloseTarget::SavedQuery(name.to_string()),
+        (Tab::Query(id), None) => CloseTarget::Buffer(id),
     }
 }
 
@@ -1415,30 +1401,19 @@ mod tests {
 
     #[test]
     fn only_the_tab_that_is_a_file_is_asked_about_before_it_closes() {
-        let saved = |name: &str| Some(CloseTarget::SavedQuery(name.to_string()));
+        let saved = |name: &str| CloseTarget::SavedQuery(name.to_string());
 
-        assert_eq!(
-            close_target(Tab::Object(3), None, 1),
-            Some(CloseTarget::Object(3))
-        );
-        assert_eq!(
-            close_target(Tab::Query(0), Some("daily"), 1),
-            saved("daily")
-        );
-        // A profile always has somewhere to write, so the last unsaved buffer
-        // has nothing for `cmd+w` to close and nothing to ask about.
-        assert_eq!(close_target(Tab::Query(0), None, 1), None);
-        // One of several, though, is a scratch pad someone is done with: it
-        // goes without a question, the way an unnamed buffer does everywhere.
-        assert_eq!(
-            close_target(Tab::Query(7), None, 2),
-            Some(CloseTarget::Buffer(7))
-        );
+        assert_eq!(close_target(Tab::Object(3), None), CloseTarget::Object(3));
+        assert_eq!(close_target(Tab::Query(0), Some("daily")), saved("daily"));
+        // Any unsaved buffer, the last one too, is a scratch pad someone is
+        // done with: it goes without a question, the way an unnamed buffer
+        // does everywhere.
+        assert_eq!(close_target(Tab::Query(7), None), CloseTarget::Buffer(7));
         // What the query tab happens to be holding says nothing about an
         // object tab, which is the one in front.
         assert_eq!(
-            close_target(Tab::Object(3), Some("daily"), 2),
-            Some(CloseTarget::Object(3))
+            close_target(Tab::Object(3), Some("daily")),
+            CloseTarget::Object(3)
         );
     }
 

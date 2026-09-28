@@ -113,15 +113,25 @@ impl Workspace {
             }),
         };
         // A profile written before a buffer was a tab carries one buffer, whose
-        // name is in the legacy scalar and whose text `read_scratch` migrates.
-        let stored_queries = if stored.open_queries.is_empty() {
+        // name is in the legacy scalar and whose text `read_scratch` migrates --
+        // if it holds anything. A profile from a build that has tabs says how
+        // many it had, and none is none: nothing is opened to write in.
+        let legacy_buffer = stored.next_query_id.is_none()
+            && (stored.open_query.is_some()
+                || store::read_scratch(&stored.id, 0)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|text| !text.trim().is_empty()));
+        let stored_queries = if !stored.open_queries.is_empty() {
+            stored.open_queries
+        } else if legacy_buffer {
             vec![store::StoredQueryTab {
                 id: 0,
                 name: stored.open_query.clone(),
                 active: true,
             }]
         } else {
-            stored.open_queries
+            Vec::new()
         };
         // Snapshots whose tab is gone -- a renamed table strands its file
         // under the old name, and nothing else will ever remove it.

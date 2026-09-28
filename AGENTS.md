@@ -895,10 +895,11 @@ The shape a change to the main pane has to fit (`session.rs`, with the
 - **A `QueryTab` owns its own editor, grid, `QueryState`, saved-query name
   (`open_query`) and `last_query`.** Do not reintroduce a single shared editor
   for anything.
-- **`queries` is never empty.** A profile always has somewhere to write, so the
-  last unsaved buffer has no closed state: `session::close_target` returns
-  `None` for it, and deleting the saved query in the only tab empties and
-  unnames that tab rather than closing it.
+- **`queries` can be empty.** Any buffer can be closed, the last one
+  included, and a profile with no tab open shows an empty pane. `active` may
+  then name a tab that is gone, which every lookup by id already answers with
+  `None`, and focus falls back to the window so the bindings that open a tab
+  still work. Deleting the saved query in a tab closes that tab.
 - **A named buffer persists to its query file, an unnamed one to its own
   `.scratch-{id}.sql`.** Every buffer is written on quit, not just the visible
   one. `store::read_scratch(id, 0)` migrates the single `.scratch.sql` an older
