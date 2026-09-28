@@ -583,7 +583,12 @@ impl Render for Workspace {
             // workspace along the focused element's dispatch path, so a
             // surface with nothing focused makes every keybinding dead.
             let focus = match profile.session.active {
-                Tab::Query(id) => Focus::Buffer(profile.session.query_tab(id)?.editor.clone()),
+                // No tab at all is still a surface: the window holds focus
+                // for the bindings that open one.
+                Tab::Query(id) => match profile.session.query_tab(id) {
+                    Some(tab) => Focus::Buffer(tab.editor.clone()),
+                    None => Focus::Window,
+                },
                 Tab::Object(id) => {
                     let tab = profile.session.objects.iter().find(|tab| tab.id == id)?;
                     match &tab.body {
