@@ -71,8 +71,8 @@ use result_grid::{NewValue, ResultGrid};
 use session::{
     ApplyReview, CatalogState, CloseTarget, Explained, Focus, InsertField, InsertForm, ObjectBody,
     ObjectTab, OpenedObject, Profile, ProfileState, QueryState, QueryTab, Refresh, Routines,
-    Session, StructureState, Tab, close_target, insert_value, matching_tab, relation_kind,
-    restored_state, show_snapshot,
+    RowCount, Session, StructureState, Tab, close_target, insert_value, matching_tab,
+    relation_kind, restored_state, show_snapshot,
 };
 use sql::{Buffer, SortKey};
 use theme::{ConnectionColor, FontSlot, Fonts, Theme, fonts, layout, theme};

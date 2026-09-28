@@ -229,6 +229,81 @@ impl Workspace {
         self.execute_and_then(sql, Tab::Object(id), None, keep_rows, None, cx);
     }
 
+    /// Ask for the row count under the tab's current filter, once. Called when
+    /// the preview's rows have landed, so the count never runs beside the fetch
+    /// it is a footnote to. Sorting and paging leave the filter alone, so they
+    /// find the answer already there.
+    ///
+    /// ponytail: runs on the connection like any other statement, so on
+    /// Postgres, MySQL, SQLite and SQL Server a statement of the user's queues
+    /// behind a slow count, bounded by the profile's statement timeout. Upgrade
+    /// path is a connection of its own for the count.
+    pub(crate) fn count_relation(&mut self, id: u64, cx: &mut Context<Self>) {
+        let engine = self.engine();
+        let Some(profile) = self.profile_mut() else {
+            return;
+        };
+        let Some(connection) = profile.connection() else {
+            return;
+        };
+        let (profile_id, generation) = (profile.id.clone(), profile.generation);
+        let Some(tab) = profile.session.objects.iter_mut().find(|tab| tab.id == id) else {
+            return;
+        };
+        let (schema, relation) = (tab.schema.clone(), tab.name.clone());
+        let ObjectBody::Relation { filter, count, .. } = &mut tab.body else {
+            return;
+        };
+        if count.answers(filter) {
+            return;
+        }
+        let sql = explorer::count_sql(engine, &schema, &relation, filter);
+        if !sql::is_generated_select(&sql) {
+            *count = RowCount::Failed(filter.clone());
+            return;
+        }
+        let asked = filter.clone();
+        *count = RowCount::Counting(asked.clone());
+        cx.notify();
+
+        let task = cx
+            .background_executor()
+            .spawn(async move { connection.generated(&sql, &CancelToken::default()) });
+        cx.spawn(async move |workspace, cx| {
+            let result = task.await;
+            _ = workspace.update(cx, |workspace, cx| {
+                let Some(profile) = workspace.issued_to(&profile_id, generation) else {
+                    return;
+                };
+                let Some(tab) = profile.session.objects.iter_mut().find(|tab| tab.id == id) else {
+                    return;
+                };
+                let ObjectBody::Relation { count, .. } = &mut tab.body else {
+                    return;
+                };
+                if !matches!(count, RowCount::Counting(now) if *now == asked) {
+                    return;
+                }
+                let rows = result.ok().and_then(|result| {
+                    result
+                        .rows
+                        .first()?
+                        .first()?
+                        .as_deref()?
+                        .trim()
+                        .parse::<u64>()
+                        .ok()
+                });
+                *count = match rows {
+                    Some(rows) => RowCount::Counted(asked, rows),
+                    None => RowCount::Failed(asked),
+                };
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     /// A header click on a relation tab: move that column through the sort and
     /// ask the server again.
     pub(crate) fn relation_sort(&mut self, id: u64, column: usize, cx: &mut Context<Self>) {
