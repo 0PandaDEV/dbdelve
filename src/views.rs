@@ -39,7 +39,7 @@ use crate::{
     palette::{Command, Mode as PaletteMode},
     result_grid,
     result_grid::ResultGrid,
-    scroller::{SmoothScrollable, smooth},
+    scroller::{SmoothScrollable, smooth, smooth_for},
     session::{
         CloseTarget, Explained, ObjectBody, ObjectTab, Profile, QueryState, QueryTab,
         StructureState, Tab, result_pane_is_expanded,
@@ -1166,56 +1166,63 @@ fn render_results(
             }),
         )
         .child({
-                let data = div()
-                    .size_full()
-                    .min_w_0()
-                    .font_family(grid)
-                    // The grid's own delegate has no key hook and the
-                    // focused element is the table root, so `enter` is
-                    // caught here on its way out of the Table context.
-                    .on_action(cx.listener(Workspace::edit_cell))
-                    .on_action(cx.listener(Workspace::copy_cell))
-                    .on_action(cx.listener(Workspace::copy_row))
-                    .on_action(cx.listener(Workspace::copy_rows))
-                    .on_action(cx.listener(Workspace::open_reference))
-                    .on_action(cx.listener(Workspace::show_references))
-                    .on_action(cx.listener(Workspace::copy_results))
-                    .on_action(cx.listener(Workspace::set_null))
-                    .on_action(cx.listener(Workspace::set_empty))
-                    .on_action(cx.listener(Workspace::set_default))
-                    .on_action(cx.listener(Workspace::request_write_mode))
-                    .on_action(cx.listener(Workspace::delete_row))
-                    .on_action(cx.listener(Workspace::follow_foreign_key))
-                    .child(DataTable::new(results).bordered(false).stripe(false));
-                let body = div().flex_1().flex().min_h_0();
-                // The new-row form takes the panel's place while it is open,
-                // folded or not.
-                let panel = match form {
-                    Some(form) => Some((render_new_row_panel(form, cx), false)),
-                    None => render_row_inspector(results, folded, row_panel, cx)
-                        .map(|panel| (panel, folded)),
-                };
-                match panel {
-                    None => body.child(data),
-                    // Folded, the panel keeps a strip of the edge rather than
-                    // vanishing: a selected row with nowhere to bring its
-                    // values back from is a panel the user has lost.
-                    Some((strip, true)) => body.child(data).child(strip),
-                    Some((panel, false)) => body.child(
-                        h_resizable("row-inspector-split")
-                            .with_state(split)
-                            .child(resizable_panel().child(data))
-                            .child(
-                                resizable_panel()
-                                    .size(px(layout::INSPECTOR_WIDTH))
-                                    .size_range(
-                                        px(layout::INSPECTOR_MIN_WIDTH)
-                                            ..px(layout::INSPECTOR_MAX_WIDTH),
-                                    )
-                                    .child(panel),
-                            ),
-                    ),
-                }
+            let rows_scroll = smooth_for(
+                "results",
+                results.read(cx).vertical_scroll_handle.clone(),
+                results.read(cx).horizontal_scroll_handle.clone(),
+                cx,
+            );
+            let data = div()
+                .id("results")
+                .smooth_scroll(&rows_scroll)
+                .size_full()
+                .min_w_0()
+                .font_family(grid)
+                // The grid's own delegate has no key hook and the
+                // focused element is the table root, so `enter` is
+                // caught here on its way out of the Table context.
+                .on_action(cx.listener(Workspace::edit_cell))
+                .on_action(cx.listener(Workspace::copy_cell))
+                .on_action(cx.listener(Workspace::copy_row))
+                .on_action(cx.listener(Workspace::copy_rows))
+                .on_action(cx.listener(Workspace::copy_results))
+                .on_action(cx.listener(Workspace::set_null))
+                .on_action(cx.listener(Workspace::set_empty))
+                .on_action(cx.listener(Workspace::set_default))
+                .on_action(cx.listener(Workspace::request_write_mode))
+                .on_action(cx.listener(Workspace::delete_row))
+                .on_action(cx.listener(Workspace::follow_foreign_key))
+                .on_action(cx.listener(Workspace::open_reference))
+                .on_action(cx.listener(Workspace::show_references))
+                .child(DataTable::new(results).bordered(false).stripe(false));
+            let body = div().flex_1().flex().min_h_0();
+            // The new-row form takes the panel's place while it is open,
+            // folded or not.
+            let panel = match form {
+                Some(form) => Some((render_new_row_panel(form, cx), false)),
+                None => render_row_inspector(results, folded, row_panel, cx)
+                    .map(|panel| (panel, folded)),
+            };
+            match panel {
+                None => body.child(data),
+                // Folded, the panel keeps a strip of the edge rather than
+                // vanishing: a selected row with nowhere to bring its
+                // values back from is a panel the user has lost.
+                Some((strip, true)) => body.child(data).child(strip),
+                Some((panel, false)) => body.child(
+                    h_resizable("row-inspector-split")
+                        .with_state(split)
+                        .child(resizable_panel().child(data))
+                        .child(
+                            resizable_panel()
+                                .size(px(layout::INSPECTOR_WIDTH))
+                                .size_range(
+                                    px(layout::INSPECTOR_MIN_WIDTH)
+                                        ..px(layout::INSPECTOR_MAX_WIDTH),
+                                )
+                                .child(panel),
+                        ),
+                ),
             }
         })
         .into_any_element();

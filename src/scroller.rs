@@ -71,6 +71,28 @@ pub fn scroll_to(id: &'static str, ix: usize, cx: &mut App) {
         .scroll_to_item(ix + OVERLAY_CHILDREN);
 }
 
+pub fn smooth_for(
+    id: &'static str,
+    scroll: impl ScrollbarHandle,
+    across: impl ScrollbarHandle,
+    cx: &mut App,
+) -> Smooth {
+    let (motion, across_motion) = cx
+        .default_global::<Registry>()
+        .motions
+        .entry(id)
+        .or_default()
+        .clone();
+    Smooth {
+        scroll: Rc::new(scroll),
+        across: Rc::new(across),
+        track: None,
+        motion,
+        across_motion,
+        intercept: true,
+    }
+}
+
 #[derive(Default)]
 struct ScrollMotion {
     shown: Point<Pixels>,
