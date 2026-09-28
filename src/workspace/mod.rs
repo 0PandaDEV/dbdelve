@@ -562,6 +562,18 @@ impl Render for Workspace {
             if !profile.session.editor_needs_focus {
                 return None;
             }
+            // The chip for whatever just took focus glides into view beside
+            // it, one-shot the same way: a tab just opened or activated off
+            // screen is a tab the strip should show, not one it leaves the
+            // user to go scroll for.
+            if let Some(index) = profile
+                .session
+                .strip_order()
+                .iter()
+                .position(|key| profile.session.tab_of(key) == Some(profile.session.active))
+            {
+                crate::scroller::scroll_to("tab-strip", index, cx);
+            }
             // Whatever the surface in front is: a keystroke reaches the
             // workspace along the focused element's dispatch path, so a
             // surface with nothing focused makes every keybinding dead.
