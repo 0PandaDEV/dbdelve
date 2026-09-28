@@ -86,6 +86,7 @@ pub(crate) struct Workspace {
     /// sidebar is a thing done for the next minute, not a preference.
     pub(crate) sidebar_hidden: bool,
     pub(crate) shell_split: Entity<ResizableState>,
+    pub(crate) tab_strip: crate::tab_drag::TabStrip,
     /// Where the sidebar's edge is unless a drag has moved it. The library
     /// rescales every panel by its share when the window changes size, so this
     /// is what puts the sidebar back.
@@ -151,6 +152,7 @@ impl Workspace {
             rebinding: None,
             sidebar_hidden: false,
             shell_split: cx.new(|_| ResizableState::default()),
+            tab_strip: crate::tab_drag::TabStrip::default(),
             sidebar_width: std::cell::Cell::new(px(layout::SIDEBAR_DEFAULT_WIDTH)),
             sidebar_container: std::cell::Cell::new(px(0.)),
             reference_popup: None,
