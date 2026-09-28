@@ -177,6 +177,9 @@ pub(crate) struct Session {
     pub(crate) queries: Vec<QueryTab>,
     pub(crate) objects: Vec<ObjectTab>,
     pub(crate) active: Tab,
+    /// The order the user dragged the strip into. Chips it does not mention --
+    /// a tab opened since -- follow it, in their default order.
+    pub(crate) tab_order: Vec<TabKey>,
     pub(crate) next_query_id: u64,
     pub(crate) next_object_id: u64,
     /// Object tabs read back from disk, held until the catalog can name them.
@@ -424,6 +427,7 @@ impl Session {
             queries,
             objects: Vec::new(),
             active: Tab::Query(active),
+            tab_order: Vec::new(),
             next_query_id,
             next_object_id: 0,
             pending_objects,
@@ -464,6 +468,38 @@ impl Session {
         match self.active {
             Tab::Query(id) => self.query_tab(id),
             Tab::Object(_) => None,
+        }
+    }
+
+    /// Every chip the strip draws, left to right: the dragged order first,
+    /// then anything newer than it in the default one -- unsaved buffers, saved
+    /// queries, objects.
+    pub(crate) fn strip_order(&self) -> Vec<TabKey> {
+        let mut chips: Vec<TabKey> = self
+            .queries
+            .iter()
+            .filter(|tab| tab.open_query.is_none())
+            .map(|tab| TabKey::Unsaved(tab.id))
+            .chain(self.saved_queries.iter().cloned().map(TabKey::Saved))
+            .chain(self.objects.iter().map(|tab| TabKey::Object(tab.id)))
+            .collect();
+        let mut ordered: Vec<TabKey> = self
+            .tab_order
+            .iter()
+            .filter(|key| chips.contains(key))
+            .cloned()
+            .collect();
+        chips.retain(|key| !ordered.contains(key));
+        ordered.extend(chips);
+        ordered
+    }
+
+    /// The tab a chip opens or shows, where it has one.
+    pub(crate) fn tab_of(&self, key: &TabKey) -> Option<Tab> {
+        match key {
+            TabKey::Unsaved(id) => Some(Tab::Query(*id)),
+            TabKey::Saved(name) => self.tab_holding(name).map(Tab::Query),
+            TabKey::Object(id) => Some(Tab::Object(*id)),
         }
     }
 
@@ -627,6 +663,15 @@ pub(crate) enum Routines {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Tab {
     Query(u64),
+    Object(u64),
+}
+
+/// A chip of the tab strip, which is not the same set as `Tab`: a saved query
+/// is listed whether or not a buffer holds it.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum TabKey {
+    Unsaved(u64),
+    Saved(String),
     Object(u64),
 }
 
