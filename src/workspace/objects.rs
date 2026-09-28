@@ -277,9 +277,15 @@ impl Workspace {
             *issued
         };
         let key = (schema.clone(), relation.clone());
-        let structure_task = cx
-            .background_executor()
-            .spawn(async move { connection.structure(&schema, &relation) });
+        let structure_task = cx.background_executor().spawn(async move {
+            let mut structure = connection.structure(&schema, &relation)?;
+            // Only an arrow hangs off this, so a failed lookup is no arrows
+            // and not a failed structure.
+            structure.referenced_by = connection
+                .references(&schema, &relation)
+                .unwrap_or_default();
+            Ok::<_, DbError>(structure)
+        });
 
         cx.spawn(async move |workspace, cx| {
             let result = structure_task.await;
@@ -363,12 +369,17 @@ impl Workspace {
             .iter()
             .map(|key| key.column.clone())
             .collect();
+        let referenced_by = structure.referenced_by.clone();
+        let primary_key = structure.primary_key();
+        let schema = tab.schema.clone();
         let not_nullable = columns_not_nullable(&structure.columns);
         let has_default = columns_with_defaults(engine, &structure.columns);
         let results = results.clone();
         results.update(cx, |table, cx| {
             let grid = table.delegate_mut();
             grid.mark_foreign_keys(&foreign_keys);
+            grid.mark_references(&referenced_by, &schema);
+            grid.mark_primary_key(&primary_key);
             grid.mark_columns(&not_nullable, &has_default);
             cx.notify();
         });
@@ -377,7 +388,8 @@ impl Workspace {
     /// Open the row the active cell references (spec §6.2): a preview of the
     /// referenced relation, filtered to the value the cell holds.
     ///
-    /// Outbound only — from the row holding the key to the row it references.
+    /// Outbound only — from the row holding the key to the row it references;
+    /// [`Workspace::open_reference`] goes the other way.
     /// Nothing runs for a NULL, which references nothing.
     pub(crate) fn follow_foreign_key(
         &mut self,
@@ -446,6 +458,188 @@ impl Workspace {
         let opened = OpenedObject::Relation {
             schema: key.referenced_schema,
             name: key.referenced_table,
+            kind,
+            filter,
+            filters,
+        };
+
+        if let Some(id) = self.open_object(opened, window, cx) {
+            self.activate_tab(Tab::Object(id), cx);
+            self.remember_profiles(cx);
+        }
+    }
+
+    /// The arrow on a key cell. Which relations reference the key is not what
+    /// the structure says -- that is every relation that *could* -- but which
+    /// hold a row for this value, so each candidate is asked for one row and
+    /// only the ones that answer are listed.
+    pub(crate) fn show_references(
+        &mut self,
+        _: &ShowReferences,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let engine = self.engine();
+        let Some(profile) = self.profile() else {
+            return;
+        };
+        let Some(connection) = profile.connection() else {
+            return;
+        };
+        let (profile_id, generation) = (profile.id.clone(), profile.generation);
+        let Some(tab) = profile.session.active_object() else {
+            return;
+        };
+        let ObjectBody::Relation {
+            structure: StructureState::Loaded(structure),
+            results,
+            ..
+        } = &tab.body
+        else {
+            return;
+        };
+        let grid = results.read(cx);
+        let grid = grid.delegate();
+        let Some((_, col)) = grid.active() else {
+            return;
+        };
+        let Some(name) = grid.columns().get(col).map(|column| column.name.clone()) else {
+            return;
+        };
+        let (Some(value), Some(at)) = (grid.active_value(), grid.reference_anchor()) else {
+            return;
+        };
+        let candidates: Vec<(usize, gpui::SharedString, String)> = grid
+            .reference_choices(col)
+            .into_iter()
+            .filter_map(|(index, label)| {
+                let reference = structure.referenced_by.get(index)?;
+                let bar = reference_filter(reference, Some(value))?;
+                let columns: Vec<ColumnDefinition> = structure
+                    .columns
+                    .iter()
+                    .filter(|column| column.name == name)
+                    .map(|column| ColumnDefinition {
+                        name: reference.column.clone(),
+                        ..column.clone()
+                    })
+                    .collect();
+                let filter = derived_filter(engine, &[bar], &columns);
+                let sql = explorer::preview_sql(
+                    engine,
+                    &reference.schema,
+                    &reference.table,
+                    &filter,
+                    1,
+                    0,
+                );
+                let sql = sql::is_generated_select(&sql)
+                    .then(|| sql::paged(engine, &sql, &[]))
+                    .flatten()?;
+                Some((index, label, sql))
+            })
+            .collect();
+
+        self.reference_checks += 1;
+        let check = self.reference_checks;
+        self.reference_popup = Some(ReferencePopup {
+            at,
+            choices: None,
+            check,
+        });
+        cx.notify();
+
+        let task = cx.background_executor().spawn(async move {
+            candidates
+                .into_iter()
+                .filter(|(_, _, sql)| {
+                    connection
+                        .generated(sql, &CancelToken::default())
+                        .is_ok_and(|result| !result.rows.is_empty())
+                })
+                .map(|(index, label, _)| (index, label))
+                .collect::<Vec<_>>()
+        });
+        cx.spawn(async move |workspace, cx| {
+            let found = task.await;
+            _ = workspace.update(cx, |workspace, cx| {
+                if workspace.issued_to(&profile_id, generation).is_none() {
+                    return;
+                }
+                if let Some(popup) = &mut workspace.reference_popup
+                    && popup.check == check
+                {
+                    popup.choices = Some(found);
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Open a relation that references the key in the active cell, filtered to
+    /// the rows that hold it: the inbound half of [`Workspace::follow_foreign_key`].
+    /// Nothing runs for a NULL, which no row references.
+    pub(crate) fn open_reference(
+        &mut self,
+        action: &OpenReference,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let engine = self.engine();
+        let Some(profile) = self.profile() else {
+            return;
+        };
+        let Some(tab) = profile.session.active_object() else {
+            return;
+        };
+        let ObjectBody::Relation {
+            structure: StructureState::Loaded(structure),
+            results,
+            ..
+        } = &tab.body
+        else {
+            return;
+        };
+        let grid = results.read(cx);
+        let grid = grid.delegate();
+        let Some((_, col)) = grid.active() else {
+            return;
+        };
+        let Some(name) = grid.columns().get(col).map(|column| column.name.clone()) else {
+            return;
+        };
+        let Some(reference) = structure.referenced_by.get(action.index).cloned() else {
+            return;
+        };
+        if reference.referenced_column != name {
+            return;
+        }
+        let Some(bar) = reference_filter(&reference, grid.active_value()) else {
+            return;
+        };
+        // The key's own type stands in for the referencing column's, which
+        // SQL Server requires to match and whose structure is not loaded.
+        let columns: Vec<ColumnDefinition> = structure
+            .columns
+            .iter()
+            .filter(|column| column.name == name)
+            .map(|column| ColumnDefinition {
+                name: reference.column.clone(),
+                ..column.clone()
+            })
+            .collect();
+        let filters = vec![bar];
+        let filter = derived_filter(engine, &filters, &columns);
+        let kind = match &profile.catalog {
+            CatalogState::Loaded(catalog, _) => {
+                relation_kind(catalog, &reference.schema, &reference.table).unwrap_or_default()
+            }
+            _ => RelationKind::default(),
+        };
+        let opened = OpenedObject::Relation {
+            schema: reference.schema,
+            name: reference.table,
             kind,
             filter,
             filters,
