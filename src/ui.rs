@@ -304,6 +304,12 @@ impl Control {
         }
     }
 
+    /// The same air on the sides as above and below the label: what is left of
+    /// the height once the text has its line, split in two.
+    pub(crate) fn padding(self) -> f32 {
+        (self.height() - self.text_size()) / 2.0
+    }
+
     pub(crate) fn text_size(self) -> f32 {
         match self {
             Control::Standard => layout::TEXT_MD,
@@ -332,7 +338,7 @@ pub(crate) fn button(
     t: Theme,
 ) -> Button {
     control(id, tone, size)
-        .px(px(layout::SPACE_MD))
+        .px(px(size.padding()))
         .when(size == Control::Standard, |standard| {
             standard.min_w(px(layout::CONTROL_MIN_WIDTH))
         })
