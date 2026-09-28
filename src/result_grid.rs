@@ -1,7 +1,9 @@
+use std::rc::Rc;
+
 use gpui::{
     App, AppContext, Context, Div, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
-    MouseButton, ParentElement, SharedString, Stateful, StatefulInteractiveElement, Styled, Window,
-    div, prelude::FluentBuilder, px,
+    MouseButton, ParentElement, Pixels, Point, SharedString, Stateful, StatefulInteractiveElement,
+    Styled, Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
     InteractiveElementExt,
@@ -12,13 +14,14 @@ use gpui_component::{
 };
 
 use crate::{
-    Workspace,
+    ShowReferences, Workspace,
     db::{self, EditTarget, QueryResult},
     export::{self, RowsAs},
     icons::icon,
     sql::Mode,
     store::{GRID_ROW_CAP, StoredGrid, captured_at},
-    theme::{layout, theme},
+    theme::{ConnectionColor, color::Srgb, layout, theme},
+    ui::{Control, Tone, icon_button},
 };
 
 /// ponytail: a column is a few hundred pixels wide, so shaping more than this is
@@ -61,6 +64,10 @@ fn gutter_cell() -> Div {
         .justify_center()
         .px(px(layout::SPACE_SM))
 }
+
+/// The relations pointing at a column: an index into the structure's
+/// `referenced_by` and the label to show for it.
+type ReferenceMenu = Rc<Vec<(usize, SharedString)>>;
 
 /// A row's schema and table, and its primary key as column/value pairs — what a
 /// one-row `DELETE` needs and nothing else.
@@ -128,6 +135,14 @@ pub struct ResultGrid {
     /// every frame under a no-allocation rule, and a group named there would be
     /// a `format!` per cell per frame.
     follow_groups: Vec<SharedString>,
+    /// For each column another relation points at, the menu of those relations:
+    /// an index into the structure's `referenced_by` and the label to show.
+    /// Built where the references are marked, for the reason `follow_groups`
+    /// is, and shared into each cell's menu.
+    reference_menus: Vec<(usize, ReferenceMenu)>,
+    /// The result columns that make up the relation's primary key, marked
+    /// where the structure arrives, by name for the reason `foreign_keys` is.
+    primary_key: Vec<usize>,
     /// The rows picked out by clicks in the gutter or cells, for a multi-row copy.
     /// Separate from `active`, which is the single cell the keyboard and the
     /// single-cell gestures act on.
@@ -135,6 +150,9 @@ pub struct ResultGrid {
     /// The row a plain click lands on, which a shift-click
     /// extends a range from.
     row_selection_anchor: Option<usize>,
+    /// Where the pointer last went down on a reference arrow, for the popup it
+    /// opens to hang from.
+    reference_anchor: Option<Point<Pixels>>,
     /// The connection's mode, cached because `editable` is asked by the grid's
     /// own double-click handler, which has no route back to the profile.
     /// `Workspace::set_mode` is the only thing that writes it after construction.
@@ -247,8 +265,11 @@ impl ResultGrid {
             not_nullable: Vec::new(),
             has_default: Vec::new(),
             follow_groups: Vec::new(),
+            reference_menus: Vec::new(),
+            primary_key: Vec::new(),
             selected_rows: std::collections::BTreeSet::new(),
             row_selection_anchor: None,
+            reference_anchor: None,
             mode,
             engine: db::Engine::default(),
             focus: None,
@@ -417,6 +438,38 @@ impl ResultGrid {
             .collect();
     }
 
+    /// Record which of this result's columns other relations point at, given
+    /// the references from the structure and the schema the relation lives in.
+    /// Matched by name for the reason [`ResultGrid::mark_foreign_keys`] is. A
+    /// reference is labelled `table.column`, with the schema in front when it is
+    /// not this relation's own.
+    pub fn mark_references(&mut self, references: &[db::Reference], schema: &str) {
+        self.reference_menus = self
+            .result
+            .columns
+            .iter()
+            .enumerate()
+            .filter_map(|(col, column)| {
+                let menu: Vec<(usize, SharedString)> = references
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, reference)| reference.referenced_column == column.name)
+                    .map(|(index, reference)| {
+                        let label = match reference.schema == schema {
+                            true => format!("{}.{}", reference.table, reference.column),
+                            false => format!(
+                                "{}.{}.{}",
+                                reference.schema, reference.table, reference.column
+                            ),
+                        };
+                        (index, SharedString::from(label))
+                    })
+                    .collect();
+                (!menu.is_empty()).then(|| (col, Rc::new(menu)))
+            })
+            .collect();
+    }
+
     /// Wide enough for the last row's number and no wider, padded the same on
     /// both sides.
     fn gutter_width(&self) -> f32 {
@@ -451,6 +504,38 @@ impl ResultGrid {
     pub fn clear_row_selection(&mut self) {
         self.selected_rows.clear();
         self.row_selection_anchor = None;
+    }
+
+    pub fn mark_primary_key(&mut self, columns: &[String]) {
+        self.primary_key = self.columns_named(columns);
+    }
+
+    fn key_icon(&self, col: usize, color: Srgb) -> Option<impl IntoElement> {
+        self.primary_key.contains(&col).then(|| {
+            icon(icon::PRIMARY_KEY)
+                .size(px(12.))
+                .flex_shrink_0()
+                .text_color(color)
+        })
+    }
+
+    pub fn reference_anchor(&self) -> Option<Point<Pixels>> {
+        self.reference_anchor
+    }
+
+    /// The relations pointing at this column, as an index into the structure's
+    /// `referenced_by` and the label to show for each.
+    pub fn reference_choices(&self, col: usize) -> Vec<(usize, SharedString)> {
+        self.reference_menu(col)
+            .map(|menu| menu.as_ref().clone())
+            .unwrap_or_default()
+    }
+
+    fn reference_menu(&self, col: usize) -> Option<&ReferenceMenu> {
+        self.reference_menus
+            .iter()
+            .find(|(column, _)| *column == col)
+            .map(|(_, menu)| menu)
     }
 
     /// Record which of this result's columns the server declared `NOT NULL`
@@ -1395,55 +1480,56 @@ impl ResultGrid {
             // survives being glanced at.
             .text_color(text);
 
-        base.child(
-            div()
-                .min_w_0()
-                .overflow_hidden()
-                .text_ellipsis()
-                // Against the values it names, not the edge of the cell.
-                .when(self.is_numeric(col_ix), |name| name.ml_auto())
-                .child(self.columns[col_ix].name.clone()),
-        )
-        .child(
-            div()
-                .ml_auto()
-                .flex_shrink_0()
-                .flex()
-                .items_center()
-                .gap(px(2.))
-                .map(|control| match key {
-                    Some((_, ascending)) => control.child(
-                        icon(match ascending {
-                            true => icon::SORT_UP,
-                            false => icon::SORT_DOWN,
-                        })
-                        .size(px(12.))
-                        .text_color(text),
-                    ),
-                    // Faint rather than absent: a header that shows nothing
-                    // until it is clicked does not read as clickable. And
-                    // absent rather than faint where a click would do
-                    // nothing, which is the same rule the other way round.
-                    None => control.children(
-                        self.sortable
-                            .then(|| icon(icon::SORTABLE).size(px(12.)).text_color(faint)),
-                    ),
-                })
-                // Only worth saying which key this is when there is more
-                // than one of them.
-                .children(key.filter(|_| self.sort.len() > 1).map(|(position, _)| {
-                    div()
-                        .text_size(px(layout::TEXT_XS))
-                        .text_color(muted)
-                        .child((position + 1).to_string())
-                })),
-        )
-        // The click goes to the workspace, which owns the statement: a sort
-        // is a change to the SQL and a re-run, not a reordering of rows the
-        // grid happens to be holding.
-        .on_click(cx.listener(move |_, _, window, cx| {
-            window.dispatch_action(Box::new(crate::SortColumn { column: col_ix }), cx);
-        }))
+        base.children(self.key_icon(col_ix, ConnectionColor::Yellow.swatch()))
+            .child(
+                div()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    // Against the values it names, not the edge of the cell.
+                    .when(self.is_numeric(col_ix), |name| name.ml_auto())
+                    .child(self.columns[col_ix].name.clone()),
+            )
+            .child(
+                div()
+                    .ml_auto()
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .gap(px(2.))
+                    .map(|control| match key {
+                        Some((_, ascending)) => control.child(
+                            icon(match ascending {
+                                true => icon::SORT_UP,
+                                false => icon::SORT_DOWN,
+                            })
+                            .size(px(12.))
+                            .text_color(text),
+                        ),
+                        // Faint rather than absent: a header that shows nothing
+                        // until it is clicked does not read as clickable. And
+                        // absent rather than faint where a click would do
+                        // nothing, which is the same rule the other way round.
+                        None => control.children(
+                            self.sortable
+                                .then(|| icon(icon::SORTABLE).size(px(12.)).text_color(faint)),
+                        ),
+                    })
+                    // Only worth saying which key this is when there is more
+                    // than one of them.
+                    .children(key.filter(|_| self.sort.len() > 1).map(|(position, _)| {
+                        div()
+                            .text_size(px(layout::TEXT_XS))
+                            .text_color(muted)
+                            .child((position + 1).to_string())
+                    })),
+            )
+            // The click goes to the workspace, which owns the statement: a sort
+            // is a change to the SQL and a re-run, not a reordering of rows the
+            // grid happens to be holding.
+            .on_click(cx.listener(move |_, _, window, cx| {
+                window.dispatch_action(Box::new(crate::SortColumn { column: col_ix }), cx);
+            }))
     }
 
     fn data_td(
@@ -1453,9 +1539,9 @@ impl ResultGrid {
         window: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        let (text, faint, edited_bg, active_ring) = {
+        let (text, faint, edited_bg, active_ring, palette) = {
             let t = theme(cx);
-            (t.text, t.text_faint, t.edited, t.accent)
+            (t.text, t.text_faint, t.edited, t.accent, *t)
         };
         let base = div()
             .id(("cell", row_ix * self.columns.len() + col_ix))
@@ -1634,6 +1720,38 @@ impl ResultGrid {
                     false => this.child(value),
                 }
             })
+            // A NULL is referenced by nothing, so it has no arrow either.
+            .children(
+                self.cell(row_ix, col_ix)
+                    .and_then(|_| self.reference_menu(col_ix))
+                    .map(|_| {
+                        icon_button(
+                            ("references", row_ix * self.columns.len() + col_ix),
+                            icon::REFERENCED_BY,
+                            Tone::Quiet,
+                            Control::Inline,
+                            palette,
+                        )
+                        // Pinned on the way down, so the action the click
+                        // dispatches finds this cell active and the table
+                        // focused, the way the cell menu's right click does.
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |table, event: &gpui::MouseDownEvent, window, cx| {
+                                let handle = table.focus_handle(cx);
+                                handle.focus(window, cx);
+                                let grid = table.delegate_mut();
+                                grid.set_active(row_ix, col_ix);
+                                grid.focus = Some(handle);
+                                grid.reference_anchor = Some(event.position);
+                                cx.notify();
+                            }),
+                        )
+                        .on_click(|_, window, cx| {
+                            window.dispatch_action(Box::new(ShowReferences), cx);
+                        })
+                    }),
+            )
             // The workspace owns the statement and the tabs and the grid owns
             // neither, so this leaves exactly as a header's sort click does.
             .when_some(group.clone(), |cell, group| cell.group(group))
@@ -2729,6 +2847,35 @@ mod tests {
             },
             Mode::ReadWrite,
         )
+    }
+
+    #[test]
+    fn a_column_other_relations_point_at_lists_them_by_table_and_column() {
+        let mut grid = keyed_grid();
+        let reference = |schema: &str, table: &str, column: &str, referenced: &str| db::Reference {
+            schema: schema.into(),
+            table: table.into(),
+            column: column.into(),
+            referenced_column: referenced.into(),
+        };
+        grid.mark_references(
+            &[
+                reference("public", "orders", "account_id", "id"),
+                reference("audit", "log", "subject", "id"),
+                reference("public", "tags", "sku", "sku"),
+            ],
+            "public",
+        );
+
+        let labels: Vec<_> = grid
+            .reference_menu(0)
+            .expect("id is pointed at")
+            .iter()
+            .map(|(index, label)| (*index, label.as_ref()))
+            .collect();
+        assert_eq!(labels, [(0, "orders.account_id"), (1, "audit.log.subject")]);
+        assert!(grid.reference_menu(1).is_none());
+        assert_eq!(grid.reference_menu(2).map(|menu| menu[0].0), Some(2));
     }
 
     #[test]
