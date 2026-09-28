@@ -1044,19 +1044,16 @@ fn render_results(
     // instead of in place of it.
     let has_rows = results.read(cx).delegate().rows_count(cx) > 0;
 
-    let message = match query {
-        QueryState::Idle if query_tab.is_some() => Some(centered(
-            key_hint(
-                t,
-                "secondary-enter",
-                "runs the selection or statement under the cursor",
-            )
-            .into_any_element(),
-        )),
+    // The two loading states, overlaid on the grid rather than replacing it
+    // (below). Opening a tab focuses the grid before its first result lands,
+    // and a `message` that replaces it unmounts the very element that focus
+    // handle names -- the window is left with a focused handle no element
+    // tracks, and no dispatch path for anything, `secondary-w` included.
+    let loading = match query {
         // A preview runs the moment its tab is shown, so an idle one is a
         // tab that is about to run rather than one waiting to be asked. It has
         // nothing to cancel yet, though, which is the whole difference here.
-        QueryState::Idle if !has_rows => Some(centered(spinner())),
+        QueryState::Idle if query_tab.is_none() && !has_rows => Some(centered(spinner())),
         QueryState::Running { .. } if !has_rows => Some(centered(
             div()
                 .flex()
@@ -1066,6 +1063,18 @@ fn render_results(
                 .child(spinner())
                 .child(cancel(cx))
                 .into_any_element(),
+        )),
+        _ => None,
+    };
+
+    let message = match query {
+        QueryState::Idle if query_tab.is_some() => Some(centered(
+            key_hint(
+                t,
+                "secondary-enter",
+                "runs the selection or statement under the cursor",
+            )
+            .into_any_element(),
         )),
         QueryState::Failed(error) => {
             let at = query_tab
@@ -1132,13 +1141,16 @@ fn render_results(
     // column sits in the same rhythm as its values. The library's table sets
     // no family of its own, so this is where the cells and their headings get
     // theirs.
-    let content = message.unwrap_or_else(|| {
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .min_h_0()
-            .children(matches!(query, QueryState::Running { .. }).then(|| {
+    let grid = div()
+        .size_full()
+        .flex()
+        .flex_col()
+        .min_h_0()
+        // The loading overlay below covers this same strip's spinner while
+        // there are no rows yet; past that, a refresh says so up here and
+        // keeps the rows it is replacing on screen underneath.
+        .children(
+            (matches!(query, QueryState::Running { .. }) && has_rows).then(|| {
                 div()
                     .h(px(layout::TAB_HEIGHT))
                     .flex_shrink_0()
@@ -1151,8 +1163,9 @@ fn render_results(
                     .child(spinner())
                     .child(quiet_line("Refreshing…".into()))
                     .child(div().ml_auto().child(cancel(cx)))
-            }))
-            .child({
+            }),
+        )
+        .child({
                 let data = div()
                     .size_full()
                     .min_w_0()
@@ -1203,9 +1216,26 @@ fn render_results(
                             ),
                     ),
                 }
-            })
-            .into_any_element()
-    });
+            }
+        })
+        .into_any_element();
+
+    let content = match message {
+        Some(message) => message,
+        None => match loading {
+            // A child rather than replacing the grid: it must stay mounted
+            // for the focus a fresh tab put on it, `secondary-w` included --
+            // see the comment above `loading`.
+            Some(overlay) => div()
+                .relative()
+                .size_full()
+                .min_h_0()
+                .child(grid)
+                .child(div().absolute().size_full().child(overlay))
+                .into_any_element(),
+            None => grid,
+        },
+    };
 
     div()
         .size_full()
