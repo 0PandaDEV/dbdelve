@@ -8,12 +8,12 @@
 //! surface it assembles, which is why the rest of the module is private.
 
 use gpui::{
-    Animation, AnimationExt, AnyElement, ClickEvent, Context, Div, Entity, FontWeight,
+    Animation, AnimationExt, AnyElement, AppContext, ClickEvent, Context, Div, Entity, FontWeight,
     InteractiveElement, IntoElement, ParentElement, SharedString, Stateful,
     StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
-    Disableable, IconName, Sizable,
+    Disableable, ElementExt, IconName, Sizable,
     button::Button,
     input::{self, Editor, EditorState, Input},
     menu::DropdownMenu,
@@ -23,7 +23,7 @@ use gpui_component::{
 };
 
 use crate::{
-    Workspace,
+    TabKey, Workspace,
     actions::{
         AddFilter, CancelQuery, ExplainQuery, FormatQuery, NewQuery, NewRow, NextPage,
         PreviousPage, RemoveFilter, ResetEditorZoom, RunQuery, SaveQuery, SetFilterColumn,
@@ -44,6 +44,7 @@ use crate::{
         CloseTarget, Explained, ObjectBody, ObjectTab, Profile, QueryState, QueryTab,
         StructureState, Tab, result_pane_is_expanded,
     },
+    tab_drag::{DragTab, TabStrip},
     theme::{
         FontSlot, OPACITY_DEFAULT, OPACITY_MAX, OPACITY_MIN, OPACITY_STEP, Theme, fonts, layout,
         theme,
@@ -78,6 +79,7 @@ pub fn render_main_content(
     editor_font_size: f32,
     row_panel: &RowPanel,
     plan_copied: bool,
+    strip: &TabStrip,
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
     let body = match profile.session.active_object() {
@@ -91,7 +93,7 @@ pub fn render_main_content(
         .flex_col()
         // Chrome, so the strip reads as the frame the surfaces sit in --
         // and chrome is the frost, which is already painted beneath it.
-        .child(render_tab_strip(profile, editor_font_size, cx))
+        .child(render_tab_strip(profile, editor_font_size, strip, cx))
         .child(div().flex_1().min_h_0().child(body))
         .into_any_element()
 }
@@ -1713,6 +1715,7 @@ pub(crate) fn render_paging(profile: &Profile, cx: &mut Context<Workspace>) -> O
 fn render_tab_strip(
     profile: &Profile,
     editor_font_size: f32,
+    strip: &TabStrip,
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
     let t = *theme(cx);
@@ -1766,11 +1769,50 @@ fn render_tab_strip(
 
     // One chip per unsaved buffer, numbered in strip order. There used to be
     // exactly one, because there used to be exactly one editor.
-    let unsaved_count = session
-        .queries
-        .iter()
-        .filter(|tab| tab.open_query.is_none())
-        .count();
+    // A chip that follows the pointer while it is being dragged, and reports
+    // where it sits for the drag that may start from it. The others slide by
+    // however far the drag has made room.
+    let drag_layout = strip.drag.as_ref().map(|drag| (drag, drag.layout()));
+    let draggable = |chip: Stateful<Div>, key: TabKey| {
+        let target = drag_layout.as_ref().and_then(|(drag, layout)| {
+            let at = drag.slots.iter().position(|slot| slot.key == key)?;
+            Some((layout.offsets[at], drag.key == key))
+        });
+        let held = target.is_some_and(|(_, held)| held);
+        // The chip in hand is where the pointer has it; the rest glide to
+        // where the drag has made room, or back to nothing once it is over.
+        let offset = match target {
+            Some((offset, true)) => {
+                strip.shift.place(&key, offset);
+                offset
+            }
+            Some((offset, false)) => strip.shift.glide(&key, offset),
+            None => strip.shift.glide(&key, 0.),
+        };
+        let begin = workspace.clone();
+        let (begin_key, bounds_key) = (key.clone(), key);
+        let bounds = strip.bounds.clone();
+        chip.relative()
+            .left(px(offset))
+            // Lifted: a chip with no fill of its own would be a name sliding
+            // over the names it passes.
+            .when(held, |chip| chip.bg(t.overlay))
+            .on_drag(DragTab, move |_, _, window, cx| {
+                let pointer = f32::from(window.mouse_position().x);
+                _ = begin.update(cx, |workspace, cx| {
+                    workspace.begin_tab_drag(begin_key.clone(), pointer, cx);
+                });
+                cx.new(|_| gpui::Empty)
+            })
+            .on_prepaint(move |chip, _, _| {
+                let mut bounds = bounds.borrow_mut();
+                match bounds.iter_mut().find(|(key, _)| *key == bounds_key) {
+                    Some(entry) => entry.1 = chip,
+                    None => bounds.push((bounds_key, chip)),
+                }
+            })
+    };
+
     let mut tabs = session
         .queries
         .iter()
@@ -1788,50 +1830,44 @@ fn render_tab_strip(
             chip(session.active == Tab::Query(id))
                 .id(("unsaved-query-tab", id as usize))
                 .group(group.clone())
-                .pl(px(layout::SPACE_SM))
-                // The last one has no × and keeps the symmetric padding: a
-                // profile always has somewhere to write, so it has no closed
-                // state to offer.
-                .map(|chip| match unsaved_count > 1 {
-                    true => chip.pr(px(layout::SPACE_XS)),
-                    false => chip.pr(px(layout::SPACE_SM)),
-                })
+                .px(px(layout::SPACE_SM))
                 // A pen, not a file: an unsaved buffer is a place to write, and
                 // the distinction is what makes the saved tabs read as files.
                 .child(row_icon(t, icon::SCRATCH_QUERY))
                 .child(label)
-                .when(unsaved_count > 1, |chip| {
-                    chip.child(
-                        div()
-                            .opacity(0.)
-                            .group_hover(group, |style| style.opacity(1.))
-                            .child(
-                                icon_button(
-                                    ("close-unsaved-query", id as usize),
-                                    icon::CLOSE,
-                                    Tone::Quiet,
-                                    Control::Inline,
-                                    t,
-                                )
-                                .tooltip("Close tab")
-                                .on_click(move |_, _, cx| {
-                                    // Or the chip underneath activates the tab
-                                    // this just closed, in the same click.
-                                    cx.stop_propagation();
-                                    _ = close_workspace.update(cx, |workspace, cx| {
-                                        workspace.ask_before_close(CloseTarget::Buffer(id), cx);
-                                    });
-                                }),
-                            ),
-                    )
-                })
+                .child(
+                    div()
+                        .opacity(0.)
+                        .group_hover(group, |style| style.opacity(1.))
+                        .child(
+                            icon_button(
+                                ("close-unsaved-query", id as usize),
+                                icon::CLOSE,
+                                Tone::Quiet,
+                                Control::Inline,
+                                t,
+                            )
+                            .tooltip("Close tab")
+                            .on_click(move |_, _, cx| {
+                                // Or the chip underneath activates the tab
+                                // this just closed, in the same click.
+                                cx.stop_propagation();
+                                _ = close_workspace.update(cx, |workspace, cx| {
+                                    workspace.ask_before_close(CloseTarget::Buffer(id), cx);
+                                });
+                            }),
+                        ),
+                )
                 .on_click(move |_, _, cx| {
                     _ = open_workspace.update(cx, |workspace, cx| {
                         workspace.activate_tab(Tab::Query(id), cx);
                     });
                 })
-                .when(unsaved_count > 1, |chip| {
-                    close_on_middle_click(chip, CloseTarget::Buffer(id))
+                .map(|chip| {
+                    draggable(
+                        close_on_middle_click(chip, CloseTarget::Buffer(id)),
+                        TabKey::Unsaved(id),
+                    )
                 })
                 .into_any_element()
         })
@@ -1855,8 +1891,7 @@ fn render_tab_strip(
                 chip(active)
                     .id(("saved-query", index))
                     .group(format!("query-tab-{index}"))
-                    .pl(px(layout::SPACE_SM))
-                    .pr(px(layout::SPACE_XS))
+                    .px(px(layout::SPACE_SM))
                     .child(row_icon(t, icon::SAVED_QUERY))
                     .child(name_label(name.clone()))
                     .child(
@@ -1906,7 +1941,13 @@ fn render_tab_strip(
                         });
                     })
                     .map(|chip| {
-                        close_on_middle_click(chip, CloseTarget::SavedQuery(middle_name.clone()))
+                        draggable(
+                            close_on_middle_click(
+                                chip,
+                                CloseTarget::SavedQuery(middle_name.clone()),
+                            ),
+                            TabKey::Saved(name.clone()),
+                        )
                     })
                     .into_any_element()
             }),
@@ -1923,8 +1964,7 @@ fn render_tab_strip(
         chip(session.active == Tab::Object(id))
             .id(("object-tab", id as usize))
             .group(group.clone())
-            .pl(px(layout::SPACE_SM))
-            .pr(px(layout::SPACE_XS))
+            .px(px(layout::SPACE_SM))
             .child(row_icon(t, object_icon(object.kind)))
             .child(name_label(object.name.clone()))
             // One relation can have as many tabs as it has filters (spec §6.3),
@@ -1971,9 +2011,28 @@ fn render_tab_strip(
                     workspace.activate_tab(Tab::Object(id), cx);
                 });
             })
-            .map(|chip| close_on_middle_click(chip, CloseTarget::Object(id)))
+            .map(|chip| {
+                draggable(
+                    close_on_middle_click(chip, CloseTarget::Object(id)),
+                    TabKey::Object(id),
+                )
+            })
             .into_any_element()
     }));
+
+    // Left to right as the user dragged them; a chip they have not placed yet
+    // follows the placed ones.
+    let default_keys = session
+        .queries
+        .iter()
+        .filter(|tab| tab.open_query.is_none())
+        .map(|tab| TabKey::Unsaved(tab.id))
+        .chain(session.saved_queries.iter().cloned().map(TabKey::Saved))
+        .chain(session.objects.iter().map(|tab| TabKey::Object(tab.id)));
+    let order = session.strip_order();
+    let mut placed: Vec<(TabKey, AnyElement)> = default_keys.zip(tabs).collect();
+    placed.sort_by_key(|(key, _)| order.iter().position(|placed| placed == key));
+    let tabs: Vec<AnyElement> = placed.into_iter().map(|(_, chip)| chip).collect();
 
     let confirm_workspace = workspace.clone();
     let naming_a_rename = on_query_tab && session.open_query().is_some();
@@ -2125,26 +2184,50 @@ fn render_tab_strip(
                 .min_w_0()
                 .flex()
                 .items_center()
-                .gap(px(layout::SPACE_XS))
+                .gap(px(layout::SPACE_SM))
                 .overflow_x_scroll()
-                .children(tabs)
-                .child(
-                    // Beside the last tab, where a browser puts it, rather
-                    // than orphaned at the far edge of the window.
-                    icon_button(
-                        "new-query-tab",
-                        icon::PLUS,
-                        Tone::Quiet,
-                        Control::Compact,
-                        t,
-                    )
-                    .tooltip_with_action("New query", &NewQuery, None)
-                    .on_click(move |_, window, cx| {
-                        _ = new_workspace.update(cx, |workspace, cx| {
-                            workspace.new_query(&NewQuery, window, cx);
+                .smooth_scroll(&smooth("tab-strip", cx))
+                .on_drag_move::<DragTab>({
+                    let workspace = workspace.clone();
+                    move |event, _, cx| {
+                        let pointer = f32::from(event.event.position.x);
+                        _ = workspace.update(cx, |workspace, cx| {
+                            workspace.move_tab_drag(pointer, cx);
                         });
-                    }),
-                ),
+                    }
+                })
+                .on_mouse_up(gpui::MouseButton::Left, {
+                    let workspace = workspace.clone();
+                    move |_, _, cx| {
+                        _ = workspace.update(cx, |workspace, cx| workspace.end_tab_drag(cx));
+                    }
+                })
+                .on_mouse_up_out(gpui::MouseButton::Left, {
+                    let workspace = workspace.clone();
+                    move |_, _, cx| {
+                        _ = workspace.update(cx, |workspace, cx| workspace.end_tab_drag(cx));
+                    }
+                })
+                .children(tabs),
+        )
+        .child(
+            // Outside the scrolling strip and shrink-proof, so a strip full
+            // enough to scroll never scrolls this out of reach with it.
+            div().flex_shrink_0().child(
+                icon_button(
+                    "new-query-tab",
+                    icon::PLUS,
+                    Tone::Quiet,
+                    Control::Compact,
+                    t,
+                )
+                .tooltip_with_action("New query", &NewQuery, None)
+                .on_click(move |_, window, cx| {
+                    _ = new_workspace.update(cx, |workspace, cx| {
+                        workspace.new_query(&NewQuery, window, cx);
+                    });
+                }),
+            ),
         )
         .children(structure_toggle)
         .children(plan_toggle)

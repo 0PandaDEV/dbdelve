@@ -966,9 +966,13 @@ impl Render for Workspace {
                 self.settings.editor_font_size,
                 &self.row_panel,
                 self.plan_copied,
+                &self.tab_strip,
                 cx,
             )))
             .children(results_status);
+        // The strip's chips glide for as long as the render above found one
+        // still on its way.
+        self.tab_strip.shift.drive(window);
         // With the sidebar folded there is nothing to split, and a split with
         // one panel still paints the handle it no longer divides anything with.
         let main_pane = if self.sidebar_hidden {
