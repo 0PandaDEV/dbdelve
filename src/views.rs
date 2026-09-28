@@ -2146,29 +2146,12 @@ fn render_tab_strip(
                 ))
         });
 
-    // What the preview asked the server for, and the only control over it.
-    // Beside the Data | Structure pair because it belongs to the same view:
-    // it is a property of these rows, not of the window.
-    let preview = session.active_object().and_then(|tab| match &tab.body {
-        ObjectBody::Relation {
-            limit,
-            offset,
-            query,
-            showing_structure: false,
-            ..
-        } => Some((
-            *limit,
-            *offset,
-            // A full page may have another behind it; a short one is the
-            // relation's end. The same gate `turn_page` holds, read here only
-            // to decide whether the button is worth drawing.
-            matches!(query, QueryState::Complete { rows, .. } if *rows >= *limit),
-        )),
-        _ => None,
-    });
-
-    // Gated exactly as the pager is: a structure tab has no rows to add one to.
-    let new_row = preview.map(|_| {
+    // On every relation tab, the structure view included: there it takes you
+    // back to the data before opening the form.
+    let is_relation = session
+        .active_object()
+        .is_some_and(|tab| matches!(tab.body, ObjectBody::Relation { .. }));
+    let new_row = is_relation.then(|| {
         div().flex_shrink_0().child(
             button("new-row", "New row", Tone::Quiet, Control::Compact, t).on_click(
                 |_, window, cx| {
