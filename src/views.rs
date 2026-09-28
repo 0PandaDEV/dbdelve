@@ -1148,6 +1148,8 @@ fn render_results(
                     .on_action(cx.listener(Workspace::copy_cell))
                     .on_action(cx.listener(Workspace::copy_row))
                     .on_action(cx.listener(Workspace::copy_rows))
+                    .on_action(cx.listener(Workspace::open_reference))
+                    .on_action(cx.listener(Workspace::show_references))
                     .on_action(cx.listener(Workspace::copy_results))
                     .on_action(cx.listener(Workspace::set_null))
                     .on_action(cx.listener(Workspace::set_empty))
