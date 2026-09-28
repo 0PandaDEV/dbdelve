@@ -51,7 +51,7 @@ use crate::{
     },
     ui::{
         Control, Tone, button, button_label, compact_count, dialog, group_thousands, icon_button,
-        key_hint, keycap_for, keycap_text, object_icon, row_icon, section_label,
+        key_hint, keycap_for, keycap_text, kind_color, object_icon, row_icon, section_label,
     },
     workspace::{
         EDITOR_FONT_SIZE_MAX, EDITOR_FONT_SIZE_MIN, SettingsTab, editor_zoom_percent,
@@ -1444,9 +1444,11 @@ fn preview_tab(
             }
         })
         .child(
-            icon(path)
-                .size(px(12.))
-                .text_color(if selected { t.text } else { t.text_faint }),
+            icon(path).size(px(12.)).text_color(
+                kind_color(path)
+                    .map(crate::theme::ConnectionColor::swatch)
+                    .unwrap_or(if selected { t.text } else { t.text_faint }),
+            ),
         )
         .child(label)
         .on_click(cx.listener(move |workspace, _: &ClickEvent, window, cx| {

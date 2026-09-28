@@ -46,7 +46,24 @@ pub(crate) fn object_icon(kind: ObjectKind) -> &'static str {
 /// One column of icons down the sidebar, so every label starts at the same x
 /// whether its row is a folder or an object.
 pub(crate) fn row_icon(t: Theme, path: &'static str) -> impl IntoElement {
-    row_icon_tinted(t, path, None)
+    row_icon_tinted(t, path, kind_color(path))
+}
+
+/// The hue an object's or a query's icon always wears, wherever it is drawn:
+/// tables and views blue, queries red, functions and structure yellow,
+/// procedures orange.
+/// Keyed by the icon rather than passed by each caller, so the sidebar, the
+/// tabs, the palette and the toggles cannot disagree.
+pub(crate) fn kind_color(path: &str) -> Option<ConnectionColor> {
+    match path {
+        icon::TABLE | icon::PARTITIONED_TABLE | icon::VIEW | icon::MATERIALIZED_VIEW => {
+            Some(ConnectionColor::Blue)
+        }
+        icon::SCRATCH_QUERY | icon::SAVED_QUERY => Some(ConnectionColor::Red),
+        icon::FUNCTION | icon::STRUCTURE => Some(ConnectionColor::Yellow),
+        icon::PROCEDURE => Some(ConnectionColor::Orange),
+        _ => None,
+    }
 }
 
 /// `row_icon`, in a connection's own colour. Without one it is `row_icon`
