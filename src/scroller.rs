@@ -1,6 +1,7 @@
 use std::{
     cell::RefCell,
     collections::HashMap,
+    hash::Hash,
     rc::Rc,
     time::{Duration, Instant},
 };
@@ -50,6 +51,24 @@ pub fn smooth(id: &'static str, cx: &mut App) -> Smooth {
         across_motion,
         intercept: false,
     }
+}
+
+/// `smooth_scroll`'s own wheel-capturing canvas is the tracked element's
+/// first child, ahead of whatever it is scrolling: `scroll_to_item` counts
+/// direct children, so a target index meant for the caller's own content has
+/// to shift past it to land on the right one.
+const OVERLAY_CHILDREN: usize = 1;
+
+/// Brings an item of the element `smooth` tracks into view, at the next
+/// prepaint -- the id has to be one `smooth` was already called with once,
+/// which every render of the scrolled element does regardless. `ix` counts
+/// the caller's own children, not `smooth_scroll`'s canvas ahead of them.
+pub fn scroll_to(id: &'static str, ix: usize, cx: &mut App) {
+    cx.default_global::<Registry>()
+        .handles
+        .entry(id)
+        .or_default()
+        .scroll_to_item(ix + OVERLAY_CHILDREN);
 }
 
 #[derive(Default)]
@@ -123,6 +142,117 @@ fn clamp_offset(offset: Point<Pixels>, maximum: Point<Pixels>) -> Point<Pixels> 
         offset.x.clamp(-maximum.x.max(Pixels::ZERO), Pixels::ZERO),
         offset.y.clamp(-maximum.y.max(Pixels::ZERO), Pixels::ZERO),
     )
+}
+
+/// Things that glide to where they are told to be, on the same curve and clock
+/// as the scrolling: each frame closes the same share of the distance left, per
+/// 1/180 s of real time, so it looks the same at any refresh rate.
+pub struct Shift<K> {
+    inner: Rc<RefCell<ShiftState<K>>>,
+}
+
+struct ShiftState<K> {
+    items: HashMap<K, (f32, f32)>,
+    active: bool,
+    frame_pending: bool,
+    last_frame: Option<Instant>,
+}
+
+impl<K> Clone for Shift<K> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
+impl<K> Default for Shift<K> {
+    fn default() -> Self {
+        Self {
+            inner: Rc::new(RefCell::new(ShiftState {
+                items: HashMap::new(),
+                active: false,
+                frame_pending: false,
+                last_frame: None,
+            })),
+        }
+    }
+}
+
+impl<K: Hash + Eq + Clone + 'static> Shift<K> {
+    /// Where `key` is drawn now, on its way to `target`.
+    pub fn glide(&self, key: &K, target: f32) -> f32 {
+        let mut state = self.inner.borrow_mut();
+        let entry = state.items.entry(key.clone()).or_insert((target, target));
+        entry.1 = target;
+        let shown = entry.0;
+        if (shown - target).abs() >= f32::from(REST) {
+            state.active = true;
+        }
+        shown
+    }
+
+    /// `key` is exactly at `value`, with nothing to glide from.
+    pub fn place(&self, key: &K, value: f32) {
+        self.inner
+            .borrow_mut()
+            .items
+            .insert(key.clone(), (value, value));
+    }
+
+    /// The layout has moved `key` by `moved` under it: keep it drawn where it
+    /// was, and glide the rest of the way in.
+    pub fn settle_into(&self, key: &K, moved: f32) {
+        let mut state = self.inner.borrow_mut();
+        if let Some(entry) = state.items.get_mut(key) {
+            entry.0 -= moved;
+            entry.1 = 0.;
+            state.active = true;
+        }
+    }
+
+    /// Ask for frames for as long as anything is still gliding.
+    pub fn drive(&self, window: &mut Window) {
+        {
+            let mut state = self.inner.borrow_mut();
+            if !state.active || state.frame_pending {
+                return;
+            }
+            state.frame_pending = true;
+        }
+        let shift = self.clone();
+        window.on_next_frame(move |window, _| {
+            {
+                let mut state = shift.inner.borrow_mut();
+                state.frame_pending = false;
+                let now = Instant::now();
+                let elapsed = state
+                    .last_frame
+                    .replace(now)
+                    .map(|last| now.duration_since(last))
+                    .unwrap_or(Duration::from_secs_f32(1.0 / HERTZ));
+                let ease =
+                    1.0 - (1.0 - EASE).powf(elapsed.min(MAX_FRAME_TIME).as_secs_f32() * HERTZ);
+                let rest = f32::from(REST);
+                let mut moving = false;
+                for (shown, target) in state.items.values_mut() {
+                    let distance = *target - *shown;
+                    if distance.abs() < rest {
+                        *shown = *target;
+                    } else {
+                        *shown += distance * ease;
+                        moving = true;
+                    }
+                }
+                state.active = moving;
+                if !moving {
+                    state.last_frame = None;
+                }
+            }
+            window.refresh();
+            shift.drive(window);
+        });
+    }
 }
 
 fn schedule_frame(motion: &Motion, scroll: Rc<dyn ScrollbarHandle>, window: &mut Window) {

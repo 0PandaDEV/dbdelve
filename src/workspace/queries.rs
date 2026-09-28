@@ -6,7 +6,7 @@
 use std::ops::Range;
 
 use super::*;
-use crate::session::{PendingRun, Resume};
+use crate::session::{PendingRun, Resume, TabKey};
 
 impl Workspace {
     /// Edits sitting in the visible grid, waiting to be written back. Read off
@@ -457,6 +457,12 @@ impl Workspace {
         };
         let profile_id = profile.id.clone();
         profile.session.queries.push(tab);
+        // Placed at the end of the strip's own order rather than left for
+        // `strip_order`'s default, which groups every unsaved buffer ahead of
+        // the saved queries and objects regardless of when each was opened --
+        // right for a session nothing has ever dragged, wrong for one where
+        // this is the newest tab of any kind.
+        profile.session.tab_order.push(TabKey::Unsaved(id));
         self.install_completions(&profile_id, cx);
         self.activate_tab(Tab::Query(id), cx);
     }

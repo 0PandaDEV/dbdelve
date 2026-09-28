@@ -12,6 +12,7 @@ mod scroller;
 mod session;
 mod sql;
 mod store;
+mod tab_drag;
 mod views;
 mod workspace;
 
@@ -71,7 +72,7 @@ use result_grid::{NewValue, ResultGrid};
 use session::{
     ApplyReview, CatalogState, CloseTarget, Explained, Focus, InsertField, InsertForm, ObjectBody,
     ObjectTab, OpenedObject, Profile, ProfileState, QueryState, QueryTab, Refresh, Routines,
-    RowCount, Session, StructureState, Tab, close_target, insert_value, matching_tab,
+    RowCount, Session, StructureState, Tab, TabKey, close_target, insert_value, matching_tab,
     relation_kind, restored_state, show_snapshot,
 };
 use sql::{Buffer, SortKey};

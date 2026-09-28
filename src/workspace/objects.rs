@@ -6,6 +6,7 @@
 use super::*;
 
 use crate::db::ColumnDefinition;
+use crate::session::TabKey;
 
 impl Workspace {
     pub(crate) fn open_explorer_target(
@@ -110,13 +111,18 @@ impl Workspace {
                 }
             }
         };
-        self.profile_mut()?.session.objects.push(ObjectTab {
+        let profile = self.profile_mut()?;
+        profile.session.objects.push(ObjectTab {
             id,
             schema,
             name,
             kind,
             body,
         });
+        // See `new_query`'s own push to `tab_order`: without it, a session
+        // nothing has dragged yet sorts every object after every query
+        // regardless of which was opened first.
+        profile.session.tab_order.push(TabKey::Object(id));
         Some(id)
     }
 

@@ -4,6 +4,7 @@
 //! impl live in as many modules as it has concerns; they moved out whole.
 
 use super::*;
+use crate::tab_drag::{self, Drag, Slot};
 
 impl Workspace {
     pub(crate) fn toggle_sidebar(
@@ -56,21 +57,12 @@ impl Workspace {
         let Some(session) = self.profile().map(|profile| &profile.session) else {
             return;
         };
-        // The chip row draws unsaved buffers, then saved queries, then object
-        // tabs, so cycling walks them in that order.
+        // Cycling walks the strip left to right, wherever the chips were
+        // dragged to.
         let tabs: Vec<Tab> = session
-            .queries
+            .strip_order()
             .iter()
-            .filter(|query| query.open_query.is_none())
-            .map(|tab| Tab::Query(tab.id))
-            .chain(
-                session
-                    .saved_queries
-                    .iter()
-                    .filter_map(|name| session.tab_holding(name))
-                    .map(Tab::Query),
-            )
-            .chain(session.objects.iter().map(|tab| Tab::Object(tab.id)))
+            .filter_map(|key| session.tab_of(key))
             .collect();
         if tabs.len() < 2 {
             return;
@@ -80,6 +72,64 @@ impl Workspace {
         };
         let next = tabs[(index as isize + step).rem_euclid(tabs.len() as isize) as usize];
         self.activate_tab(next, cx);
+    }
+
+    /// A chip has been picked up. The chips are what the strip last drew, so
+    /// their bounds are where the drag measures from and not where it draws.
+    pub(crate) fn begin_tab_drag(&mut self, key: TabKey, pointer_x: f32, cx: &mut Context<Self>) {
+        let Some(profile) = self.profile() else {
+            return;
+        };
+        let order = profile.session.strip_order();
+        let bounds = self.tab_strip.bounds.borrow();
+        let mut slots: Vec<Slot> = bounds
+            .iter()
+            .filter(|(key, _)| order.contains(key))
+            .map(|(key, bounds)| Slot {
+                key: key.clone(),
+                left: f32::from(bounds.left()),
+                width: f32::from(bounds.size.width),
+            })
+            .collect();
+        drop(bounds);
+        slots.sort_by(|a, b| a.left.total_cmp(&b.left));
+        let Some(index) = slots.iter().position(|slot| slot.key == key) else {
+            return;
+        };
+        self.tab_strip.drag = Some(Drag {
+            grab: pointer_x - slots[index].left,
+            key,
+            slots,
+            index,
+            pointer_x,
+        });
+        cx.notify();
+    }
+
+    pub(crate) fn move_tab_drag(&mut self, pointer_x: f32, cx: &mut Context<Self>) {
+        if let Some(drag) = &mut self.tab_strip.drag {
+            drag.pointer_x = pointer_x;
+            cx.notify();
+        }
+    }
+
+    /// Dropped: the strip keeps the order the drag had made room for.
+    pub(crate) fn end_tab_drag(&mut self, cx: &mut Context<Self>) {
+        let Some(drag) = self.tab_strip.drag.take() else {
+            return;
+        };
+        let keys: Vec<TabKey> = drag.slots.iter().map(|slot| slot.key.clone()).collect();
+        let layout = drag.layout();
+        // The strip is about to be laid out in the new order, so each chip is
+        // drawn where it was and glides the rest of the way.
+        for (slot, moved) in drag.slots.iter().zip(&layout.landing) {
+            self.tab_strip.shift.settle_into(&slot.key, *moved);
+        }
+        let order = tab_drag::reordered(&keys, &drag.key, layout.target);
+        if let Some(profile) = self.profile_mut() {
+            profile.session.tab_order = order;
+        }
+        cx.notify();
     }
 
     pub(crate) fn next_tab(&mut self, _: &NextTab, _: &mut Window, cx: &mut Context<Self>) {
