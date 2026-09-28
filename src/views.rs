@@ -915,6 +915,10 @@ fn render_routine(tab: &ObjectTab, cx: &mut Context<Workspace>) -> AnyElement {
                 .gap(px(layout::SPACE_SM))
                 .child(
                     div()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .whitespace_nowrap()
                         .text_size(px(layout::TEXT_LG))
                         .font_weight(FontWeight::SEMIBOLD)
                         .child(format!("{}.{}", tab.schema, tab.name)),
@@ -1435,6 +1439,10 @@ fn render_row_inspector(
                                     .gap(px(layout::SPACE_SM))
                                     .child(
                                         div()
+                                            .min_w_0()
+                                            .overflow_hidden()
+                                            .text_ellipsis()
+                                            .whitespace_nowrap()
                                             .text_size(px(layout::TEXT_SM))
                                             .text_color(t.text_muted)
                                             .child(field.name),
@@ -1580,6 +1588,9 @@ fn render_structure(state: &StructureState, cx: &mut Context<Workspace>) -> AnyE
         div()
             .w(px(220.))
             .min_w(px(220.))
+            .overflow_hidden()
+            .text_ellipsis()
+            .whitespace_nowrap()
             .font_weight(FontWeight::MEDIUM)
             .child(name)
     };
@@ -1595,6 +1606,9 @@ fn render_structure(state: &StructureState, cx: &mut Context<Workspace>) -> AnyE
                         div()
                             .flex_1()
                             .min_w_0()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
                             .text_color(t.text_muted)
                             .child(definition.definition.clone()),
                     )
@@ -1622,6 +1636,9 @@ fn render_structure(state: &StructureState, cx: &mut Context<Workspace>) -> AnyE
                     div()
                         .w(px(200.))
                         .min_w(px(200.))
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .whitespace_nowrap()
                         // The same colour the editor gives a type name, so
                         // structure and SQL read as one vocabulary.
                         .text_color(t.syntax_type)
@@ -1642,6 +1659,9 @@ fn render_structure(state: &StructureState, cx: &mut Context<Workspace>) -> AnyE
                     div()
                         .flex_1()
                         .min_w_0()
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .whitespace_nowrap()
                         .text_color(t.text_muted)
                         .child(column.default.clone().unwrap_or_default()),
                 )
