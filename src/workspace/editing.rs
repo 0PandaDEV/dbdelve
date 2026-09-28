@@ -19,6 +19,9 @@ impl Workspace {
             return;
         }
         self.clear_notice();
+        // From the structure view the form belongs to the data, so it goes
+        // back there first.
+        self.show_structure(false, cx);
         let Some(profile) = self.profile() else {
             return;
         };

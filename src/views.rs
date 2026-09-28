@@ -23,7 +23,7 @@ use gpui_component::{
 };
 
 use crate::{
-    TabKey, Workspace,
+    InsertForm, TabKey, Workspace,
     actions::{
         AddFilter, CancelQuery, ExplainQuery, FormatQuery, NewQuery, NewRow, NextPage,
         PreviousPage, RemoveFilter, ResetEditorZoom, RunQuery, SaveQuery, SetFilterColumn,
@@ -83,7 +83,17 @@ pub fn render_main_content(
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
     let body = match profile.session.active_object() {
-        Some(tab) => render_object(tab, profile.config.engine(), row_panel, cx),
+        Some(tab) => render_object(
+            tab,
+            profile.config.engine(),
+            row_panel,
+            profile
+                .session
+                .insert_form
+                .as_ref()
+                .filter(|form| form.tab == profile.session.active),
+            cx,
+        ),
         None => render_query_surface(profile, editor_font_size, row_panel, plan_copied, cx),
     };
 
@@ -195,6 +205,7 @@ fn render_query_surface(
             tab.row_panel_folded,
             &tab.row_panel_split,
             row_panel,
+            None,
             cx,
         ),
     };
@@ -502,6 +513,7 @@ fn render_object(
     tab: &ObjectTab,
     engine: Engine,
     row_panel: &RowPanel,
+    form: Option<&InsertForm>,
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
     let t = *theme(cx);
@@ -547,6 +559,7 @@ fn render_object(
             *row_panel_folded,
             row_panel_split,
             row_panel,
+            form,
             cx,
         )))
         .into_any_element()
@@ -735,20 +748,13 @@ fn filter_bar_row() -> gpui::Div {
         .pr(px(layout::SPACE_SM))
 }
 
-/// The "New row" form, over the preview it was opened on (spec §4).
+/// The "New row" form (spec §4), in the place the row panel takes beside the
+/// grid rather than over it.
 ///
 /// The buttons are Cancel and **Review SQL**: this generates the statement and
 /// shows it, and running it is the review panel's ask, not this one's.
-pub fn render_new_row_form(
-    workspace: &Workspace,
-    cx: &mut Context<Workspace>,
-) -> Option<AnyElement> {
+fn render_new_row_panel(form: &InsertForm, cx: &mut Context<Workspace>) -> AnyElement {
     let t = *theme(cx);
-    let profile = workspace.profile()?;
-    let form = profile.session.insert_form.as_ref()?;
-    if form.tab != profile.session.active {
-        return None;
-    }
 
     let fields: Vec<AnyElement> = form
         .fields
@@ -765,7 +771,15 @@ pub fn render_new_row_form(
                         .flex()
                         .items_center()
                         .gap(px(layout::SPACE_SM))
-                        .child(div().flex_1().min_w_0().child(field.column.clone()))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .whitespace_nowrap()
+                                .child(field.column.clone()),
+                        )
                         .child(
                             div()
                                 .text_size(px(layout::TEXT_XS))
@@ -802,73 +816,68 @@ pub fn render_new_row_form(
     let cancel_workspace = cx.entity().downgrade();
     let review_workspace = cancel_workspace.clone();
 
-    Some(
-        div()
-            .absolute()
-            .inset_0()
-            .flex()
-            .items_center()
-            .justify_center()
-            .child(
-                dialog(t)
-                    .child(section_label(t, "New row"))
-                    // The one line that says what an empty field means, because
-                    // the three-way rule is invisible otherwise.
-                    .child(
-                        div()
-                            .text_size(px(layout::TEXT_SM))
-                            .text_color(t.text_faint)
-                            .child(
-                                "A field left blank is left out, so the column keeps its default.",
-                            ),
+    div()
+        .size_full()
+        .flex()
+        .flex_col()
+        .gap(px(layout::SPACE_MD))
+        .p(px(layout::SPACE_MD))
+        .child(section_label(t, "New row"))
+        // The one line that says what an empty field means, because the
+        // three-way rule is invisible otherwise.
+        .child(
+            div()
+                .text_size(px(layout::TEXT_SM))
+                .text_color(t.text_faint)
+                .child("A field left blank is left out, so the column keeps its default."),
+        )
+        .child(
+            div()
+                .id("new-row-fields")
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .smooth_scroll(&smooth("new-row-fields", cx))
+                .flex()
+                .flex_col()
+                .gap(px(layout::SPACE_MD))
+                .children(fields),
+        )
+        .child(
+            div()
+                .flex()
+                .justify_end()
+                .gap(px(layout::SPACE_SM))
+                .child(
+                    button(
+                        "cancel-new-row",
+                        "Cancel",
+                        Tone::Quiet,
+                        Control::Standard,
+                        t,
                     )
-                    .child(
-                        div()
-                            .id("new-row-fields")
-                            .max_h(px(320.))
-                            .overflow_y_scroll()
-                            .flex()
-                            .flex_col()
-                            .gap(px(layout::SPACE_MD))
-                            .children(fields),
+                    .on_click(move |_, _, cx| {
+                        _ = cancel_workspace.update(cx, |workspace, cx| {
+                            workspace.close_new_row(cx);
+                        });
+                    }),
+                )
+                .child(
+                    button(
+                        "review-new-row",
+                        "Review SQL",
+                        Tone::Primary,
+                        Control::Standard,
+                        t,
                     )
-                    .child(
-                        div()
-                            .flex()
-                            .justify_end()
-                            .gap(px(layout::SPACE_SM))
-                            .child(
-                                button(
-                                    "cancel-new-row",
-                                    "Cancel",
-                                    Tone::Quiet,
-                                    Control::Standard,
-                                    t,
-                                )
-                                .on_click(move |_, _, cx| {
-                                    _ = cancel_workspace.update(cx, |workspace, cx| {
-                                        workspace.close_new_row(cx);
-                                    });
-                                }),
-                            )
-                            .child(
-                                button(
-                                    "review-new-row",
-                                    "Review SQL",
-                                    Tone::Primary,
-                                    Control::Standard,
-                                    t,
-                                )
-                                .on_click(move |_, _, cx| {
-                                    _ = review_workspace.update(cx, |workspace, cx| {
-                                        workspace.confirm_new_row(cx);
-                                    });
-                                }),
-                            ),
-                    ),
-            )
-            .into_any_element(),
-    )
+                    .on_click(move |_, _, cx| {
+                        _ = review_workspace.update(cx, |workspace, cx| {
+                            workspace.confirm_new_row(cx);
+                        });
+                    }),
+                ),
+        )
+        .into_any_element()
 }
 
 fn render_routine(tab: &ObjectTab, cx: &mut Context<Workspace>) -> AnyElement {
@@ -952,6 +961,7 @@ fn clock(elapsed: std::time::Duration) -> String {
 ///
 /// `query_tab` is the buffer's tab, and `None` for an object tab's preview,
 /// which has no buffer.
+#[allow(clippy::too_many_arguments)]
 fn render_results(
     query: &QueryState,
     results: &Entity<TableState<ResultGrid>>,
@@ -959,6 +969,7 @@ fn render_results(
     folded: bool,
     split: &Entity<ResizableState>,
     row_panel: &RowPanel,
+    form: Option<&InsertForm>,
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
     let t = *theme(cx);
@@ -1164,13 +1175,20 @@ fn render_results(
                     .on_action(cx.listener(Workspace::follow_foreign_key))
                     .child(DataTable::new(results).bordered(false).stripe(false));
                 let body = div().flex_1().flex().min_h_0();
-                match render_row_inspector(results, folded, row_panel, cx) {
+                // The new-row form takes the panel's place while it is open,
+                // folded or not.
+                let panel = match form {
+                    Some(form) => Some((render_new_row_panel(form, cx), false)),
+                    None => render_row_inspector(results, folded, row_panel, cx)
+                        .map(|panel| (panel, folded)),
+                };
+                match panel {
                     None => body.child(data),
                     // Folded, the panel keeps a strip of the edge rather than
                     // vanishing: a selected row with nowhere to bring its
                     // values back from is a panel the user has lost.
-                    Some(strip) if folded => body.child(data).child(strip),
-                    Some(panel) => body.child(
+                    Some((strip, true)) => body.child(data).child(strip),
+                    Some((panel, false)) => body.child(
                         h_resizable("row-inspector-split")
                             .with_state(split)
                             .child(resizable_panel().child(data))
