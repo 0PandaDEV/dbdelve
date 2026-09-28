@@ -838,6 +838,9 @@ impl Workspace {
         if !keep_rows && explain.is_none() {
             results.update(cx, |table, cx| {
                 *table.delegate_mut() = ResultGrid::empty();
+                // Rows dropped from the gutter's multi-row selection too, for
+                // the same reason.
+                table.delegate_mut().clear_row_selection();
                 // The inspector reads whatever row is selected, and a row index
                 // means nothing once the rows behind it are gone.
                 table.clear_selection(cx);

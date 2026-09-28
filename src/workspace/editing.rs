@@ -807,6 +807,21 @@ impl Workspace {
         cx.write_to_clipboard(ClipboardItem::new_string(text));
     }
 
+    /// The selected rows, or the active cell's alone with nothing selected, in
+    /// whichever format the "Copy Rows As" submenu was asked for.
+    pub(crate) fn copy_rows(&mut self, action: &CopyRows, _: &mut Window, cx: &mut Context<Self>) {
+        let Some(results) = self
+            .profile()
+            .and_then(|profile| profile.session.active_results())
+        else {
+            return;
+        };
+        let Some(text) = results.read(cx).delegate().rows_as(action.kind) else {
+            return;
+        };
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
+    }
+
     pub(crate) fn copy_results(&mut self, _: &CopyResults, _: &mut Window, cx: &mut Context<Self>) {
         self.copy_results_as(Format::Tsv, cx);
     }
