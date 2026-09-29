@@ -25,12 +25,13 @@ impl Workspace {
         {
             self.load_structure(id, schema, relation, cx);
         }
-        if let Some(ObjectBody::Relation { count, .. }) = self
+        if let Some(ObjectBody::Relation { count, stale, .. }) = self
             .profile_mut()
             .and_then(|profile| profile.session.objects.iter_mut().find(|tab| tab.id == id))
             .map(|tab| &mut tab.body)
         {
             *count = RowCount::Unasked;
+            *stale = true;
         }
         self.requery_relation(id, |_, _, _, _| true, cx);
     }
