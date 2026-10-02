@@ -177,8 +177,9 @@ pub(crate) struct Session {
     pub(crate) queries: Vec<QueryTab>,
     pub(crate) objects: Vec<ObjectTab>,
     pub(crate) active: Tab,
-    /// The order the user dragged the strip into. Chips it does not mention --
-    /// a tab opened since -- follow it, in their default order.
+    /// The order the strip was last left in, by a drag or by a tab opening at
+    /// its end. Chips it does not mention -- every tab restored at launch,
+    /// until either happens -- follow it, in their default order.
     pub(crate) tab_order: Vec<TabKey>,
     pub(crate) next_query_id: u64,
     pub(crate) next_object_id: u64,
@@ -469,7 +470,7 @@ impl Session {
     /// then anything newer than it in the default one -- unsaved buffers, saved
     /// queries, objects.
     pub(crate) fn strip_order(&self) -> Vec<TabKey> {
-        let mut chips: Vec<TabKey> = self
+        let chips: Vec<TabKey> = self
             .queries
             .iter()
             .filter(|tab| tab.open_query.is_none())
@@ -477,15 +478,26 @@ impl Session {
             .chain(self.saved_queries.iter().cloned().map(TabKey::Saved))
             .chain(self.objects.iter().map(|tab| TabKey::Object(tab.id)))
             .collect();
-        let mut ordered: Vec<TabKey> = self
-            .tab_order
-            .iter()
-            .filter(|key| chips.contains(key))
-            .cloned()
-            .collect();
-        chips.retain(|key| !ordered.contains(key));
-        ordered.extend(chips);
-        ordered
+        strip_order(chips, &self.tab_order)
+    }
+
+    /// Put a chip just opened at the right end of the strip as it is drawn.
+    ///
+    /// The whole order is written down first, not just the new chip: the tabs
+    /// restored at launch are in no order but the default one, and pushing
+    /// onto that would put the newest chip ahead of all of them.
+    pub(crate) fn place_last(&mut self, key: TabKey) {
+        self.tab_order = placed_last(self.strip_order(), key);
+    }
+
+    /// Give a chip its new key where it stands, for a buffer whose name is
+    /// changing: saving or renaming it is not moving it.
+    pub(crate) fn rekey(&mut self, from: &TabKey, to: TabKey) {
+        let mut order = self.strip_order();
+        if let Some(key) = order.iter_mut().find(|key| *key == from) {
+            *key = to;
+        }
+        self.tab_order = order;
     }
 
     /// The tab a chip opens or shows, where it has one.
@@ -694,6 +706,25 @@ impl CloseTarget {
             Self::SavedQuery(name) => session.tab_holding(name).map(Tab::Query),
         }
     }
+}
+
+/// `chips` in default order, rearranged by the order the strip was last left
+/// in. A chip that order does not mention follows it.
+fn strip_order(mut chips: Vec<TabKey>, order: &[TabKey]) -> Vec<TabKey> {
+    let mut ordered: Vec<TabKey> = order
+        .iter()
+        .filter(|key| chips.contains(key))
+        .cloned()
+        .collect();
+    chips.retain(|key| !ordered.contains(key));
+    ordered.extend(chips);
+    ordered
+}
+
+fn placed_last(mut order: Vec<TabKey>, key: TabKey) -> Vec<TabKey> {
+    order.retain(|candidate| *candidate != key);
+    order.push(key);
+    order
 }
 
 pub(crate) fn close_target(active: Tab, open_query: Option<&str>) -> CloseTarget {
@@ -1414,6 +1445,44 @@ mod tests {
         assert_eq!(
             close_target(Tab::Object(3), Some("daily")),
             CloseTarget::Object(3)
+        );
+    }
+
+    #[test]
+    fn a_new_tab_opens_at_the_right_end_of_the_strip_as_drawn() {
+        let restored = vec![
+            TabKey::Unsaved(0),
+            TabKey::Saved("daily".into()),
+            TabKey::Object(0),
+        ];
+        // Nothing has been dragged, so the restored chips are in no order but
+        // the default one -- which files a new buffer beside the old one.
+        let mut chips = restored.clone();
+        chips.insert(1, TabKey::Unsaved(1));
+        let order = placed_last(strip_order(chips.clone(), &[]), TabKey::Unsaved(1));
+        assert_eq!(
+            strip_order(chips.clone(), &order),
+            [restored.clone(), vec![TabKey::Unsaved(1)]].concat()
+        );
+
+        // And the next one, an object, lands after that.
+        chips.push(TabKey::Object(1));
+        let order = placed_last(strip_order(chips.clone(), &order), TabKey::Object(1));
+        assert_eq!(
+            strip_order(chips, &order),
+            [restored, vec![TabKey::Unsaved(1), TabKey::Object(1)]].concat()
+        );
+    }
+
+    #[test]
+    fn a_dragged_order_survives_chips_it_does_not_mention() {
+        let chips = vec![TabKey::Unsaved(0), TabKey::Unsaved(1), TabKey::Object(0)];
+        let dragged = [TabKey::Object(0), TabKey::Unsaved(5), TabKey::Unsaved(0)];
+        // A key whose tab has gone is skipped, and a chip the order does not
+        // name follows it.
+        assert_eq!(
+            strip_order(chips, &dragged),
+            [TabKey::Object(0), TabKey::Unsaved(0), TabKey::Unsaved(1)]
         );
     }
 

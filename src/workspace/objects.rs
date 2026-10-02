@@ -119,10 +119,10 @@ impl Workspace {
             kind,
             body,
         });
-        // See `new_query`'s own push to `tab_order`: without it, a session
-        // nothing has dragged yet sorts every object after every query
-        // regardless of which was opened first.
-        profile.session.tab_order.push(TabKey::Object(id));
+        // See `new_query`'s own `place_last`. A session restored at launch
+        // comes through here too, one object at a time and in its stored
+        // order, so its objects still follow its queries.
+        profile.session.place_last(TabKey::Object(id));
         Some(id)
     }
 

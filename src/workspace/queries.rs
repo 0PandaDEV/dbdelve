@@ -387,6 +387,11 @@ impl Workspace {
             self.note(message, cx);
             return;
         }
+        let chip = match (tab, &previous) {
+            (Tab::Query(_), Some(previous)) => Some(TabKey::Saved(previous.clone())),
+            (Tab::Query(id), None) => Some(TabKey::Unsaved(id)),
+            (Tab::Object(_), _) => None,
+        };
         // Written first, then the old name dropped: a failed delete leaves two
         // copies, which is recoverable, and the other order loses the query.
         if let Some(previous) = previous.filter(|previous| previous != &name)
@@ -396,6 +401,11 @@ impl Workspace {
         }
 
         if let Some(profile) = self.profile_mut() {
+            // Before the list it reads moves: the chip's old key is only in the
+            // strip until then.
+            if let Some(from) = chip {
+                profile.session.rekey(&from, TabKey::Saved(name.clone()));
+            }
             profile.session.saved_queries = store::saved_queries(&id);
             profile.session.naming = false;
         }
@@ -457,12 +467,10 @@ impl Workspace {
         };
         let profile_id = profile.id.clone();
         profile.session.queries.push(tab);
-        // Placed at the end of the strip's own order rather than left for
-        // `strip_order`'s default, which groups every unsaved buffer ahead of
-        // the saved queries and objects regardless of when each was opened --
-        // right for a session nothing has ever dragged, wrong for one where
-        // this is the newest tab of any kind.
-        profile.session.tab_order.push(TabKey::Unsaved(id));
+        // Placed at the end of the strip rather than left for `strip_order`'s
+        // default, which groups every unsaved buffer ahead of the saved
+        // queries and objects regardless of when each was opened.
+        profile.session.place_last(TabKey::Unsaved(id));
         self.install_completions(&profile_id, cx);
         self.activate_tab(Tab::Query(id), cx);
     }
