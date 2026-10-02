@@ -540,6 +540,17 @@ impl ResultGrid {
         self.row_selection_anchor = Some(row);
     }
 
+    /// What a right click does to the selection: a row already in it is left
+    /// untouched, so the menu acts on the selection the user made; a row
+    /// outside it becomes the whole selection, the way a plain left click
+    /// would -- so "Copy Row(s) As" never copies a selection the click
+    /// landed nowhere near.
+    fn right_click_row(&mut self, row: usize) {
+        if !self.selected_rows.contains(&row) {
+            self.click_row(row, false, false);
+        }
+    }
+
     pub fn clear_row_selection(&mut self) {
         self.selected_rows.clear();
         self.row_selection_anchor = None;
@@ -1675,8 +1686,13 @@ impl ResultGrid {
                     handle.focus(window, cx);
                     let grid = table.delegate_mut();
                     grid.set_active(row_ix, col_ix);
+                    grid.right_click_row(row_ix);
                     grid.focus = Some(handle);
-                    cx.notify();
+                    table.set_selected_row(row_ix, cx);
+                    // set_selected_row consumes the event; the row beneath
+                    // still needs its own right click to record where the
+                    // context menu opens.
+                    cx.propagate();
                 }),
             )
             // A plain cell click must establish the anchor before Shift is
@@ -3104,6 +3120,22 @@ mod tests {
             assert_eq!(grid.selected_row_indices(), expected);
             assert_eq!(grid.row_selection_anchor, Some(1));
         }
+    }
+
+    #[test]
+    fn a_right_click_outside_the_selection_replaces_it_and_inside_it_leaves_it_alone() {
+        // Scenario: left-click row 1, right-click row 3 -- "Copy Row(s) As"
+        // must act on row 3, the row actually under the pointer, not the
+        // stale selection from before.
+        let mut grid = four_row_grid();
+        grid.click_row(1, false, false);
+        grid.right_click_row(3);
+        assert_eq!(grid.selected_row_indices(), vec![3]);
+
+        grid.click_row(1, false, false);
+        grid.click_row(2, true, false);
+        grid.right_click_row(2);
+        assert_eq!(grid.selected_row_indices(), vec![1, 2]);
     }
 
     #[test]
