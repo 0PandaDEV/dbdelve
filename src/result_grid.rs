@@ -697,12 +697,12 @@ impl ResultGrid {
                 .collect(),
             ..QueryResult::default()
         };
-        let table = self
-            .result
-            .edit
-            .as_ref()
-            .map(|edit| (edit.schema.as_str(), edit.table.as_str()));
-        Some(export::render_rows_as(kind, self.engine, table, &result))
+        Some(export::render_rows_as(
+            kind,
+            self.engine,
+            self.result.edit.as_ref(),
+            &result,
+        ))
     }
 
     /// The rows "Copy Rows As" and the row-number gutter's own highlight agree

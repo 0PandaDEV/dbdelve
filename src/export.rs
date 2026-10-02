@@ -9,7 +9,7 @@ use std::{collections::HashSet, path::Path};
 
 use serde::Deserialize;
 
-use crate::db::{Cell, Column, Engine, QueryResult};
+use crate::db::{Cell, Column, EditTarget, Engine, QueryResult};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Format {
@@ -68,14 +68,15 @@ impl RowsAs {
     }
 }
 
-/// The rows of `result` as clipboard text. `table` is the schema and name the
-/// rows came from, for `INSERT` to name; without one it says `table_name` and
-/// leaves the naming to whoever pastes it. Nothing here runs: it is text, and
-/// the statement is the user's to run or not.
+/// The rows of `result` as clipboard text. `edit` is where the rows came
+/// from, for `INSERT` to name; without one it says `table_name` and leaves
+/// the naming to whoever pastes it, writing every result column under its own
+/// (possibly aliased) name for lack of a mapping back to real ones. Nothing
+/// here runs: it is text, and the statement is the user's to run or not.
 pub fn render_rows_as(
     kind: RowsAs,
     engine: Engine,
-    table: Option<(&str, &str)>,
+    edit: Option<&EditTarget>,
     result: &QueryResult,
 ) -> String {
     match kind {
@@ -97,14 +98,26 @@ pub fn render_rows_as(
         }
         RowsAs::Json => render_json(&result.columns, &result.rows),
         RowsAs::InsertSql => {
-            let target = table.map_or_else(
+            let target = edit.map_or_else(
                 || "table_name".to_string(),
-                |(schema, name)| engine.qualified(schema, name),
+                |edit| engine.qualified(&edit.schema, &edit.table),
             );
+            // `edit.columns` is the result column's real source, positionally
+            // -- `None` for a computed one (`now() AS t`), which has nowhere
+            // to write back to and is dropped rather than named by its alias.
+            let sources: Vec<Option<&str>> = match edit {
+                Some(edit) => edit.columns.iter().map(|c| c.as_deref()).collect(),
+                None => result
+                    .columns
+                    .iter()
+                    .map(|c| Some(c.name.as_str()))
+                    .collect(),
+            };
             let columns = result
                 .columns
                 .iter()
-                .map(|column| engine.quote_identifier(&column.name))
+                .zip(&sources)
+                .filter_map(|(_, source)| source.map(|name| engine.quote_identifier(name)))
                 .collect::<Vec<_>>()
                 .join(", ");
             result
@@ -114,18 +127,23 @@ pub fn render_rows_as(
                     let values = row
                         .iter()
                         .zip(&result.columns)
-                        .map(|(cell, column)| match cell {
-                            None => "NULL".to_string(),
-                            Some(value)
-                                if column
-                                    .data_type
-                                    .as_deref()
-                                    .is_some_and(crate::db::is_numeric_type)
-                                    && value.parse::<f64>().is_ok_and(f64::is_finite) =>
-                            {
-                                value.clone()
-                            }
-                            Some(value) => engine.quote_value(value, column.data_type.as_deref()),
+                        .zip(&sources)
+                        .filter_map(|((cell, column), source)| {
+                            source.map(|_| match cell {
+                                None => "NULL".to_string(),
+                                Some(value)
+                                    if column
+                                        .data_type
+                                        .as_deref()
+                                        .is_some_and(crate::db::is_numeric_type)
+                                        && value.parse::<f64>().is_ok_and(f64::is_finite) =>
+                                {
+                                    value.clone()
+                                }
+                                Some(value) => {
+                                    engine.quote_value(value, column.data_type.as_deref())
+                                }
+                            })
                         })
                         .collect::<Vec<_>>()
                         .join(", ");
@@ -257,6 +275,15 @@ mod tests {
         }
     }
 
+    fn edit_target(columns: &[&str]) -> EditTarget {
+        EditTarget {
+            schema: "public".into(),
+            table: "notes".into(),
+            columns: columns.iter().map(|name| Some(name.to_string())).collect(),
+            keys: vec![0],
+        }
+    }
+
     #[test]
     fn a_row_copies_in_each_of_its_shapes() {
         let result = QueryResult {
@@ -276,7 +303,8 @@ mod tests {
             ],
             ..QueryResult::default()
         };
-        let as_ = |kind| render_rows_as(kind, Engine::Postgres, Some(("public", "notes")), &result);
+        let edit = edit_target(&["id", "note"]);
+        let as_ = |kind| render_rows_as(kind, Engine::Postgres, Some(&edit), &result);
 
         assert_eq!(as_(RowsAs::Text), "7\tit's\n8\tNULL");
         assert_eq!(as_(RowsAs::Csv), "7,it's\n8,\n");
@@ -289,6 +317,36 @@ mod tests {
         assert!(
             render_rows_as(RowsAs::InsertSql, Engine::Postgres, None, &result)
                 .contains("INTO table_name ")
+        );
+    }
+
+    #[test]
+    fn insert_sql_names_each_columns_real_source_and_drops_a_computed_one() {
+        // `SELECT id AS ident, now() AS t FROM accounts` -- `ident` has a real
+        // column behind it, `t` does not, and the statement must write into
+        // the first under its own name and leave the second out entirely
+        // rather than into a column literally called "t".
+        let result = QueryResult {
+            columns: vec![
+                Column {
+                    name: "ident".into(),
+                    data_type: Some("int4".into()),
+                },
+                column("t"),
+            ],
+            rows: vec![vec![Some("7".into()), Some("2024-01-01".into())]],
+            ..QueryResult::default()
+        };
+        let edit = EditTarget {
+            schema: "public".into(),
+            table: "accounts".into(),
+            columns: vec![Some("id".into()), None],
+            keys: vec![0],
+        };
+
+        assert_eq!(
+            render_rows_as(RowsAs::InsertSql, Engine::Postgres, Some(&edit), &result),
+            "INSERT INTO \"public\".\"accounts\" (\"id\") VALUES (7);"
         );
     }
 
