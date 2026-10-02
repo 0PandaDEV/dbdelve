@@ -896,7 +896,9 @@ The shape a change to the main pane has to fit (`session.rs`, with the
   (`open_query`) and `last_query`.** Do not reintroduce a single shared editor
   for anything.
 - **`queries` can be empty.** Any buffer can be closed, the last one
-  included, and a profile with no tab open shows an empty pane. `active` may
+  included, and a profile with no tab open shows an empty pane and relaunches
+  that way. A new connection, and one written before buffers were tabs, opens
+  on one empty buffer instead. `active` may
   then name a tab that is gone, which every lookup by id already answers with
   `None`, and focus falls back to the window so the bindings that open a tab
   still work. Deleting the saved query in a tab closes that tab.

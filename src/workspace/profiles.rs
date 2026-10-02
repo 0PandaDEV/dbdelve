@@ -112,27 +112,11 @@ impl Workspace {
                 statement_timeout: stored.statement_timeout.unwrap_or_default(),
             }),
         };
-        // A profile written before a buffer was a tab carries one buffer, whose
-        // name is in the legacy scalar and whose text `read_scratch` migrates --
-        // if it holds anything. A profile from a build that has tabs says how
-        // many it had, and none is none: nothing is opened to write in.
-        let legacy_buffer = stored.next_query_id.is_none()
-            && (stored.open_query.is_some()
-                || store::read_scratch(&stored.id, 0)
-                    .ok()
-                    .flatten()
-                    .is_some_and(|text| !text.trim().is_empty()));
-        let stored_queries = if !stored.open_queries.is_empty() {
-            stored.open_queries
-        } else if legacy_buffer {
-            vec![store::StoredQueryTab {
-                id: 0,
-                name: stored.open_query.clone(),
-                active: true,
-            }]
-        } else {
-            Vec::new()
-        };
+        let stored_queries = stored_buffers(
+            stored.open_queries,
+            stored.next_query_id,
+            stored.open_query.clone(),
+        );
         // Snapshots whose tab is gone -- a renamed table strands its file
         // under the old name, and nothing else will ever remove it.
         let live_grids =
@@ -215,7 +199,7 @@ impl Workspace {
             .map(|profile| profile.id.clone())
             .collect::<Vec<_>>();
         let id = store::profile_id(&name, &existing);
-        let session = Session::new(id.clone(), Vec::new(), 0, Vec::new(), window, cx);
+        let session = Session::new(id.clone(), first_buffer(None), 0, Vec::new(), window, cx);
         let password = password_to_persist(&config, origin).map(str::to_string);
         self.profiles.push(Profile {
             id: id.clone(),
@@ -1165,9 +1149,65 @@ pub(crate) fn removal_note(name: &str, queries: usize, problem: Option<String>) 
     }
 }
 
+/// The one empty buffer, in front, that a connection with no session of its
+/// own opens on: somewhere to start writing.
+fn first_buffer(name: Option<String>) -> Vec<store::StoredQueryTab> {
+    vec![store::StoredQueryTab {
+        id: 0,
+        name,
+        active: true,
+    }]
+}
+
+/// The buffers a stored profile reopens with. One written before a buffer was
+/// a tab carries one, whose name is in the legacy scalar and whose text
+/// `read_scratch` migrates, blank or not. One from a build that has tabs says
+/// how many it had, and none is none: its user closed them all.
+fn stored_buffers(
+    open_queries: Vec<store::StoredQueryTab>,
+    next_query_id: Option<u64>,
+    open_query: Option<String>,
+) -> Vec<store::StoredQueryTab> {
+    match open_queries.is_empty() && next_query_id.is_none() {
+        true => first_buffer(open_query),
+        false => open_queries,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_connection_with_nothing_to_restore_opens_on_one_empty_buffer() {
+        let blank = store::StoredQueryTab {
+            id: 0,
+            name: None,
+            active: true,
+        };
+        // A connection just made.
+        assert_eq!(first_buffer(None), std::slice::from_ref(&blank));
+        // One from before buffers were tabs, blank or holding a saved query.
+        assert_eq!(
+            stored_buffers(Vec::new(), None, None),
+            std::slice::from_ref(&blank)
+        );
+        assert_eq!(
+            stored_buffers(Vec::new(), None, Some("daily".into())),
+            [store::StoredQueryTab {
+                name: Some("daily".into()),
+                ..blank.clone()
+            }]
+        );
+        // Every tab closed is a choice the next launch keeps.
+        assert_eq!(stored_buffers(Vec::new(), Some(3), None), []);
+        let open = vec![store::StoredQueryTab {
+            id: 2,
+            name: None,
+            active: false,
+        }];
+        assert_eq!(stored_buffers(open.clone(), Some(3), None), open);
+    }
 
     #[test]
     fn removing_a_profile_keeps_the_same_one_active() {
