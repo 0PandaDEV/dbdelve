@@ -362,15 +362,10 @@ impl Workspace {
 
     /// Carry out a close that has been decided on. A saved query asks its own
     /// question from here: closing its tab deletes its file.
+    ///
+    /// Nothing is stopped here: each close stops its tab's statement as the
+    /// tab goes, and a saved query's goes only once its delete is confirmed.
     pub(crate) fn close_now(&mut self, target: CloseTarget, cx: &mut Context<Self>) {
-        // A tab that is still loading takes its statement to the grave: left
-        // running, it holds the connection while nothing is left to show it.
-        if let Some(tab) = self
-            .profile()
-            .and_then(|profile| target.tab(&profile.session))
-        {
-            self.stop_run(tab, cx);
-        }
         match target {
             CloseTarget::Object(id) => self.close_object(id, cx),
             CloseTarget::Buffer(id) => self.close_buffer(id, cx),
@@ -384,6 +379,9 @@ impl Workspace {
     }
 
     /// Ask the server to stop what `tab` is running, if it is running something.
+    ///
+    /// For a tab on its way out: left running, its statement holds the
+    /// connection while nothing is left to show it.
     pub(crate) fn stop_run(&mut self, tab: Tab, cx: &mut Context<Self>) {
         let Some(connection) = self.profile().and_then(Profile::connection) else {
             return;

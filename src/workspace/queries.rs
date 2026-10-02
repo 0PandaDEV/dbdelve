@@ -485,6 +485,10 @@ impl Workspace {
         let Some(position) = position else {
             return;
         };
+        self.stop_run(Tab::Query(id), cx);
+        let Some(profile) = self.profile_mut() else {
+            return;
+        };
         let in_front = (profile.session.active == Tab::Query(id))
             .then(|| profile.session.fallback(Tab::Query(id)));
         profile.session.queries.remove(position);
@@ -647,8 +651,8 @@ impl Workspace {
             self.note(message, cx);
             return;
         }
-        // The chip's trash comes straight here, past `close_now`, and a tab
-        // that goes must take its statement with it all the same.
+        // Here, once the file is gone, and not when `cmd+w` asked: answering
+        // Cancel to that leaves the tab, and its statement, running.
         if let Some(open) = was_open {
             self.stop_run(Tab::Query(open), cx);
         }

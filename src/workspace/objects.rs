@@ -892,6 +892,7 @@ impl Workspace {
     }
 
     pub(crate) fn close_object(&mut self, id: u64, cx: &mut Context<Self>) {
+        self.stop_run(Tab::Object(id), cx);
         let mut in_front = None;
         if let Some(profile) = self.profile_mut() {
             if profile.session.active == Tab::Object(id) {
