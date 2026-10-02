@@ -1187,11 +1187,16 @@ impl Render for Workspace {
     }
 }
 
+/// A relation a reference arrow lists, by its index into the structure's
+/// `referenced_by`: a row was found in it, or its check failed with this error.
+pub(crate) type ReferenceAnswer = (usize, gpui::SharedString, Result<(), String>);
+
 /// What a reference arrow opened: where it hangs, and the relations that turned
-/// out to hold rows for the key. `None` while the lookup is still out.
+/// out to hold rows for the key, or whose check failed with the error it gave.
+/// `None` while the lookup is still out.
 pub(crate) struct ReferencePopup {
     pub(crate) at: gpui::Point<gpui::Pixels>,
-    pub(crate) choices: Option<Vec<(usize, gpui::SharedString)>>,
+    pub(crate) choices: Option<Vec<ReferenceAnswer>>,
     check: u64,
 }
 

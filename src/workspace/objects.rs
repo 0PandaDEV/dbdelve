@@ -559,7 +559,7 @@ impl Workspace {
     /// The arrow on a key cell. Which relations reference the key is not what
     /// the structure says -- that is every relation that *could* -- but which
     /// hold a row for this value, so each candidate is asked for one row and
-    /// only the ones that answer are listed.
+    /// only the ones that answer are listed, beside any whose check failed.
     pub(crate) fn show_references(
         &mut self,
         _: &ShowReferences,
@@ -596,7 +596,7 @@ impl Workspace {
         let (Some(value), Some(at)) = (grid.active_value(), grid.reference_anchor()) else {
             return;
         };
-        let candidates: Vec<(usize, gpui::SharedString, String)> = grid
+        let candidates: Vec<(usize, gpui::SharedString, Option<String>)> = grid
             .reference_choices(col)
             .into_iter()
             .filter_map(|(index, label)| {
@@ -622,7 +622,7 @@ impl Workspace {
                 );
                 let sql = sql::is_generated_select(&sql)
                     .then(|| sql::paged(engine, &sql, &[]))
-                    .flatten()?;
+                    .flatten();
                 Some((index, label, sql))
             })
             .collect();
@@ -637,15 +637,24 @@ impl Workspace {
         cx.notify();
 
         let task = cx.background_executor().spawn(async move {
-            candidates
-                .into_iter()
-                .filter(|(_, _, sql)| {
-                    connection
-                        .generated(sql, &CancelToken::default())
-                        .is_ok_and(|result| !result.rows.is_empty())
-                })
-                .map(|(index, label, _)| (index, label))
-                .collect::<Vec<_>>()
+            reference_answers(
+                candidates
+                    .into_iter()
+                    .map(|(index, label, sql)| {
+                        let answer = match sql {
+                            Some(sql) => connection
+                                .generated(&sql, &CancelToken::default())
+                                .map(|result| !result.rows.is_empty())
+                                .map_err(|error| error.message),
+                            None => {
+                                Err("dbdelve will not run a check it cannot read as one SELECT."
+                                    .into())
+                            }
+                        };
+                        (index, label, answer)
+                    })
+                    .collect(),
+            )
         });
         cx.spawn(async move |workspace, cx| {
             let found = task.await;
@@ -1030,6 +1039,25 @@ fn restorable(
     (opened, still_pending)
 }
 
+/// The relations to list under a reference arrow: each one a row was found in,
+/// and each one whose check failed, carrying what went wrong. A failed check
+/// says nothing about whether a row is there, so it is never folded into the
+/// relations that hold none.
+fn reference_answers(
+    answers: Vec<(usize, gpui::SharedString, Result<bool, String>)>,
+) -> Vec<ReferenceAnswer> {
+    answers
+        .into_iter()
+        .filter_map(|(index, label, answer)| {
+            Some((
+                index,
+                label,
+                answer.map(|found| found.then_some(())).transpose()?,
+            ))
+        })
+        .collect()
+}
+
 /// The columns a `NULL` cannot be written into.
 fn columns_not_nullable(columns: &[ColumnDefinition]) -> Vec<String> {
     columns
@@ -1126,6 +1154,32 @@ mod tests {
         );
         assert_eq!(opened.len(), 2);
         assert!(waiting.is_empty());
+    }
+
+    #[test]
+    fn a_reference_check_that_failed_is_listed_with_its_error_not_as_no_rows() {
+        let answers = reference_answers(vec![
+            (0, "orders.account_id".into(), Ok(true)),
+            (1, "invoices.account_id".into(), Ok(false)),
+            (
+                2,
+                "audit.account_id".into(),
+                Err("permission denied".into()),
+            ),
+        ]);
+
+        assert_eq!(
+            answers,
+            [
+                (0, "orders.account_id".into(), Ok(())),
+                (
+                    2,
+                    "audit.account_id".into(),
+                    Err("permission denied".into())
+                ),
+            ]
+        );
+        assert!(reference_answers(vec![(1, "invoices.account_id".into(), Ok(false))]).is_empty());
     }
 
     fn definition(name: &str, nullable: bool, default: Option<&str>) -> ColumnDefinition {

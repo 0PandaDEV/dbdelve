@@ -484,8 +484,21 @@ impl Workspace {
             }
             Some(choices) => choices
                 .iter()
-                .map(|(index, label)| {
+                .map(|(index, label, answer)| {
                     let index = *index;
+                    if let Err(message) = answer {
+                        return div()
+                            .px(px(layout::SPACE_SM))
+                            .py(px(layout::SPACE_XS))
+                            .text_size(px(layout::TEXT_SM))
+                            .child(div().text_color(t.text_muted).child(label.clone()))
+                            .child(
+                                div()
+                                    .text_color(t.danger)
+                                    .child(format!("Could not check: {message}")),
+                            )
+                            .into_any_element();
+                    }
                     div()
                         .id(("reference-choice", index))
                         .px(px(layout::SPACE_SM))
@@ -524,6 +537,7 @@ impl Workspace {
                         .left(popup.at.x)
                         .top(popup.at.y)
                         .min_w(px(180.))
+                        .max_w(px(420.))
                         .p(px(layout::SPACE_XS))
                         .flex()
                         .flex_col()
