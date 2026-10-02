@@ -479,8 +479,9 @@ clearing quarantine by hand:
 
 Decided, and not to be re-litigated:
 
-- **Eight functions generate SQL, and every one quotes through `Engine`:**
-  `explorer::preview_sql`, `explorer::count_sql` (the status bar's row count, a
+- **Nine functions generate SQL, and every one quotes through `Engine`:**
+  `explorer::preview_sql`, `explorer::probe_sql` (the reference arrow's
+  `SELECT 1 … LIMIT 1` per referencing relation), `explorer::count_sql` (the status bar's row count, a
   `COUNT(*)` under the tab's filter, gated by `sql::is_generated_select`), `sql::with_order_by`, `sql::update_row`,
   `sql::insert_row`, `sql::delete_row`, `filter::sort_expression` and
   `filter::filter_predicate`. `filter::sort_expression` is the one that gets

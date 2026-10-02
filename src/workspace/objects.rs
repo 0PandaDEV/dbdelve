@@ -612,14 +612,7 @@ impl Workspace {
                     })
                     .collect();
                 let filter = derived_filter(engine, &[bar], &columns);
-                let sql = explorer::preview_sql(
-                    engine,
-                    &reference.schema,
-                    &reference.table,
-                    &filter,
-                    1,
-                    0,
-                );
+                let sql = explorer::probe_sql(engine, &reference.schema, &reference.table, &filter);
                 let sql = sql::is_generated_select(&sql)
                     .then(|| sql::paged(engine, &sql, &[]))
                     .flatten();

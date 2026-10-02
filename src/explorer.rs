@@ -266,6 +266,15 @@ pub fn preview_sql(
     sql
 }
 
+/// Whether a row matches `filter`, for the reference arrow: a constant rather
+/// than `*`, so no column's value is read or sent back to answer it.
+pub fn probe_sql(engine: Engine, schema: &str, relation: &str, filter: &str) -> String {
+    format!(
+        "SELECT 1{} LIMIT 1",
+        from_where(engine, schema, relation, filter)
+    )
+}
+
 /// The size of what `preview_sql` would page through, for the status bar.
 pub fn count_sql(engine: Engine, schema: &str, relation: &str, filter: &str) -> String {
     format!(
@@ -330,6 +339,31 @@ mod tests {
             assert!(crate::sql::is_generated_select(&all));
             assert!(crate::sql::is_generated_select(&narrowed));
         }
+    }
+
+    #[test]
+    fn a_probe_passes_the_select_gate_and_pages_on_every_engine() {
+        for engine in [
+            Engine::Postgres,
+            Engine::MySql,
+            Engine::Sqlite,
+            Engine::Snowflake,
+            Engine::SqlServer,
+        ] {
+            let probe = probe_sql(engine, "public", "orders", "account_id = 7");
+            assert!(crate::sql::is_generated_select(&probe), "{probe}");
+            let paged = crate::sql::paged(engine, &probe, &[]).expect("a probe has a limit");
+            assert!(paged.starts_with("SELECT 1 FROM "), "{paged}");
+        }
+        assert!(
+            crate::sql::paged(
+                Engine::SqlServer,
+                &probe_sql(Engine::SqlServer, "dbo", "orders", ""),
+                &[]
+            )
+            .unwrap()
+            .ends_with(" ORDER BY (SELECT NULL) OFFSET 0 ROWS FETCH NEXT 1 ROWS ONLY")
+        );
     }
 
     fn catalog() -> Catalog {
