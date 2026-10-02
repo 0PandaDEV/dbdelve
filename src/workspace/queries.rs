@@ -647,6 +647,11 @@ impl Workspace {
             self.note(message, cx);
             return;
         }
+        // The chip's trash comes straight here, past `close_now`, and a tab
+        // that goes must take its statement with it all the same.
+        if let Some(open) = was_open {
+            self.stop_run(Tab::Query(open), cx);
+        }
         if let Some(profile) = self.profile_mut() {
             profile.session.saved_queries = store::saved_queries(&id);
             profile.session.pending_delete = None;

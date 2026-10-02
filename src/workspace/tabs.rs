@@ -384,7 +384,7 @@ impl Workspace {
     }
 
     /// Ask the server to stop what `tab` is running, if it is running something.
-    fn stop_run(&mut self, tab: Tab, cx: &mut Context<Self>) {
+    pub(crate) fn stop_run(&mut self, tab: Tab, cx: &mut Context<Self>) {
         let Some(connection) = self.profile().and_then(Profile::connection) else {
             return;
         };
