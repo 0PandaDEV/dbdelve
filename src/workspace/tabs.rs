@@ -393,11 +393,17 @@ impl Workspace {
             return;
         };
         let cancel = cancel.clone();
-        cx.background_executor()
-            .spawn(async move {
-                let _ = connection.cancel(&cancel);
-            })
-            .detach();
+        let cancel_task = cx
+            .background_executor()
+            .spawn(async move { connection.cancel(&cancel) });
+        // Said as `cancel_query` says it: the tab has gone, so a statement
+        // still running behind it is all the more worth knowing about.
+        cx.spawn(async move |workspace, cx| {
+            if let Err(error) = cancel_task.await {
+                _ = workspace.update(cx, |workspace, cx| workspace.note(error.message, cx));
+            }
+        })
+        .detach();
     }
 
     /// Close the tab the discard prompt was raised over, edits and all.
