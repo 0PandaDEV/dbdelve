@@ -59,11 +59,7 @@ impl Workspace {
         };
         // Cycling walks the strip left to right, wherever the chips were
         // dragged to.
-        let tabs: Vec<Tab> = session
-            .strip_order()
-            .iter()
-            .filter_map(|key| session.tab_of(key))
-            .collect();
+        let tabs = session.strip_tabs();
         if tabs.len() < 2 {
             return;
         }

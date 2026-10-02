@@ -500,6 +500,24 @@ impl Session {
         self.tab_order = order;
     }
 
+    /// The tabs behind the strip's chips, left to right. A saved query with
+    /// no buffer open is a chip with no tab, and is not here.
+    pub(crate) fn strip_tabs(&self) -> Vec<Tab> {
+        self.strip_order()
+            .iter()
+            .filter_map(|key| self.tab_of(key))
+            .collect()
+    }
+
+    /// The tab that comes to the front when `closing` goes. Asked before it
+    /// goes, while the strip still says where it stood, and brought forward
+    /// through `activate_tab` as a click on its chip would be: a tab not
+    /// looked at since launch has its snapshot read and its rows refreshed
+    /// there and nowhere else.
+    pub(crate) fn fallback(&self, closing: Tab) -> Option<Tab> {
+        neighbour(&self.strip_tabs(), closing)
+    }
+
     /// The tab a chip opens or shows, where it has one.
     pub(crate) fn tab_of(&self, key: &TabKey) -> Option<Tab> {
         match key {
@@ -725,6 +743,16 @@ fn placed_last(mut order: Vec<TabKey>, key: TabKey) -> Vec<TabKey> {
     order.retain(|candidate| *candidate != key);
     order.push(key);
     order
+}
+
+/// The tab beside `closing` on the left, or on the right when it was the
+/// first: the chip the eye is already next to.
+fn neighbour(tabs: &[Tab], closing: Tab) -> Option<Tab> {
+    let at = tabs.iter().position(|tab| *tab == closing)?;
+    at.checked_sub(1)
+        .and_then(|left| tabs.get(left))
+        .or(tabs.get(at + 1))
+        .copied()
 }
 
 pub(crate) fn close_target(active: Tab, open_query: Option<&str>) -> CloseTarget {
@@ -1484,6 +1512,19 @@ mod tests {
             strip_order(chips, &dragged),
             [TabKey::Object(0), TabKey::Unsaved(0), TabKey::Unsaved(1)]
         );
+    }
+
+    #[test]
+    fn a_closed_tab_hands_the_front_to_its_neighbour_in_the_strip() {
+        let strip = [Tab::Query(0), Tab::Object(3), Tab::Query(7)];
+        assert_eq!(neighbour(&strip, Tab::Object(3)), Some(Tab::Query(0)));
+        assert_eq!(neighbour(&strip, Tab::Query(7)), Some(Tab::Object(3)));
+        // The first has nothing on its left.
+        assert_eq!(neighbour(&strip, Tab::Query(0)), Some(Tab::Object(3)));
+        // The last of all leaves nothing, and a tab not in the strip names no
+        // neighbour.
+        assert_eq!(neighbour(&[Tab::Query(0)], Tab::Query(0)), None);
+        assert_eq!(neighbour(&strip, Tab::Object(9)), None);
     }
 
     #[test]

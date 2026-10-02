@@ -485,23 +485,13 @@ impl Workspace {
         let Some(position) = position else {
             return;
         };
+        let fallback = (profile.session.active == Tab::Query(id))
+            .then(|| profile.session.fallback(Tab::Query(id)))
+            .flatten();
         profile.session.queries.remove(position);
         let profile_id = profile.id.clone();
-
-        if profile.session.active == Tab::Query(id) {
-            // The neighbour on the left, or the one that slid into this slot.
-            let next = profile
-                .session
-                .queries
-                .get(position.saturating_sub(1))
-                .map(|tab| tab.id);
-            if let Some(next) = next {
-                profile.session.active = Tab::Query(next);
-                profile.session.editor_needs_focus = true;
-            } else if let Some(object) = profile.session.objects.last().map(|tab| tab.id) {
-                profile.session.active = Tab::Object(object);
-                profile.session.editor_needs_focus = true;
-            }
+        if let Some(next) = fallback {
+            self.activate_tab(next, cx);
         }
 
         if let Err(message) = store::delete_scratch(&profile_id, id) {
@@ -650,6 +640,10 @@ impl Workspace {
         // Read before the delete, because afterwards nothing on the session
         // still points at the file and only this says which tab did.
         let was_open = profile.session.tab_holding(&name);
+        let fallback = was_open
+            .map(Tab::Query)
+            .filter(|open| profile.session.active == *open)
+            .and_then(|open| profile.session.fallback(open));
         if let Err(message) = store::delete_query(&id, &name) {
             self.note(message, cx);
             return;
@@ -669,21 +663,10 @@ impl Workspace {
                 // tab left to come back to is rows the next buffer to be
                 // handed this id would show as its own.
                 let _ = store::remove_grid(&id, &store::query_grid_key(open));
-                if profile.session.active == Tab::Query(open) {
-                    let next = match profile.session.queries.first().map(|tab| tab.id) {
-                        Some(next) => Some(Tab::Query(next)),
-                        None => profile
-                            .session
-                            .objects
-                            .last()
-                            .map(|tab| Tab::Object(tab.id)),
-                    };
-                    if let Some(next) = next {
-                        profile.session.active = next;
-                        profile.session.editor_needs_focus = true;
-                    }
-                }
             }
+        }
+        if let Some(next) = fallback {
+            self.activate_tab(next, cx);
         }
         self.remember_profiles(cx);
         cx.notify();

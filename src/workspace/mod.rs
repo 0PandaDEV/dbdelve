@@ -535,9 +535,8 @@ impl Render for Workspace {
         self.restore_objects(window, cx);
         self.sync_page_input(window, cx);
         // Where a query tab that reached the front without `activate_tab` gets
-        // its snapshot read. `session.active` is written in six places --
-        // `Session::new`, `activate_tab`, `close_object`, `escape`,
-        // `close_buffer` and `delete_saved_query` -- and all but the first two
+        // its snapshot read. `session.active` is written in three places --
+        // `Session::new`, `activate_tab` and `escape` -- and the first and last
         // set a `Tab::Query` without hydrating it, so this cannot be narrowed
         // to the opening tab.
         //

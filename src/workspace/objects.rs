@@ -876,7 +876,11 @@ impl Workspace {
     }
 
     pub(crate) fn close_object(&mut self, id: u64, cx: &mut Context<Self>) {
+        let mut fallback = None;
         if let Some(profile) = self.profile_mut() {
+            if profile.session.active == Tab::Object(id) {
+                fallback = profile.session.fallback(Tab::Object(id));
+            }
             // Read before the tab goes, because the key is made of its schema,
             // name and filter, and there is nothing left to make it from
             // afterwards.
@@ -892,20 +896,9 @@ impl Workspace {
             if let Some(key) = snapshot {
                 let _ = store::remove_grid(&profile_id, &key);
             }
-            if profile.session.active == Tab::Object(id) {
-                let next = match profile.session.queries.first().map(|tab| tab.id) {
-                    Some(first) => Some(Tab::Query(first)),
-                    None => profile
-                        .session
-                        .objects
-                        .last()
-                        .map(|tab| Tab::Object(tab.id)),
-                };
-                if let Some(next) = next {
-                    profile.session.active = next;
-                    profile.session.editor_needs_focus = true;
-                }
-            }
+        }
+        if let Some(next) = fallback {
+            self.activate_tab(next, cx);
         }
         self.remember_profiles(cx);
         cx.notify();
