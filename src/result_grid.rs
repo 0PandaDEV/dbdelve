@@ -54,6 +54,9 @@ const GUTTER: usize = 1;
 /// One digit's advance in the grid's monospaced face, near enough to size the
 /// row-number column to its widest number.
 const DIGIT_WIDTH: f32 = 8.0;
+/// The empty strip the library leaves after the last column, sized here
+/// rather than by the library's own `w_3` so a row's width can count it.
+const TRAILING_GAP: f32 = 12.0;
 
 /// A gutter cell: the row number's box, evenly padded. It draws no divider of
 /// its own -- the library closes a fixed column with one.
@@ -1321,32 +1324,38 @@ impl TableDelegate for ResultGrid {
         cx: &mut Context<TableState<Self>>,
     ) -> Stateful<Div> {
         let t = *theme(cx);
-        // The library draws every row's own border, and its own hover wash,
-        // the full width of the row -- which is the table's whole width, not
-        // the columns actually in it. Past the last column that is a line
-        // (and a wash) running on to the edge of the screen over nothing.
-        // Painted over here rather than fought in the library: a mask the
-        // width of the empty margin, in the same tone the table already
-        // shows through everywhere it has no row.
+        // The library sizes every row `w_full` -- the table's whole width, not
+        // the columns actually in it -- so its border and hover wash run on
+        // past the last column to the edge of the screen over nothing. It
+        // refines that with the style returned here, so a cap here wins.
+        // A cap and not a width: each row scrolls its own cells sideways
+        // within its bounds, so a row as wide as its columns has nothing to
+        // scroll and the cells stay put while the header moves.
+        // Not a mask painted over the margin: on a glass theme a second
+        // `data_glass` stacks on the plane's own and the margin turns solid.
         let content_width = self.gutter_width()
             + self
                 .columns
                 .iter()
                 .map(|column| f32::from(column.width))
-                .sum::<f32>();
-        let row = div().id(("row", row_ix)).relative().child(
-            div()
-                .absolute()
-                .left(px(content_width))
-                .right(px(0.))
-                .top(px(0.))
-                .bottom(px(0.))
-                .bg(t.data_glass()),
-        );
+                .sum::<f32>()
+            + TRAILING_GAP;
+        let row = div()
+            .id(("row", row_ix))
+            .relative()
+            .max_w(px(content_width));
         if !self.selected_rows.contains(&row_ix) {
             return row;
         }
         row.child(div().absolute().size_full().bg(t.selection))
+    }
+
+    fn render_last_empty_col(
+        &mut self,
+        _window: &mut Window,
+        _cx: &mut Context<TableState<Self>>,
+    ) -> impl IntoElement {
+        div().w(px(TRAILING_GAP)).h_full().flex_shrink_0()
     }
 
     fn column(&self, col_ix: usize, _: &App) -> Column {
