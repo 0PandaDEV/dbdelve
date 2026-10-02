@@ -588,16 +588,20 @@ impl Render for Workspace {
                     Some(tab) => Focus::Buffer(tab.editor.clone()),
                     None => Focus::Window,
                 },
-                Tab::Object(id) => {
-                    let tab = profile.session.objects.iter().find(|tab| tab.id == id)?;
-                    match &tab.body {
-                        ObjectBody::Relation { results, .. } => Focus::Grid(results.clone()),
-                        // A routine's tab is read: nothing in it takes a
-                        // keystroke. The window still has to hold focus, or
-                        // the bindings that leave this tab go with it.
-                        ObjectBody::Routine(_) => Focus::Window,
-                    }
-                }
+                Tab::Object(id) => match profile
+                    .session
+                    .objects
+                    .iter()
+                    .find(|tab| tab.id == id)
+                    .map(|tab| &tab.body)
+                {
+                    Some(ObjectBody::Relation { results, .. }) => Focus::Grid(results.clone()),
+                    // A routine's tab is read: nothing in it takes a
+                    // keystroke. The window still has to hold focus, or the
+                    // bindings that leave this tab go with it -- as it does
+                    // for the last object tab of all, closed.
+                    Some(ObjectBody::Routine(_)) | None => Focus::Window,
+                },
             };
             profile.session.editor_needs_focus = false;
             Some(focus)

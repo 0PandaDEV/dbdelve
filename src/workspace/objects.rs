@@ -875,11 +875,27 @@ impl Workspace {
         cx.notify();
     }
 
+    /// What comes to the front once the tab in front has closed: the tab
+    /// `Session::fallback` named, or with none left, the window. Never
+    /// nothing: the editor that had focus has just unmounted, and focus left
+    /// to fall would land outside every binding the workspace listens for.
+    pub(crate) fn front_after_close(&mut self, fallback: Option<Tab>, cx: &mut Context<Self>) {
+        match fallback {
+            Some(next) => self.activate_tab(next, cx),
+            None => {
+                if let Some(profile) = self.profile_mut() {
+                    profile.session.clear_prompts();
+                    profile.session.editor_needs_focus = true;
+                }
+            }
+        }
+    }
+
     pub(crate) fn close_object(&mut self, id: u64, cx: &mut Context<Self>) {
-        let mut fallback = None;
+        let mut in_front = None;
         if let Some(profile) = self.profile_mut() {
             if profile.session.active == Tab::Object(id) {
-                fallback = profile.session.fallback(Tab::Object(id));
+                in_front = Some(profile.session.fallback(Tab::Object(id)));
             }
             // Read before the tab goes, because the key is made of its schema,
             // name and filter, and there is nothing left to make it from
@@ -897,8 +913,8 @@ impl Workspace {
                 let _ = store::remove_grid(&profile_id, &key);
             }
         }
-        if let Some(next) = fallback {
-            self.activate_tab(next, cx);
+        if let Some(fallback) = in_front {
+            self.front_after_close(fallback, cx);
         }
         self.remember_profiles(cx);
         cx.notify();

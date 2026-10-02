@@ -485,13 +485,12 @@ impl Workspace {
         let Some(position) = position else {
             return;
         };
-        let fallback = (profile.session.active == Tab::Query(id))
-            .then(|| profile.session.fallback(Tab::Query(id)))
-            .flatten();
+        let in_front = (profile.session.active == Tab::Query(id))
+            .then(|| profile.session.fallback(Tab::Query(id)));
         profile.session.queries.remove(position);
         let profile_id = profile.id.clone();
-        if let Some(next) = fallback {
-            self.activate_tab(next, cx);
+        if let Some(fallback) = in_front {
+            self.front_after_close(fallback, cx);
         }
 
         if let Err(message) = store::delete_scratch(&profile_id, id) {
@@ -640,10 +639,10 @@ impl Workspace {
         // Read before the delete, because afterwards nothing on the session
         // still points at the file and only this says which tab did.
         let was_open = profile.session.tab_holding(&name);
-        let fallback = was_open
+        let in_front = was_open
             .map(Tab::Query)
             .filter(|open| profile.session.active == *open)
-            .and_then(|open| profile.session.fallback(open));
+            .map(|open| profile.session.fallback(open));
         if let Err(message) = store::delete_query(&id, &name) {
             self.note(message, cx);
             return;
@@ -665,8 +664,8 @@ impl Workspace {
                 let _ = store::remove_grid(&id, &store::query_grid_key(open));
             }
         }
-        if let Some(next) = fallback {
-            self.activate_tab(next, cx);
+        if let Some(fallback) = in_front {
+            self.front_after_close(fallback, cx);
         }
         self.remember_profiles(cx);
         cx.notify();
