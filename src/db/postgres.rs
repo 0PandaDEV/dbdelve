@@ -90,7 +90,14 @@ WITH sized AS (
                     WHERE i.indrelid = class.oid
                 ), 0)
             )::bigint * current_setting('block_size')::bigint
-        END AS size_bytes
+        END AS size_bytes,
+        -- The planner's estimate, as of the same VACUUM or ANALYZE. Below zero
+        -- is the never-analyzed mark from PG14; before it that mark is a zero,
+        -- which the status bar never shows as an estimate.
+        CASE
+        WHEN class.relkind = 'p' OR class.reltuples < 0 THEN NULL
+        ELSE class.reltuples::bigint
+        END AS row_estimate
     FROM pg_catalog.pg_class AS class
     JOIN pg_catalog.pg_namespace AS namespace
         ON namespace.oid = class.relnamespace
@@ -112,7 +119,18 @@ SELECT
             JOIN sized AS leaf ON leaf.oid = tree.relid
         ), 0)::bigint
     ELSE parent.size_bytes
-    END AS size_bytes
+    END AS size_bytes,
+    -- Only when every leaf has one: a partition never analyzed, or one this
+    -- does not measure (a foreign table), would make the sum an undercount.
+    CASE
+    WHEN parent.relkind = 'p' THEN (
+        SELECT CASE WHEN bool_and(leaf.row_estimate IS NOT NULL) THEN sum(leaf.row_estimate) END
+        FROM pg_catalog.pg_partition_tree(parent.oid) AS tree
+        LEFT JOIN sized AS leaf ON leaf.oid = tree.relid
+        WHERE tree.isleaf
+    )::bigint
+    ELSE parent.row_estimate
+    END AS row_estimate
 FROM sized AS parent
 ";
 
@@ -2101,16 +2119,28 @@ mod tests {
             sizes["public"].contains_key("dbdelve_test_partitioned"),
             "a partitioned table's size must be reported"
         );
-        let partition_total = sizes["public"]["dbdelve_test_partitioned_p1"]
-            + sizes["public"]["dbdelve_test_partitioned_p2"];
+        let of = |name: &str| sizes["public"][name];
+        let partition_total = of("dbdelve_test_partitioned_p1").size.unwrap()
+            + of("dbdelve_test_partitioned_p2").size.unwrap();
         assert_eq!(
-            sizes["public"]["dbdelve_test_partitioned"], partition_total,
+            of("dbdelve_test_partitioned").size,
+            Some(partition_total),
             "a partitioned table's size is the sum of its partitions"
+        );
+        assert_eq!(
+            of("dbdelve_test_partitioned").rows,
+            Some(16),
+            "an analyzed partitioned table's estimate is the sum of its partitions'"
         );
 
         assert!(
-            sizes["public"]["dbdelve_test_unanalyzed"] > 0,
+            of("dbdelve_test_unanalyzed").size.unwrap_or(0) > 0,
             "a never-analyzed table with rows must not report 0 bytes"
+        );
+        assert_eq!(
+            of("dbdelve_test_unanalyzed").rows,
+            None,
+            "a never-analyzed table has no estimate, not one of -1"
         );
 
         connection

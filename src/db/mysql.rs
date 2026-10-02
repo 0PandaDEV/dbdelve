@@ -74,11 +74,13 @@ ORDER BY TABLE_SCHEMA, TABLE_NAME
 
 // Apart from `RELATIONS_SQL` because naming `DATA_LENGTH` makes the server open
 // every table for its engine's statistics, where the name and type alone come
-// from the data dictionary.
+// from the data dictionary. `TABLE_ROWS` is InnoDB's sampled estimate, from the
+// same statistics.
 const SIZES_SQL: &str = "
 SELECT TABLE_SCHEMA AS schema_name,
        TABLE_NAME AS relation_name,
-       DATA_LENGTH + INDEX_LENGTH AS size_bytes
+       DATA_LENGTH + INDEX_LENGTH AS size_bytes,
+       TABLE_ROWS AS row_estimate
 FROM information_schema.TABLES
 WHERE TABLE_SCHEMA NOT IN {system}
   AND TABLE_TYPE = 'BASE TABLE'

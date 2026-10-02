@@ -42,7 +42,8 @@ SELECT
     s.name AS schema_name,
     o.name AS relation_name,
     CASE o.type WHEN 'U' THEN 'table' WHEN 'V' THEN 'view' END AS relation_kind,
-    CASE WHEN o.type = 'U' THEN sizes.size_bytes END AS size_bytes
+    CASE WHEN o.type = 'U' THEN sizes.size_bytes END AS size_bytes,
+    CASE WHEN o.type = 'U' THEN counts.row_estimate END AS row_estimate
 FROM sys.objects AS o
 JOIN sys.schemas AS s ON s.schema_id = o.schema_id
 -- The catalog views rather than `sys.dm_db_partition_stats`, which needs
@@ -53,6 +54,15 @@ LEFT JOIN (
     JOIN sys.allocation_units AS a ON a.container_id = p.partition_id
     GROUP BY p.object_id
 ) AS sizes ON sizes.object_id = o.object_id
+-- Apart from the sizes, whose join repeats a partition once per allocation
+-- unit; and only the heap or clustered index, since every other index holds
+-- the same rows again.
+LEFT JOIN (
+    SELECT p.object_id, SUM(p.rows) AS row_estimate
+    FROM sys.partitions AS p
+    WHERE p.index_id IN (0, 1)
+    GROUP BY p.object_id
+) AS counts ON counts.object_id = o.object_id
 WHERE o.type IN ('U', 'V')
     AND o.is_ms_shipped = 0
 ORDER BY s.name, o.name

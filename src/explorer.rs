@@ -376,6 +376,7 @@ mod tests {
                         kind: RelationKind::Table,
                         partition_of: None,
                         size: None,
+                        rows: None,
                     }],
                     routines: Vec::new(),
                 },
@@ -387,12 +388,14 @@ mod tests {
                             kind: RelationKind::View,
                             partition_of: None,
                             size: None,
+                            rows: None,
                         },
                         Relation {
                             name: "accounts".into(),
                             kind: RelationKind::Table,
                             partition_of: None,
                             size: None,
+                            rows: None,
                         },
                     ],
                     routines: vec![
@@ -424,6 +427,7 @@ mod tests {
             kind,
             partition_of: Some(parent.into()),
             size: None,
+            rows: None,
         };
 
         Catalog {
@@ -435,6 +439,7 @@ mod tests {
                         kind: RelationKind::PartitionedTable,
                         partition_of: None,
                         size: None,
+                        rows: None,
                     },
                     partition("measurements_2025", "measurements", RelationKind::Table),
                     partition(
@@ -452,6 +457,7 @@ mod tests {
                         kind: RelationKind::Table,
                         partition_of: None,
                         size: None,
+                        rows: None,
                     },
                 ],
                 routines: Vec::new(),

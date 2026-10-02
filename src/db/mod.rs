@@ -827,8 +827,8 @@ impl Connection {
         }
     }
 
-    /// Each table's on-disk bytes, for [`Catalog::set_sizes`] to write onto
-    /// the relations already on screen.
+    /// Each table's on-disk bytes and row estimate, for [`Catalog::set_sizes`]
+    /// to write onto the relations already on screen.
     ///
     /// Apart from [`Connection::catalog`] because on Postgres and MySQL the
     /// numbers cost locks or opened tables, and both run it on a short-lived
@@ -1017,6 +1017,11 @@ pub struct Relation {
     /// `None` for a view, on SQLite, and on Postgres and MySQL until
     /// [`Catalog::set_sizes`] has filled it in, which it may never do.
     pub size: Option<u64>,
+    /// How many rows the engine's statistics say the table holds, from the
+    /// same place `size` comes from, so it is `None` wherever `size` is and
+    /// also wherever the statistics were never gathered. An estimate on every
+    /// engine but Snowflake, which keeps each table's count exactly.
+    pub rows: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1042,8 +1047,16 @@ pub struct Schema {
     pub routines: Vec<Routine>,
 }
 
-/// On-disk bytes by schema, then relation name.
-pub type Sizes = std::collections::HashMap<String, std::collections::HashMap<String, u64>>;
+/// On-disk bytes and row estimates by schema, then relation name.
+pub type Sizes = std::collections::HashMap<String, std::collections::HashMap<String, Statistics>>;
+
+/// What the engine's statistics say about one relation. Either half can be
+/// missing on its own: a never-analyzed table can still be measured.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Statistics {
+    pub size: Option<u64>,
+    pub rows: Option<u64>,
+}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Catalog {
@@ -1075,17 +1088,19 @@ impl Catalog {
         }
     }
 
-    /// Write sizes onto the relations already here, leaving any it has no
-    /// number for alone. It touches nothing but sizes and [`Self::merge`]
-    /// nothing but routines, so the two may land in either order.
+    /// Write sizes and row estimates onto the relations already here, leaving
+    /// any it has no number for alone. It touches nothing but those and
+    /// [`Self::merge`] nothing but routines, so the two may land in either
+    /// order.
     pub fn set_sizes(&mut self, sizes: &Sizes) {
         for schema in &mut self.schemas {
             let Some(sizes) = sizes.get(&schema.name) else {
                 continue;
             };
             for relation in &mut schema.relations {
-                if let Some(&size) = sizes.get(&relation.name) {
-                    relation.size = Some(size);
+                if let Some(statistics) = sizes.get(&relation.name) {
+                    relation.size = statistics.size.or(relation.size);
+                    relation.rows = statistics.rows.or(relation.rows);
                 }
             }
         }
@@ -1281,6 +1296,7 @@ pub(super) fn assemble_catalog(
             kind,
             partition_of: optional_cell(&relations, row, "partition_of").map(str::to_string),
             size: optional_cell(&relations, row, "size_bytes").and_then(|v| v.parse().ok()),
+            rows: optional_cell(&relations, row, "row_estimate").and_then(|v| v.parse().ok()),
         });
     }
 
@@ -1308,21 +1324,25 @@ pub(super) fn assemble_catalog(
     })
 }
 
-/// A row with no number (a null `DATA_LENGTH`) is left out rather than failing
-/// the rest.
+/// A row with neither number (a null `DATA_LENGTH` and `TABLE_ROWS`) is left
+/// out rather than failing the rest.
 pub(super) fn assemble_sizes(result: QueryResult) -> Result<Sizes, DbError> {
     let mut sizes = Sizes::new();
     for row in &result.rows {
-        let Some(size) = optional_cell(&result, row, "size_bytes").and_then(|v| v.parse().ok())
-        else {
-            continue;
+        let number = |column| optional_cell(&result, row, column).and_then(|v| v.parse().ok());
+        let statistics = Statistics {
+            size: number("size_bytes"),
+            rows: number("row_estimate"),
         };
+        if statistics == Statistics::default() {
+            continue;
+        }
         sizes
             .entry(required_cell(&result, row, "schema_name")?.to_string())
             .or_default()
             .insert(
                 required_cell(&result, row, "relation_name")?.to_string(),
-                size,
+                statistics,
             );
     }
     Ok(sizes)
@@ -1946,6 +1966,7 @@ mod tests {
                     kind: RelationKind::Table,
                     partition_of: None,
                     size: None,
+                    rows: None,
                 })
                 .collect(),
             routines: routines
@@ -2074,12 +2095,14 @@ mod tests {
                 "relation_kind",
                 "partition_of",
                 "size_bytes",
+                "row_estimate",
             ],
             &[
                 &[
                     Some("analytics"),
                     Some("events"),
                     Some("partitioned_table"),
+                    None,
                     None,
                     None,
                 ],
@@ -2089,6 +2112,7 @@ mod tests {
                     Some("table"),
                     Some("events"),
                     Some("8192"),
+                    Some("1200"),
                 ],
                 &[
                     Some("public"),
@@ -2096,6 +2120,7 @@ mod tests {
                     Some("table"),
                     None,
                     Some("24576000"),
+                    None,
                 ],
                 &[
                     Some("public"),
@@ -2103,6 +2128,7 @@ mod tests {
                     Some("view"),
                     None,
                     Some(""),
+                    None,
                 ],
             ],
         );
@@ -2150,12 +2176,14 @@ mod tests {
                     kind: RelationKind::PartitionedTable,
                     partition_of: None,
                     size: None,
+                    rows: None,
                 },
                 Relation {
                     name: "events_2026".into(),
                     kind: RelationKind::Table,
                     partition_of: Some("events".into()),
                     size: Some(8192),
+                    rows: Some(1200),
                 },
             ]
         );
@@ -2176,35 +2204,35 @@ mod tests {
                     &[Some("public"), Some("accounts"), Some("table")],
                     &[Some("public"), Some("account_overview"), Some("view")],
                     &[Some("archive"), Some("accounts"), Some("table")],
+                    &[Some("archive"), Some("unmeasured"), Some("table")],
                 ],
             ),
             QueryResult::default(),
         )
         .unwrap();
         let sizes = assemble_sizes(result(
-            &["schema_name", "relation_name", "size_bytes"],
+            &["schema_name", "relation_name", "size_bytes", "row_estimate"],
             &[
-                &[Some("public"), Some("accounts"), Some("8192")],
-                &[Some("archive"), Some("accounts"), None],
-                &[Some("public"), Some("dropped_since"), Some("16384")],
+                &[Some("public"), Some("accounts"), Some("8192"), Some("40")],
+                &[Some("archive"), Some("accounts"), None, None],
+                &[Some("archive"), Some("unmeasured"), None, Some("7")],
+                &[Some("public"), Some("dropped_since"), Some("16384"), None],
             ],
         ))
         .unwrap();
+        assert!(!sizes["archive"].contains_key("accounts"));
 
         catalog.set_sizes(&sizes);
 
-        let size = |schema: &str, name: &str| {
+        let relation = |schema: &str, name: &str| {
             let schema = catalog.schemas.iter().find(|s| s.name == schema).unwrap();
-            schema
-                .relations
-                .iter()
-                .find(|r| r.name == name)
-                .unwrap()
-                .size
+            let relation = schema.relations.iter().find(|r| r.name == name).unwrap();
+            (relation.size, relation.rows)
         };
-        assert_eq!(size("public", "accounts"), Some(8192));
-        assert_eq!(size("public", "account_overview"), None);
-        assert_eq!(size("archive", "accounts"), None);
+        assert_eq!(relation("public", "accounts"), (Some(8192), Some(40)));
+        assert_eq!(relation("public", "account_overview"), (None, None));
+        assert_eq!(relation("archive", "accounts"), (None, None));
+        assert_eq!(relation("archive", "unmeasured"), (None, Some(7)));
     }
 
     #[test]
