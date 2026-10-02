@@ -754,9 +754,10 @@ impl Workspace {
     /// prompt's own Run.
     ///
     /// `keep_rows` leaves whatever the grid is showing in place until the new
-    /// result lands, for the refresh of a tab whose rows came off disk. Every
-    /// other run clears them first, because rows from the previous statement
-    /// sitting under the one now running cannot be told from fresh ones.
+    /// result lands, for a relation's refresh: the same statement asked again,
+    /// so the rows under it are what it is about to return. Every other run
+    /// clears them first, because rows from the previous statement sitting
+    /// under the one now running cannot be told from fresh ones.
     ///
     /// `explain` says this submission is an `EXPLAIN`, and diverts its result
     /// away from the grid and into the tab's plan. It routes through here rather

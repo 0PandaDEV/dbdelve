@@ -31,6 +31,8 @@ impl Workspace {
             .map(|tab| &mut tab.body)
         {
             *count = RowCount::Unasked;
+            // What tells `requery_relation` to keep these rows on screen until
+            // the new ones land.
             *stale = true;
         }
         self.requery_relation(id, |_, _, _, _| true, cx);

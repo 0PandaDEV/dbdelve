@@ -200,19 +200,24 @@ impl Workspace {
             // then no structure is coming (`load_structure` gave up, or a
             // reconnect is dropping its answer) and the run is what says the
             // connection is not open. A reconnect reloads the tab in front,
-            // and any other on its next visit.
+            // and any other on its next visit. `stale` is left for the run the
+            // structure's arrival makes, which is this one, deferred.
             StructureState::Loading if engine.pages_by_key() && connected => return,
             _ => Vec::new(),
         };
 
         let sql = relation_sql(engine, &schema, &relation, filter, sort, *limit, *offset);
-        // Checked before anything leaves the machine, and before the tab's
-        // staleness is spent: a refused filter leaves the rows on screen and
-        // the bars as they stand, so it can be corrected rather than retyped.
+        // Checked before anything leaves the machine: a refused filter leaves
+        // the rows on screen and the bars as they stand, so it can be corrected
+        // rather than retyped.
         let paged = sql::is_generated_select(&sql)
             .then(|| sql::paged(engine, &sql, &key))
             .flatten();
         let Some(sql) = paged else {
+            // Spent all the same. Left standing, it would have `load_relation`
+            // load the structure and try again on every visit to the tab, for
+            // a filter refused every time.
+            *stale = false;
             self.note(
                 "dbdelve will not run a filter it cannot read as one SELECT.".into(),
                 cx,

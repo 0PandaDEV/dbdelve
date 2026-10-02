@@ -1111,10 +1111,14 @@ pub(crate) enum ObjectBody {
         /// change of sort or limit puts it back to zero, because a window into
         /// an ordering that no longer exists is not a page of anything.
         offset: usize,
-        /// Whether the rows on screen came off disk rather than from the
-        /// server. Refreshed on the tab's first activation and cleared there,
-        /// not at startup: a session of restored tabs would otherwise open by
-        /// firing one query per tab at a database nobody has looked at yet.
+        /// Whether the rows on screen are owed a refresh that keeps them on
+        /// screen until it lands: rows that came off disk or over a connection
+        /// since replaced, which are refreshed on the tab's next activation
+        /// rather than at startup or reconnect -- a session of restored tabs
+        /// would otherwise open by firing one query per tab at a database
+        /// nobody has looked at yet -- and rows a refresh has just been asked
+        /// for. Spent by the run that refreshes them, or by the refusal of one
+        /// that never could.
         stale: bool,
         /// Whether this tab's snapshot has been looked for yet. See
         /// [`QueryTab::hydrated`].
