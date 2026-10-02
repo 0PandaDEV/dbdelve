@@ -1339,6 +1339,14 @@ pub(crate) fn next_query_id(stored: u64, tabs: &[store::StoredQueryTab]) -> u64 
     stored.max(tabs.iter().map(|tab| tab.id + 1).max().unwrap_or(0))
 }
 
+/// Whether the rows on screen are only waiting to be replaced. A relation
+/// keeps its rows on screen while it is refreshed, and the result replaces the
+/// grid wholesale, edits staged on it included. A query tab's run blanks its
+/// grid first, but for an `EXPLAIN`, which never touches it.
+pub(crate) fn refreshing(active: Tab, query: Option<&QueryState>) -> bool {
+    matches!(active, Tab::Object(_)) && matches!(query, Some(QueryState::Running { .. }))
+}
+
 pub(crate) fn result_pane_is_expanded(query: &QueryState) -> bool {
     !matches!(query, QueryState::Idle)
 }
@@ -1525,6 +1533,28 @@ mod tests {
         // neighbour.
         assert_eq!(neighbour(&[Tab::Query(0)], Tab::Query(0)), None);
         assert_eq!(neighbour(&strip, Tab::Object(9)), None);
+    }
+
+    #[test]
+    fn only_a_relation_running_with_rows_kept_holds_them_read_only() {
+        let running = QueryState::Running {
+            started: std::time::Instant::now(),
+            cancelling: None,
+            cancel: CancelToken::default(),
+        };
+        let landed = QueryState::Complete {
+            rows: 1,
+            bytes: 0,
+            elapsed: std::time::Duration::ZERO,
+            rows_affected: None,
+        };
+        assert!(refreshing(Tab::Object(3), Some(&running)));
+        assert!(!refreshing(Tab::Object(3), Some(&landed)));
+        // A query tab running over rows is running an `EXPLAIN`, which leaves
+        // them where they are.
+        assert!(!refreshing(Tab::Query(0), Some(&running)));
+        // A routine runs nothing.
+        assert!(!refreshing(Tab::Object(3), None));
     }
 
     #[test]

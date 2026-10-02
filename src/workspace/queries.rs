@@ -883,6 +883,14 @@ impl Workspace {
                 table.clear_selection(cx);
                 table.refresh(cx);
             });
+        } else if keep_rows {
+            // Edits staged on the rows kept go now, as they went when a
+            // refresh blanked the grid: they were made against rows about to
+            // be replaced, and the replacement would drop them unseen.
+            results.update(cx, |table, cx| {
+                table.delegate_mut().discard_pending();
+                table.refresh(cx);
+            });
         }
         cx.notify();
 

@@ -4,7 +4,7 @@
 //! impl live in as many modules as it has concerns; they moved out whole.
 
 use super::*;
-use crate::session::{StaleEdit, StaleResume};
+use crate::session::{StaleEdit, StaleResume, refreshing};
 
 impl Workspace {
     /// Open the "New row" form over the preview in front, one field per column
@@ -556,8 +556,9 @@ impl Workspace {
         self.note("This column cannot be edited.".into(), cx);
     }
 
-    /// Whether an edit may go ahead on the grid in front, raising the stale-rows
-    /// prompt when it may not. Callers ask only once the grid would otherwise
+    /// Whether an edit may go ahead on the grid in front: not while its rows are
+    /// being refreshed, and on restored rows only once the stale-rows prompt
+    /// has been answered. Callers ask only once the grid would otherwise
     /// take the edit, so the prompt never stands in front of a refusal.
     fn confirm_stale(&mut self, resume: StaleResume, cx: &mut Context<Self>) -> bool {
         let Some(profile) = self.profile_mut() else {
@@ -566,17 +567,12 @@ impl Workspace {
         let Some(results) = profile.session.active_results().cloned() else {
             return false;
         };
-        if !results.read(cx).delegate().unconfirmed() {
-            return true;
-        }
-        // Restored rows with a run in flight are the background refresh's, and
-        // its result replaces the grid wholesale, edits staged on it included.
-        if matches!(
-            profile.session.active_query(),
-            Some(QueryState::Running { .. })
-        ) {
+        if refreshing(profile.session.active, profile.session.active_query()) {
             self.note(Self::REFRESHING.into(), cx);
             return false;
+        }
+        if !results.read(cx).delegate().unconfirmed() {
+            return true;
         }
         if profile.confirmed_stale {
             results.update(cx, |table, _| table.delegate_mut().confirm_stale());
