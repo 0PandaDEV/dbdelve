@@ -250,6 +250,9 @@ ORDER BY table_constraint.conname, key.key_position
 ";
 
 // The same catalog read from the referenced side: who points at this relation.
+// `conparentid = 0` keeps a key declared on a partitioned table to the one row
+// it was declared as: from PG 12 the server clones it onto every partition, and
+// each clone would otherwise be listed as a relation of its own.
 const REFERENCES_SQL: &str = "
 SELECT
     namespace.nspname AS source_schema,
@@ -277,6 +280,7 @@ JOIN pg_catalog.pg_attribute AS referenced_attribute
 WHERE referenced_namespace.nspname = {schema}
     AND referenced_class.relname = {relation}
     AND table_constraint.contype = 'f'
+    AND table_constraint.conparentid = 0
 ORDER BY namespace.nspname, class.relname, table_constraint.conname, key.key_position
 ";
 
@@ -1888,6 +1892,37 @@ mod tests {
                 .all(|reference| reference.referenced_column != "number"),
             "a composite key names no single column: {references:?}"
         );
+    }
+
+    #[test]
+    #[ignore = "requires a local Postgres server configured through PG*"]
+    fn live_a_key_on_a_partitioned_table_is_listed_once_not_per_partition() {
+        let connection = Connection::open(&live_config()).expect("connection should open");
+        connection
+            .query(
+                "DROP TABLE IF EXISTS dbdelve_test_referencing; \
+                 CREATE TABLE dbdelve_test_referencing \
+                     (account_id bigint REFERENCES accounts (id)) \
+                     PARTITION BY RANGE (account_id); \
+                 CREATE TABLE dbdelve_test_referencing_p1 \
+                     PARTITION OF dbdelve_test_referencing FOR VALUES FROM (0) TO (500); \
+                 CREATE TABLE dbdelve_test_referencing_p2 \
+                     PARTITION OF dbdelve_test_referencing FOR VALUES FROM (500) TO (1000)",
+            )
+            .expect("the fixture tables should be created");
+
+        let references = connection.references("public", "accounts");
+        connection
+            .query("DROP TABLE dbdelve_test_referencing")
+            .expect("the fixture tables should be cleaned up");
+        let tables: Vec<String> = references
+            .expect("references should load")
+            .into_iter()
+            .map(|reference| reference.table)
+            .filter(|table| table.starts_with("dbdelve_test_referencing"))
+            .collect();
+
+        assert_eq!(tables, ["dbdelve_test_referencing"]);
     }
 
     #[test]
