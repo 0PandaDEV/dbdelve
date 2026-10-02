@@ -1012,6 +1012,10 @@ impl Workspace {
                                         .with_engine(engine)
                                         .with_sort(sort, sortable)
                                         .with_layout(names, widths);
+                                    // Rows kept through a refresh kept their
+                                    // selection too, and its index now names
+                                    // whichever row the new result put there.
+                                    table.clear_selection(cx);
                                     table.refresh(cx);
                                     if table.delegate().layout().0 == *names {
                                         table
