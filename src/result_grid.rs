@@ -734,7 +734,13 @@ impl ResultGrid {
     /// The column is kept: moving down a column is not moving out of it. With
     /// nothing active yet the first column is the origin, because a keystroke
     /// on a grid has to leave the ring somewhere readable.
+    ///
+    /// Also folds into the row selection, exactly as a plain click on this
+    /// row would: without it, arrow-key movement would leave a stale
+    /// selection behind for "Copy Row(s) As" to copy and the gutter to tint,
+    /// while the ring itself moved on.
     pub fn select_row(&mut self, row: usize) {
+        self.click_row(row, false, false);
         self.set_active(row, self.active.map_or(0, |(_, col)| col));
     }
 
@@ -3111,15 +3117,29 @@ mod tests {
         let mut grid = four_row_grid();
         grid.click_row(1, false, false);
         grid.set_active(1, 0);
-        grid.select_row(1);
 
         for (row, expected) in [(3, vec![1, 2, 3]), (2, vec![1, 2]), (0, vec![0, 1])] {
             grid.click_row(row, true, false);
             grid.set_active(row, 0);
-            grid.select_row(row);
             assert_eq!(grid.selected_row_indices(), expected);
             assert_eq!(grid.row_selection_anchor, Some(1));
         }
+    }
+
+    #[test]
+    fn keyboard_movement_folds_into_the_selection_like_a_plain_click() {
+        // `select_row` is what `TableEvent::SelectRow` -- the library's own
+        // arrow-key movement -- folds into. Without updating the selection
+        // too, the ring would move off a multi-row selection while the old
+        // rows kept their tint and "Copy Rows As" kept copying them.
+        let mut grid = four_row_grid();
+        grid.click_row(1, false, false);
+        grid.click_row(3, true, false);
+        assert_eq!(grid.selected_row_indices(), vec![1, 2, 3]);
+
+        grid.select_row(2);
+        assert_eq!(grid.selected_row_indices(), vec![2]);
+        assert_eq!(grid.row_selection_anchor, Some(2));
     }
 
     #[test]
