@@ -293,6 +293,15 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // No buffer in front is nothing to save, and a name asked for anyway
+        // would have nowhere to go when it is given.
+        if self
+            .profile()
+            .and_then(|profile| profile.session.active_query_tab())
+            .is_none()
+        {
+            return;
+        }
         // A named query is written on every swap and on quit, so calling this
         // on one is a confirmation rather than a decision. Only a buffer with
         // nowhere to go has to ask for a name.
@@ -577,17 +586,25 @@ impl Workspace {
     /// appends: recalling a statement is not a reason to take away what is
     /// already written, and the statement that runs is the statement on screen.
     /// The cursor lands on it, because that is what `cmd+enter` reads to decide
-    /// what to send.
+    /// what to send. With no buffer in front it goes into a new one, rather
+    /// than into whichever buffer happens to be behind the tab in front.
     pub(crate) fn recall_statement(
         &mut self,
         sql: String,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(profile) = self.profile() else {
-            return;
-        };
-        let Some(tab) = profile.session.active_query_tab() else {
+        if self
+            .profile()
+            .and_then(|profile| profile.session.active_query_tab())
+            .is_none()
+        {
+            self.new_query(&NewQuery, window, cx);
+        }
+        let Some(tab) = self
+            .profile()
+            .and_then(|profile| profile.session.active_query_tab())
+        else {
             return;
         };
         let (id, editor) = (tab.id, tab.editor.clone());
