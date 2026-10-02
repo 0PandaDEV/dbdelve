@@ -162,6 +162,12 @@ impl Workspace {
             return;
         }
         install_theme(theme.with_opacity(self.settings.opacity), window, cx);
+        // The titlebar deliberately no longer names the theme -- permanent
+        // chrome should not narrate a setting -- so the switch itself says
+        // where it landed.
+        if self.profile().is_some() {
+            self.note(format!("Theme: {}", theme.name), cx);
+        }
         self.remember_profiles(cx);
         cx.refresh_windows();
     }
