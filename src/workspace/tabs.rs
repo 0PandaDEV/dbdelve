@@ -246,9 +246,11 @@ impl Workspace {
         if self.cancel_close_tab(cx) {
             return;
         }
-        // Before the apply review, because the form paints over it: generating
-        // from the form is what puts a review up, so the form is the newer of
-        // the two whenever both exist.
+        // Before the apply review, though confirming a row clears the form in
+        // the same step that opens the review, so the two are never both open
+        // on one tab. `close_new_row` is scoped to the active tab's own form,
+        // so one left open elsewhere falls through to the steps below instead
+        // of eating this keystroke.
         if self.close_new_row(cx) {
             return;
         }

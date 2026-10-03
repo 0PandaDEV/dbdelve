@@ -171,10 +171,23 @@ impl Workspace {
 
     /// Put the form away. Nothing has been generated yet, so there is nothing
     /// to keep.
+    ///
+    /// Scoped to the active tab's own form: one left open on another tab is
+    /// not what `escape` on this surface means, and must not eat the
+    /// keystroke meant for whatever this tab actually has in front.
     pub(crate) fn close_new_row(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(profile) = self.profile_mut() else {
             return false;
         };
+        let active = profile.session.active;
+        let on_active_tab = profile
+            .session
+            .insert_form
+            .as_ref()
+            .is_some_and(|form| form.tab == active);
+        if !on_active_tab {
+            return false;
+        }
         let closed = profile.session.insert_form.take().is_some();
         if closed {
             cx.notify();
@@ -704,7 +717,18 @@ impl Workspace {
         };
         // A statement already generated is the one the user is reading; another
         // behind it would leave that panel describing something else.
-        if profile.session.apply_review.is_some() || profile.session.insert_form.is_some() {
+        if profile.session.apply_review.is_some() {
+            return;
+        }
+        // Scoped to the active tab's own form: one left open on another tab
+        // (or a closed one, cleared at close) must not block this one.
+        if profile
+            .session
+            .insert_form
+            .as_ref()
+            .is_some_and(|form| form.tab == profile.session.active)
+        {
+            self.note("Close the new row form before deleting a row.".into(), cx);
             return;
         }
         // Browsing surfaces only. A query tab's grid is a view of the user's own
