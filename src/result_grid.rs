@@ -909,8 +909,21 @@ impl ResultGrid {
         }
 
         // Bytes, not characters: it only has to be cheap and never under-count,
-        // and `clip` is a no-op on anything that turns out to fit.
+        // and `clip` is a no-op on anything that turns out to fit. Grouped the
+        // same way a fetched value is, on the same column check `display`
+        // uses, so a pending edit does not stand out from the rows around it
+        // by losing its separators -- the value staged for the `UPDATE` stays
+        // exactly as typed, since this is what the cell paints and nothing else.
         let shown = match &value {
+            NewValue::Value(value) if self.is_numeric_column(col) => {
+                let grouped = grouped_digits(value);
+                Some(
+                    match grouped.len() > CELL_DISPLAY_LIMIT || grouped.contains(['\n', '\r']) {
+                        true => SharedString::from(clip(&grouped)),
+                        false => SharedString::from(grouped),
+                    },
+                )
+            }
             NewValue::Value(value) => Some(
                 match value.len() > CELL_DISPLAY_LIMIT || value.contains(['\n', '\r']) {
                     true => SharedString::from(clip(value)),
@@ -2746,6 +2759,20 @@ mod tests {
             CELL_DISPLAY_LIMIT + 1
         );
         assert_eq!(grid.pending_updates()[0].sets[0].1, value(&long));
+    }
+
+    #[test]
+    fn a_pending_numeric_edit_is_shown_grouped_but_staged_raw() {
+        // `display` groups a fetched number's digits; a pending edit over one
+        // must read the same way or it stands out from the rows around it --
+        // but what the `UPDATE` carries is the value exactly as typed.
+        let mut grid = marked_grid();
+        assert!(grid.set_pending(0, 2, value("7654321")));
+
+        let pending = grid.pending_at(0, 2).unwrap();
+        assert_eq!(pending.shown.as_deref(), Some("7'654'321"));
+        assert_eq!(pending.value, value("7654321"));
+        assert_eq!(grid.pending_updates()[0].sets[0].1, value("7654321"));
     }
 
     #[test]
