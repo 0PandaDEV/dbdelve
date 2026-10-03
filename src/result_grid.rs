@@ -153,6 +153,10 @@ pub struct ResultGrid {
     /// The row a plain click lands on, which a shift-click
     /// extends a range from.
     row_selection_anchor: Option<usize>,
+    /// A row the pointer has just selected itself. Telling the library about
+    /// it echoes back as `TableEvent::SelectRow`, which must not collapse the
+    /// range or toggle the click just made the way a keyboard move does.
+    pointer_row: Option<usize>,
     /// Where the pointer last went down on a reference arrow, for the popup it
     /// opens to hang from.
     reference_anchor: Option<Point<Pixels>>,
@@ -283,6 +287,7 @@ impl ResultGrid {
             primary_key: Vec::new(),
             selected_rows: std::collections::BTreeSet::new(),
             row_selection_anchor: None,
+            pointer_row: None,
             reference_anchor: None,
             mode,
             engine: db::Engine::default(),
@@ -738,9 +743,12 @@ impl ResultGrid {
     /// Also folds into the row selection, exactly as a plain click on this
     /// row would: without it, arrow-key movement would leave a stale
     /// selection behind for "Copy Row(s) As" to copy and the gutter to tint,
-    /// while the ring itself moved on.
+    /// while the ring itself moved on. Not for the echo of a pointer
+    /// selection, which has already chosen the rows.
     pub fn select_row(&mut self, row: usize) {
-        self.click_row(row, false, false);
+        if self.pointer_row.take() != Some(row) {
+            self.click_row(row, false, false);
+        }
         self.set_active(row, self.active.map_or(0, |(_, col)| col));
     }
 
@@ -1700,6 +1708,7 @@ impl ResultGrid {
                     grid.set_active(row_ix, col_ix);
                     grid.right_click_row(row_ix);
                     grid.focus = Some(handle);
+                    grid.pointer_row = Some(row_ix);
                     table.set_selected_row(row_ix, cx);
                     // set_selected_row consumes the event; the row beneath
                     // still needs its own right click to record where the
@@ -1934,6 +1943,7 @@ fn click_row(
     // Both states paint blue. Updating the library on mouse-up leaves its
     // old highlight behind, indefinitely if the button is released elsewhere.
     if table.delegate().selected_rows.contains(&row) {
+        table.delegate_mut().pointer_row = Some(row);
         table.set_selected_row(row, cx);
     } else {
         table.clear_selection(cx);
@@ -3160,6 +3170,28 @@ mod tests {
         grid.select_row(2);
         assert_eq!(grid.selected_row_indices(), vec![2]);
         assert_eq!(grid.row_selection_anchor, Some(2));
+    }
+
+    #[test]
+    fn the_echo_of_a_pointer_selection_keeps_the_rows_it_chose() {
+        // A shift- or toggle-click tells the library its row, and the library
+        // answers with the same `SelectRow` a keyboard move sends. Folding that
+        // echo like a keystroke collapsed every range to the clicked row.
+        let mut grid = four_row_grid();
+        grid.click_row(0, false, false);
+        grid.click_row(2, true, false);
+        grid.pointer_row = Some(2);
+        grid.select_row(2);
+        assert_eq!(grid.selected_row_indices(), vec![0, 1, 2]);
+
+        grid.click_row(3, false, true);
+        grid.pointer_row = Some(3);
+        grid.select_row(3);
+        assert_eq!(grid.selected_row_indices(), vec![0, 1, 2, 3]);
+
+        // Spent by its echo: the next keyboard move collapses as before.
+        grid.select_row(1);
+        assert_eq!(grid.selected_row_indices(), vec![1]);
     }
 
     #[test]
