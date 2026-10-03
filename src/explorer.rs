@@ -275,10 +275,12 @@ pub fn probe_sql(engine: Engine, schema: &str, relation: &str, filter: &str) -> 
     )
 }
 
-/// The size of what `preview_sql` would page through, for the status bar.
+/// The size of what `preview_sql` would page through, for the status bar's
+/// Count. Never run unasked: on a large table it is a full scan.
 pub fn count_sql(engine: Engine, schema: &str, relation: &str, filter: &str) -> String {
     format!(
-        "SELECT COUNT(*){}",
+        "SELECT {}{}",
+        engine.count_all(),
         from_where(engine, schema, relation, filter)
     )
 }
@@ -318,26 +320,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_count_counts_what_the_preview_pages_through_and_passes_the_select_gate() {
-        for engine in [
-            Engine::Postgres,
-            Engine::MySql,
-            Engine::Sqlite,
-            Engine::Snowflake,
-            Engine::SqlServer,
+    fn a_count_counts_what_the_preview_pages_through_and_passes_both_gates() {
+        for (engine, aggregate) in [
+            (Engine::Postgres, "COUNT(*)"),
+            (Engine::MySql, "COUNT(*)"),
+            (Engine::Sqlite, "COUNT(*)"),
+            (Engine::Snowflake, "COUNT(*)"),
+            // An `int` past 2^31 rows anywhere else.
+            (Engine::SqlServer, "COUNT_BIG(*)"),
         ] {
             let all = count_sql(engine, "public", "orders", "");
             assert_eq!(
                 all,
                 format!(
-                    "SELECT COUNT(*) FROM {}",
+                    "SELECT {aggregate} FROM {}",
                     engine.qualified("public", "orders")
                 )
             );
             let narrowed = count_sql(engine, "public", "orders", " id > 3 ");
             assert!(narrowed.ends_with(" WHERE id > 3"));
-            assert!(crate::sql::is_generated_select(&all));
-            assert!(crate::sql::is_generated_select(&narrowed));
+            for sql in [&all, &narrowed] {
+                assert!(crate::sql::is_generated_select(sql), "{sql}");
+                // Runnable in Read-only without a prompt: the Count button
+                // refuses rather than asks.
+                let verdict = crate::sql::classify(engine, sql);
+                assert!(
+                    crate::sql::gate(&verdict, crate::sql::Mode::ReadOnly, &[]).is_none(),
+                    "{sql}"
+                );
+            }
         }
     }
 

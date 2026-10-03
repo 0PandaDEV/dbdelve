@@ -21,7 +21,7 @@ use gpui_component::menu::DropdownMenu;
 pub(crate) use queries::error_in_buffer;
 
 use crate::connection_form::{Origin, password_to_persist};
-use crate::session::{write_buffer, write_grids};
+use crate::session::{catalog_relation, write_buffer, write_grids};
 use crate::sql::{Mode, appended_statement, remember_statement, update_batch};
 use crate::theme::{install_fonts, install_theme, restored_fonts, restored_theme};
 use crate::*;
@@ -703,6 +703,80 @@ impl Render for Workspace {
                 .active_query_tab()
                 .is_some_and(|tab| tab.last_query.is_some());
         let paging = views::render_paging(profile, cx);
+        let relation = profile
+            .session
+            .active_object()
+            .and_then(|tab| match &tab.body {
+                ObjectBody::Relation {
+                    count,
+                    filter,
+                    query,
+                    limit,
+                    offset,
+                    showing_structure: false,
+                    ..
+                } => Some((tab, count, filter, query, *limit, *offset)),
+                _ => None,
+            });
+        let engine = profile.config.engine();
+        let relation_rows = relation.and_then(|(tab, count, filter, query, limit, offset)| {
+            let estimate = match &profile.catalog {
+                CatalogState::Loaded(catalog, _) => {
+                    catalog_relation(catalog, &tab.schema, &tab.name)
+                        .and_then(|relation| relation.rows)
+                }
+                _ => None,
+            };
+            let whole =
+                offset == 0 && matches!(query, QueryState::Complete { rows, .. } if *rows < limit);
+            session::relation_rows(count, filter, estimate, engine.exact_row_estimates(), whole)
+        });
+        // The way to an exact number, which is never run unasked. Its tooltip
+        // is the statement it runs.
+        let count_control = relation
+            .filter(|_| profile.connection().is_some())
+            .and_then(|(tab, count, filter, ..)| {
+                let id = tab.id;
+                let workspace = cx.entity().downgrade();
+                match count {
+                    RowCount::Counting { cancelling, .. } => Some(
+                        div()
+                            .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .gap(px(layout::SPACE_SM))
+                            .child(div().whitespace_nowrap().text_color(t.text_faint).child(
+                                match cancelling {
+                                    true => "Cancelling count…",
+                                    false => "Counting rows…",
+                                },
+                            ))
+                            .children((!cancelling).then(|| {
+                                button("cancel-count", "Cancel", Tone::Quiet, Control::Compact, t)
+                                    .on_click(move |_, _, cx| {
+                                        _ = workspace.update(cx, |workspace, cx| {
+                                            workspace.cancel_count(id, cx);
+                                        });
+                                    })
+                            }))
+                            .into_any_element(),
+                    ),
+                    _ if count.answers(filter) => None,
+                    _ => {
+                        let sql = explorer::count_sql(engine, &tab.schema, &tab.name, filter);
+                        Some(
+                            button("count-rows", "Count", Tone::Quiet, Control::Compact, t)
+                                .tooltip(sql)
+                                .on_click(move |_, _, cx| {
+                                    _ = workspace.update(cx, |workspace, cx| {
+                                        workspace.count_rows(id, cx);
+                                    });
+                                })
+                                .into_any_element(),
+                        )
+                    }
+                }
+            });
         let query_status = match profile.session.active_query() {
             Some(QueryState::Complete {
                 rows,
@@ -710,9 +784,9 @@ impl Render for Workspace {
                 elapsed,
                 ..
             }) => {
-                // The pager already says how many rows a relation's page holds,
-                // so only a result without one carries its row count here.
-                let count = paging
+                // The rows on screen, unless the relation's own count or
+                // estimate is beside the stats already.
+                let count = relation_rows
                     .is_none()
                     .then(|| row_readout(showing.unwrap_or(*rows), *rows));
                 let joined = |rest: String| match count {
@@ -743,21 +817,8 @@ impl Render for Workspace {
             }
             _ => None,
         };
-        let row_count = match profile.session.active {
-            Tab::Object(id) => profile
-                .session
-                .objects
-                .iter()
-                .find(|tab| tab.id == id)
-                .and_then(|tab| match &tab.body {
-                    ObjectBody::Relation { count, .. } => count.rows(),
-                    ObjectBody::Routine(_) => None,
-                }),
-            Tab::Query(_) => None,
-        }
-        .map(|rows| row_readout(rows as usize, rows as usize));
         let left_stats = [
-            row_count,
+            relation_rows,
             column_count.filter(|columns| *columns > 0).map(|columns| {
                 format!(
                     "{columns} {}",
@@ -814,6 +875,7 @@ impl Render for Workspace {
         // hairline with nothing on either side of them.
         let bar_has_content = inline_status.is_some()
             || left_stats.is_some()
+            || count_control.is_some()
             || notice.is_some()
             || paging.is_some()
             || query_status.is_some()
@@ -849,6 +911,7 @@ impl Render for Workspace {
                                 .text_color(t.text_faint)
                                 .child(stats)
                         }))
+                        .children(count_control)
                         .children(notice.map(|notice| {
                             div()
                                 .min_w_0()

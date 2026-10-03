@@ -184,6 +184,7 @@ impl Workspace {
             offset,
             stale,
             structure,
+            count,
             ..
         } = &mut tab.body
         else {
@@ -191,6 +192,11 @@ impl Workspace {
         };
         if !change(filter, sort, limit, offset) {
             return;
+        }
+        // Discarded, not cancelled: on most engines a cancel stops whatever
+        // the connection is running, which need not be this count.
+        if !count.answers(filter) {
+            *count = RowCount::Unasked;
         }
         let key = match structure {
             StructureState::Loaded(structure) => structure.row_key(),
@@ -240,24 +246,28 @@ impl Workspace {
         self.execute_and_then(sql, Tab::Object(id), None, keep_rows, None, cx);
     }
 
-    /// Ask for the row count under the tab's current filter, once. Called when
-    /// the preview's rows have landed, so the count never runs beside the fetch
-    /// it is a footnote to. Sorting and paging leave the filter alone, so they
-    /// find the answer already there.
+    /// Count the rows under a relation tab's filter, because the user asked.
     ///
-    /// ponytail: runs on the connection like any other statement, so on
-    /// Postgres, MySQL, SQLite and SQL Server a statement of the user's queues
-    /// behind a slow count, bounded by the profile's statement timeout. Upgrade
-    /// path is a connection of its own for the count.
-    pub(crate) fn count_relation(&mut self, id: u64, cx: &mut Context<Self>) {
+    /// Never run unasked: on a large table it is a full scan, and on every
+    /// engine but Snowflake it holds the profile's connection while it runs.
+    /// So it goes through what a user's run does -- the same two gates the
+    /// preview of this filter passed, the history, and a cancel handle the
+    /// normal Cancel reaches -- but answers into the status bar rather than
+    /// the grid. A statement the mode check would stop is refused rather than
+    /// prompted for: the prompt resumes into the tab's grid, which is not where
+    /// a count goes.
+    pub(crate) fn count_rows(&mut self, id: u64, cx: &mut Context<Self>) {
+        self.clear_notice();
         let engine = self.engine();
         let Some(profile) = self.profile_mut() else {
             return;
         };
         let Some(connection) = profile.connection() else {
+            self.note("The connection is not open.".into(), cx);
             return;
         };
-        let (profile_id, generation) = (profile.id.clone(), profile.generation);
+        let (profile_id, generation, mode) = (profile.id.clone(), profile.generation, profile.mode);
+        let confirmed = profile.confirmed.clone();
         let Some(tab) = profile.session.objects.iter_mut().find(|tab| tab.id == id) else {
             return;
         };
@@ -265,52 +275,117 @@ impl Workspace {
         let ObjectBody::Relation { filter, count, .. } = &mut tab.body else {
             return;
         };
-        if count.answers(filter) {
+        if matches!(count, RowCount::Counting { .. }) {
             return;
         }
         let sql = explorer::count_sql(engine, &schema, &relation, filter);
-        if !sql::is_generated_select(&sql) {
-            *count = RowCount::Failed(filter.clone());
+        if !sql::is_generated_select(&sql)
+            || sql::gate(&sql::classify(engine, &sql), mode, &confirmed).is_some()
+        {
+            self.note(
+                "dbdelve will not count rows under a filter it cannot run unprompted.".into(),
+                cx,
+            );
             return;
         }
         let asked = filter.clone();
-        *count = RowCount::Counting(asked.clone());
+        let started = std::time::Instant::now();
+        let cancel = CancelToken::default();
+        *count = RowCount::Counting {
+            filter: asked.clone(),
+            started,
+            cancel: cancel.clone(),
+            cancelling: false,
+        };
+        let _ = store::append_history(&profile_id, &sql);
+        remember_statement(&mut profile.session.history, &sql);
         cx.notify();
 
         let task = cx
             .background_executor()
-            .spawn(async move { connection.generated(&sql, &CancelToken::default()) });
+            .spawn(async move { connection.generated(&sql, &cancel) });
         cx.spawn(async move |workspace, cx| {
             let result = task.await;
             _ = workspace.update(cx, |workspace, cx| {
-                let Some(profile) = workspace.issued_to(&profile_id, generation) else {
+                // By id alone, so a reconnect that retired this run still
+                // takes its "Counting…" down rather than leaving it forever.
+                let Some(profile) = workspace
+                    .profiles
+                    .iter_mut()
+                    .find(|profile| profile.id == profile_id)
+                else {
                     return;
                 };
+                let current = profile.generation == generation;
                 let Some(tab) = profile.session.objects.iter_mut().find(|tab| tab.id == id) else {
                     return;
                 };
                 let ObjectBody::Relation { count, .. } = &mut tab.body else {
                     return;
                 };
-                if !matches!(count, RowCount::Counting(now) if *now == asked) {
+                // A newer count, or a filter that moved since, owns the state.
+                if !matches!(count, RowCount::Counting { started: at, .. } if *at == started) {
                     return;
                 }
-                let rows = result.ok().and_then(|result| {
+                let rows = result.map(|result| {
                     result
                         .rows
-                        .first()?
-                        .first()?
-                        .as_deref()?
-                        .trim()
-                        .parse::<u64>()
-                        .ok()
+                        .first()
+                        .and_then(|row| row.first()?.as_deref()?.trim().parse::<u64>().ok())
                 });
                 *count = match rows {
-                    Some(rows) => RowCount::Counted(asked, rows),
-                    None => RowCount::Failed(asked),
+                    Ok(Some(rows)) if current => RowCount::Counted(asked, rows),
+                    _ => RowCount::Unasked,
                 };
+                if current {
+                    match rows {
+                        Ok(Some(_)) => {}
+                        Ok(None) => {
+                            profile.session.notice =
+                                Some("The count came back without a number.".into());
+                        }
+                        Err(error) => {
+                            profile.session.notice =
+                                Some(format!("The count failed: {}", error.message));
+                        }
+                    }
+                }
                 cx.notify();
             });
+        })
+        .detach();
+    }
+
+    /// Stop a relation tab's count. Like Cancel on a run, it records only that
+    /// the request went out; the count's own answer says what happened.
+    pub(crate) fn cancel_count(&mut self, id: u64, cx: &mut Context<Self>) {
+        let Some(connection) = self.profile().and_then(Profile::connection) else {
+            return;
+        };
+        let Some(ObjectBody::Relation {
+            count: RowCount::Counting {
+                cancel, cancelling, ..
+            },
+            ..
+        }) = self
+            .profile_mut()
+            .and_then(|profile| profile.session.objects.iter_mut().find(|tab| tab.id == id))
+            .map(|tab| &mut tab.body)
+        else {
+            return;
+        };
+        if std::mem::replace(cancelling, true) {
+            return;
+        }
+        let cancel = cancel.clone();
+        cx.notify();
+        let task = cx
+            .background_executor()
+            .spawn(async move { connection.cancel(&cancel) });
+        cx.spawn(async move |workspace, cx| {
+            if let Err(error) = task.await {
+                _ = workspace.update(cx, |workspace, cx| workspace.note(error.message, cx));
+            }
         })
         .detach();
     }
@@ -900,6 +975,9 @@ impl Workspace {
 
     pub(crate) fn close_object(&mut self, id: u64, cx: &mut Context<Self>) {
         self.stop_run(Tab::Object(id), cx);
+        // A count outliving its tab would hold the connection for an answer
+        // nothing is left to show.
+        self.cancel_count(id, cx);
         let mut in_front = None;
         if let Some(profile) = self.profile_mut() {
             if profile.session.active == Tab::Object(id) {

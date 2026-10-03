@@ -22,7 +22,7 @@ use gpui_component::{
 use crate::{
     Workspace, completion,
     db::{
-        CancelToken, Catalog, Connection, ConnectionConfig, DbError, Engine, ExplainMode,
+        CancelToken, Catalog, Connection, ConnectionConfig, DbError, Engine, ExplainMode, Relation,
         RelationKind, Routine, Structure,
     },
     explain::Plan,
@@ -36,6 +36,7 @@ use crate::{
     sql::{Destructive, Mode, SortKey, Verdict},
     store,
     theme::ConnectionColor,
+    ui::row_readout,
 };
 
 /// A connection and everything it owns.
@@ -1049,6 +1050,14 @@ pub(crate) fn matching_tab<'a>(
 /// What the catalog says a relation is. The only authority on it: a stored
 /// tab's kind is a cache of this, and can be a default rather than a kind.
 pub(crate) fn relation_kind(catalog: &Catalog, schema: &str, name: &str) -> Option<RelationKind> {
+    catalog_relation(catalog, schema, name).map(|relation| relation.kind)
+}
+
+pub(crate) fn catalog_relation<'a>(
+    catalog: &'a Catalog,
+    schema: &str,
+    name: &str,
+) -> Option<&'a Relation> {
     catalog
         .schemas
         .iter()
@@ -1056,7 +1065,6 @@ pub(crate) fn relation_kind(catalog: &Catalog, schema: &str, name: &str) -> Opti
         .relations
         .iter()
         .find(|relation| relation.name == name)
-        .map(|relation| relation.kind)
 }
 
 /// A routine's name carries its argument types, because a schema can hold
@@ -1129,8 +1137,8 @@ pub(crate) enum ObjectBody {
         /// The row-inspector split's state, per tab. See
         /// [`QueryTab::row_panel_split`].
         row_panel_split: Entity<ResizableState>,
-        /// `COUNT(*)` under the current `filter`, fetched behind the preview
-        /// rather than with it: on a large table it is the slow half.
+        /// `COUNT(*)` under the current `filter`, run only when the user asks:
+        /// on a large table it is a full scan holding the connection.
         count: RowCount,
     },
     Routine(Routine),
@@ -1140,26 +1148,51 @@ pub(crate) enum ObjectBody {
 /// that an answer for an older filter is never shown under a newer one.
 pub(crate) enum RowCount {
     Unasked,
-    Counting(String),
+    /// In flight. `started` tells this run's answer from an earlier one's, and
+    /// `cancelling` says a Cancel has gone out, as `QueryState::Running`'s does.
+    Counting {
+        filter: String,
+        started: std::time::Instant,
+        cancel: CancelToken,
+        cancelling: bool,
+    },
     Counted(String, u64),
-    Failed(String),
 }
 
 impl RowCount {
     pub(crate) fn answers(&self, filter: &str) -> bool {
         match self {
             Self::Unasked => false,
-            Self::Counting(asked) | Self::Counted(asked, _) | Self::Failed(asked) => {
-                asked == filter
-            }
+            Self::Counting { filter: asked, .. } | Self::Counted(asked, _) => asked == filter,
         }
     }
+}
 
-    pub(crate) fn rows(&self) -> Option<u64> {
-        match self {
-            Self::Counted(_, rows) => Some(*rows),
-            _ => None,
-        }
+/// What the status bar says a relation tab's relation holds, or `None` to leave
+/// it to the rows on screen: a count the user asked for under the current
+/// filter, else the catalog's estimate for an unfiltered tab.
+///
+/// No estimate when the first page came back short (`whole`), since that page
+/// is the whole relation and its own readout is exact; and none of zero unless
+/// it is `exact`, because zero is what a table never analyzed reads as on
+/// several engines, and claiming an empty table is the misleading way to be
+/// wrong.
+pub(crate) fn relation_rows(
+    count: &RowCount,
+    filter: &str,
+    estimate: Option<u64>,
+    exact: bool,
+    whole: bool,
+) -> Option<String> {
+    if let RowCount::Counted(asked, rows) = count
+        && asked == filter
+    {
+        return Some(row_readout(*rows as usize, *rows as usize));
+    }
+    let rows = estimate.filter(|_| filter.trim().is_empty() && !whole)? as usize;
+    match exact {
+        true => Some(row_readout(rows, rows)),
+        false => (rows > 0).then(|| format!("\u{2248}{}", row_readout(rows, rows))),
     }
 }
 
@@ -1366,8 +1399,50 @@ mod tests {
         assert!(count.answers("id > 3"));
         assert!(!count.answers(""));
         assert!(!RowCount::Unasked.answers(""));
-        assert_eq!(count.rows(), Some(40));
-        assert_eq!(RowCount::Counting(String::new()).rows(), None);
+        let counting = RowCount::Counting {
+            filter: String::new(),
+            started: std::time::Instant::now(),
+            cancel: CancelToken::default(),
+            cancelling: false,
+        };
+        assert!(counting.answers(""));
+        assert_eq!(relation_rows(&counting, "", None, false, false), None);
+    }
+
+    #[test]
+    fn the_status_bar_shows_a_count_over_an_estimate_and_neither_when_unsure() {
+        let unasked = RowCount::Unasked;
+        let counted = RowCount::Counted("id > 3".into(), 1_234);
+
+        assert_eq!(
+            relation_rows(&unasked, "", Some(1_000_000), false, false).as_deref(),
+            Some("\u{2248}1,000,000 rows")
+        );
+        // Snowflake's count is the table's, not a sample's.
+        assert_eq!(
+            relation_rows(&unasked, "", Some(1_000_000), true, false).as_deref(),
+            Some("1,000,000 rows")
+        );
+        assert_eq!(
+            relation_rows(&counted, "id > 3", Some(1_000_000), false, false).as_deref(),
+            Some("1,234 rows")
+        );
+        // An estimate is of the whole table, so it says nothing under a filter,
+        // and a count asked under another filter says nothing under this one.
+        assert_eq!(
+            relation_rows(&unasked, "id > 3", Some(9), false, false),
+            None
+        );
+        assert_eq!(relation_rows(&counted, "id > 4", None, false, false), None);
+        // A never-analyzed table's zero, and a short first page whose own
+        // readout is already exact.
+        assert_eq!(relation_rows(&unasked, "", Some(0), false, false), None);
+        assert_eq!(
+            relation_rows(&unasked, "", Some(0), true, false).as_deref(),
+            Some("0 rows")
+        );
+        assert_eq!(relation_rows(&unasked, "", Some(900), false, true), None);
+        assert_eq!(relation_rows(&unasked, "", None, false, false), None);
     }
 
     #[test]

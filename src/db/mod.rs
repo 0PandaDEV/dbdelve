@@ -249,6 +249,27 @@ impl Engine {
         }
     }
 
+    /// Whether the row count the catalog carries for a table is exact rather
+    /// than the statistics' estimate. Snowflake keeps an exact `ROW_COUNT` per
+    /// table; the others' numbers are as of the last time statistics were
+    /// gathered, and SQLite keeps none.
+    pub fn exact_row_estimates(self) -> bool {
+        match self {
+            Self::Snowflake => true,
+            Self::Postgres | Self::MySql | Self::Sqlite | Self::SqlServer => false,
+        }
+    }
+
+    /// The aggregate a relation's row count is written with. T-SQL's `COUNT`
+    /// is an `int` and fails past 2,147,483,647 rows, so SQL Server's is
+    /// `COUNT_BIG`; every other engine's `COUNT` is already 64-bit.
+    pub fn count_all(self) -> &'static str {
+        match self {
+            Self::SqlServer => "COUNT_BIG(*)",
+            Self::Postgres | Self::MySql | Self::Sqlite | Self::Snowflake => "COUNT(*)",
+        }
+    }
+
     /// Whether the server holds a Read-only session to reads -- the backstop
     /// `read_only_statement` sets. Without one, a statement `sql::classify`
     /// cannot read has nothing behind it that would stop a write, so the gate
@@ -1019,8 +1040,8 @@ pub struct Relation {
     pub size: Option<u64>,
     /// How many rows the engine's statistics say the table holds, from the
     /// same place `size` comes from, so it is `None` wherever `size` is and
-    /// also wherever the statistics were never gathered. An estimate on every
-    /// engine but Snowflake, which keeps each table's count exactly.
+    /// also wherever the statistics were never gathered. An estimate unless
+    /// [`Engine::exact_row_estimates`] says otherwise.
     pub rows: Option<u64>,
 }
 

@@ -1680,8 +1680,8 @@ pub(crate) fn render_paging(profile: &Profile, cx: &mut Context<Workspace>) -> O
     let t = *theme(cx);
     let session = &profile.session;
     // What the preview asked the server for, and the only control over it.
-    // Beside the Data | Structure pair because it belongs to the same view:
-    // it is a property of these rows, not of the window.
+    // Shown only while the rows are: it is a property of these rows, not of
+    // the window.
     let preview = session.active_object().and_then(|tab| match &tab.body {
         ObjectBody::Relation {
             limit,

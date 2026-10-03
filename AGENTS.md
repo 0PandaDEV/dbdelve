@@ -481,8 +481,11 @@ Decided, and not to be re-litigated:
 
 - **Nine functions generate SQL, and every one quotes through `Engine`:**
   `explorer::preview_sql`, `explorer::probe_sql` (the reference arrow's
-  `SELECT 1 … LIMIT 1` per referencing relation), `explorer::count_sql` (the status bar's row count, a
-  `COUNT(*)` under the tab's filter, gated by `sql::is_generated_select`), `sql::with_order_by`, `sql::update_row`,
+  `SELECT 1 … LIMIT 1` per referencing relation), `explorer::count_sql` (the status bar's Count, a
+  `COUNT(*)` -- `COUNT_BIG(*)` on SQL Server, whose `COUNT` is an `int` --
+  under the tab's filter, run only when the user asks and through
+  `sql::is_generated_select`, `sql::classify` and `sql::gate`, refused rather
+  than prompted for when the gate would stop it), `sql::with_order_by`, `sql::update_row`,
   `sql::insert_row`, `sql::delete_row`, `filter::sort_expression` and
   `filter::filter_predicate`. `filter::sort_expression` is the one that gets
   forgotten, and forgetting it is silent: a double-quoted name is a _string
@@ -506,6 +509,15 @@ Decided, and not to be re-litigated:
   `filter::derived_filter` folds the bars through `filter_predicate` rather than
   quoting anything itself. `sql::paged` writes too, but only two integers, into
   a preview's limit (see the SQL Server paging entry below).
+- **A relation tab's row number is the catalog's, never a count run unasked.**
+  An unfiltered tab shows the row estimate that rides along with the explorer's
+  sizes (Postgres `reltuples`, MySQL `TABLE_ROWS`, SQL Server
+  `sys.partitions.rows`), marked `≈`; Snowflake's `ROW_COUNT` is exact
+  (`Engine::exact_row_estimates`) and SQLite has none. A never-analyzed
+  table's mark, and any approximate zero, show nothing rather than a wrong
+  number, and so does a filter, which no estimate covers; the bar then falls
+  back to the rows on screen. An exact number is the Count button's, a full
+  scan the user asked for.
 - **Three filter operators are written differently per engine, and two of those
   are decided by the grammar rather than by any server.**
   `sql::is_generated_select` refuses whatever `tree_sitter_sequel` cannot parse
@@ -549,9 +561,11 @@ Decided, and not to be re-litigated:
   own SQL is reached through `Connection::generated` (`Origin::Generated`: a
   relation tab's preview, a grid edit) or the private `internal_query`
   (`Origin::Internal`: catalog and structure queries), never `Connection::query`
-  (`Origin::User`). `execute_unchecked` is the one place either is called:
-  `connection.generated` for an object tab's query and a query tab's
-  grid-edit apply run, `connection.query` for everything else. A
+  (`Origin::User`). `execute_unchecked` is the one place `connection.query` is
+  called, and calls `connection.generated` for an object tab's query and a
+  query tab's grid-edit apply run; the only other callers of
+  `connection.generated` are the status bar's Count (`Workspace::count_rows`)
+  and the reference arrow's one-row checks (`Workspace::show_references`). A
   statement run under `Origin::Generated` or `Origin::Internal` is wrapped in
   `EXEC sp_executesql` (`scoped`) behind `SESSION_OPTIONS` (`XACT_ABORT ON`,
   `QUOTED_IDENTIFIER ON`, `ANSI_NULLS ON`, `ANSI_WARNINGS ON`,

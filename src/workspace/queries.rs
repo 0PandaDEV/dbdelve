@@ -97,6 +97,17 @@ impl Workspace {
             return;
         };
         let tab = profile.session.active;
+        // A relation tab whose rows are not loading may be counting them, and
+        // that is the run in front of the user.
+        if let Tab::Object(id) = tab
+            && !matches!(
+                profile.session.slot(tab),
+                Some((QueryState::Running { .. }, _))
+            )
+        {
+            self.cancel_count(id, cx);
+            return;
+        }
         // ponytail: per-slot UI truth about a request having been sent, not
         // a claim that anything stopped. It bounds the repeat clicks to one
         // cancel per run; a cancel that the server ignores has no answer
@@ -709,8 +720,10 @@ impl Workspace {
     /// Runs a statement, if the connection's mode allows it.
     ///
     /// The check lives here rather than in each caller because every path that
-    /// runs SQL routes through this one -- `connection.query` and
-    /// `connection.generated` are called in one place, `execute_unchecked`. A stopped statement is
+    /// runs a tab's statement routes through this one -- `connection.query` is
+    /// called in one place, `execute_unchecked`, and `connection.generated`
+    /// there and for the status bar's Count and the reference arrow's checks,
+    /// which run the same gates themselves. A stopped statement is
     /// held on `pending_run` rather than run: nothing here sets
     /// `QueryState::Running` or appends to history, because a statement that
     /// did not run is not history and must not leave a spinner behind.
@@ -1100,9 +1113,6 @@ impl Workspace {
                     // marked again from the structure the tab already holds.
                     if succeeded && let Tab::Object(object) = tab {
                         workspace.mark_columns(object, cx);
-                        // The rows are in; only now is the count worth asking
-                        // for.
-                        workspace.count_relation(object, cx);
                     }
                     cx.notify();
 
