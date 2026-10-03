@@ -19,15 +19,23 @@ impl Workspace {
             return;
         }
         self.clear_notice();
-        // From the structure view the form belongs to the data, so it goes
-        // back there first.
-        self.show_structure(false, cx);
         let Some(profile) = self.profile() else {
             return;
         };
         let Tab::Object(id) = profile.session.active else {
             return;
         };
+        // A form already open for this tab is focused rather than reset, so
+        // pressing New row (or its shortcut) again does not silently wipe a
+        // half-filled row.
+        if let Some(form) = &profile.session.insert_form
+            && form.tab == Tab::Object(id)
+        {
+            if let Some(field) = form.fields.first() {
+                field.input.focus_handle(cx).focus(window, cx);
+            }
+            return;
+        }
         let Some(tab) = profile.session.objects.iter().find(|tab| tab.id == id) else {
             return;
         };
@@ -35,7 +43,9 @@ impl Workspace {
             return;
         };
         // The columns are the form: without them there is nothing to draw, and
-        // guessing at them would be inventing a table.
+        // guessing at them would be inventing a table. Checked before
+        // `show_structure` flips the tab, so a refused New row leaves
+        // Structure showing rather than switching to Data for nothing.
         let StructureState::Loaded(structure) = structure else {
             self.note(
                 "DBDelve has not read this relation's columns yet.".into(),
@@ -49,6 +59,9 @@ impl Workspace {
             .iter()
             .map(|column| (column.name.clone(), column.data_type.clone()))
             .collect();
+        // From the structure view the form belongs to the data, so it goes
+        // back there first -- now that every refusal above is past.
+        self.show_structure(false, cx);
 
         let mut fields = Vec::with_capacity(columns.len());
         for (index, (column, data_type)) in columns.into_iter().enumerate() {
