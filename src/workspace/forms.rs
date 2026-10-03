@@ -7,7 +7,7 @@ use gpui_component::checkbox::Checkbox;
 
 use super::*;
 use crate::connection_form::ConnectionTest;
-use crate::scroller::{SmoothScrollable, smooth};
+use crate::scroller::{SmoothScrollable, smooth_scoped};
 use crate::sql::{Destructive, Stop};
 
 impl Workspace {
@@ -19,6 +19,10 @@ impl Workspace {
             .expect("form is rendered only while open");
         let message = form.error.clone();
         let editing = form.editing.is_some();
+        // Scoped to the profile being edited, or "new", so switching from
+        // editing one profile to another (or to a fresh connection) doesn't
+        // open on the last profile's scroll offset.
+        let scope = form.editing.as_deref().unwrap_or("new");
         let hairline = || div().h(px(1.)).flex_1().bg(t.border);
         let labelled = |label: &'static str, control: AnyElement| {
             div()
@@ -41,7 +45,7 @@ impl Workspace {
             .id("connection-form-scroll")
             .size_full()
             .overflow_y_scroll()
-            .smooth_scroll(&smooth("connection-form-scroll", cx))
+            .smooth_scroll(&smooth_scoped("connection-form-scroll", scope, cx))
             .p(px(layout::SPACE_LG))
             .flex()
             .flex_col()
@@ -1029,6 +1033,7 @@ impl Workspace {
         if review.tab != profile.session.active {
             return None;
         }
+        let scope = review.tab.scroll_scope(&profile.id);
         // The batch is the only thing this tab can have run while the panel is
         // open, so a failure on it is this batch's failure.
         let error = match profile.session.active_query() {
@@ -1059,7 +1064,7 @@ impl Workspace {
                                 .id("apply-review-sql")
                                 .max_h(px(220.))
                                 .overflow_y_scroll()
-                                .smooth_scroll(&smooth("apply-review-sql", cx))
+                                .smooth_scroll(&smooth_scoped("apply-review-sql", &scope, cx))
                                 .font_family(code)
                                 .text_size(px(layout::TEXT_SM))
                                 // Line by line: a single child carrying newlines

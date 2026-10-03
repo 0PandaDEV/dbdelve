@@ -39,7 +39,7 @@ use crate::{
     palette::{Command, Mode as PaletteMode},
     result_grid,
     result_grid::ResultGrid,
-    scroller::{SmoothScrollable, smooth, smooth_for},
+    scroller::{SmoothScrollable, smooth, smooth_for, smooth_scoped},
     session::{
         CloseTarget, Explained, ObjectBody, ObjectTab, Profile, QueryState, QueryTab,
         StructureState, Tab, result_pane_is_expanded,
@@ -85,6 +85,7 @@ pub fn render_main_content(
     let body = match profile.session.active_object() {
         Some(tab) => render_object(
             tab,
+            &profile.id,
             profile.config.engine(),
             row_panel,
             profile
@@ -202,11 +203,15 @@ fn render_query_surface(
             .child("Open a table from the sidebar, or start a new query.")
             .into_any_element();
     };
+    // Scopes this tab's scroll state (plan, grid, row panel) to its own id, so
+    // another tab reusing the same bare id -- next_query_id and
+    // next_object_id each count from zero per profile -- doesn't inherit it.
+    let scope = Tab::Query(tab.id).scroll_scope(&profile.id);
     // The plan stands in for the rows rather than beside them: the pane is one
     // answer about the buffer above it, and two scrolling regions in a split
     // that is already a split leaves neither enough room to read.
     let bottom = match tab.showing_plan.then_some(tab.plan.as_ref()).flatten() {
-        Some(explained) => render_plan(explained, plan_copied, cx),
+        Some(explained) => render_plan(explained, plan_copied, &scope, cx),
         None => render_results(
             &tab.query,
             &tab.results,
@@ -215,6 +220,7 @@ fn render_query_surface(
             &tab.row_panel_split,
             row_panel,
             None,
+            &scope,
             cx,
         ),
     };
@@ -253,6 +259,7 @@ const PLAN_LABEL_LIMIT: usize = 160;
 fn render_plan(
     explained: &Explained,
     plan_copied: bool,
+    scope: &str,
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
     let t = *theme(cx);
@@ -470,7 +477,7 @@ fn render_plan(
                 .flex_1()
                 .min_h_0()
                 .overflow_y_scroll()
-                .smooth_scroll(&smooth("plan-nodes", cx))
+                .smooth_scroll(&smooth_scoped("plan-nodes", scope, cx))
                 .p(px(layout::SPACE_SM))
                 .flex()
                 .flex_col()
@@ -520,12 +527,16 @@ fn round_count(value: f64) -> String {
 /// read-only.
 fn render_object(
     tab: &ObjectTab,
+    profile_id: &str,
     engine: Engine,
     row_panel: &RowPanel,
     form: Option<&InsertForm>,
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
     let t = *theme(cx);
+    // Scopes this tab's scroll state to its own id -- see the same line in
+    // `render_query_surface`.
+    let scope = Tab::Object(tab.id).scroll_scope(profile_id);
     let ObjectBody::Relation {
         showing_structure,
         structure,
@@ -538,7 +549,7 @@ fn render_object(
         ..
     } = &tab.body
     else {
-        return render_routine(tab, cx);
+        return render_routine(tab, &scope, cx);
     };
 
     if *showing_structure {
@@ -546,7 +557,7 @@ fn render_object(
             .size_full()
             .min_h_0()
             .bg(t.data_glass())
-            .child(render_structure(structure, cx))
+            .child(render_structure(structure, &scope, cx))
             .into_any_element();
     }
 
@@ -569,6 +580,7 @@ fn render_object(
             row_panel_split,
             row_panel,
             form,
+            &scope,
             cx,
         )))
         .into_any_element()
@@ -764,7 +776,7 @@ fn filter_bar_row() -> gpui::Div {
 ///
 /// The buttons are Cancel and **Review SQL**: this generates the statement and
 /// shows it, and running it is the review panel's ask, not this one's.
-fn render_new_row_panel(form: &InsertForm, cx: &mut Context<Workspace>) -> AnyElement {
+fn render_new_row_panel(form: &InsertForm, scope: &str, cx: &mut Context<Workspace>) -> AnyElement {
     let t = *theme(cx);
 
     let fields: Vec<AnyElement> = form
@@ -848,7 +860,7 @@ fn render_new_row_panel(form: &InsertForm, cx: &mut Context<Workspace>) -> AnyEl
                 .flex_1()
                 .min_h_0()
                 .overflow_y_scroll()
-                .smooth_scroll(&smooth("new-row-fields", cx))
+                .smooth_scroll(&smooth_scoped("new-row-fields", scope, cx))
                 .flex()
                 .flex_col()
                 .gap(px(layout::SPACE_MD))
@@ -891,7 +903,7 @@ fn render_new_row_panel(form: &InsertForm, cx: &mut Context<Workspace>) -> AnyEl
         .into_any_element()
 }
 
-fn render_routine(tab: &ObjectTab, cx: &mut Context<Workspace>) -> AnyElement {
+fn render_routine(tab: &ObjectTab, scope: &str, cx: &mut Context<Workspace>) -> AnyElement {
     let t = *theme(cx);
     let code = fonts(cx).editor.clone();
     let ObjectBody::Routine(routine) = &tab.body else {
@@ -948,7 +960,7 @@ fn render_routine(tab: &ObjectTab, cx: &mut Context<Workspace>) -> AnyElement {
                 .flex_1()
                 .min_h_0()
                 .overflow_y_scroll()
-                .smooth_scroll(&smooth("routine-definition", cx))
+                .smooth_scroll(&smooth_scoped("routine-definition", scope, cx))
                 .p(px(layout::SPACE_LG))
                 .font_family(code)
                 .child(routine.definition.clone()),
@@ -985,6 +997,7 @@ fn render_results(
     split: &Entity<ResizableState>,
     row_panel: &RowPanel,
     form: Option<&InsertForm>,
+    scope: &str,
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
     let t = *theme(cx);
@@ -1183,6 +1196,7 @@ fn render_results(
         .child({
             let rows_scroll = smooth_for(
                 "results",
+                scope,
                 results.read(cx).vertical_scroll_handle.clone(),
                 results.read(cx).horizontal_scroll_handle.clone(),
                 cx,
@@ -1214,8 +1228,8 @@ fn render_results(
             // The new-row form takes the panel's place while it is open,
             // folded or not.
             let panel = match form {
-                Some(form) => Some((render_new_row_panel(form, cx), false)),
-                None => render_row_inspector(results, folded, row_panel, cx)
+                Some(form) => Some((render_new_row_panel(form, scope, cx), false)),
+                None => render_row_inspector(results, folded, row_panel, scope, cx)
                     .map(|panel| (panel, folded)),
             };
             match panel {
@@ -1293,6 +1307,7 @@ fn render_row_inspector(
     results: &Entity<TableState<ResultGrid>>,
     folded: bool,
     row_panel: &RowPanel,
+    scope: &str,
     cx: &mut Context<Workspace>,
 ) -> Option<AnyElement> {
     let t = *theme(cx);
@@ -1392,7 +1407,7 @@ fn render_row_inspector(
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
-                    .smooth_scroll(&smooth("row-inspector", cx))
+                    .smooth_scroll(&smooth_scoped("row-inspector", scope, cx))
                     .px(px(layout::SPACE_SM))
                     .pb(px(layout::SPACE_SM))
                     .flex()
@@ -1569,7 +1584,11 @@ fn row_limit_chip(rows: usize, selected: bool, cx: &mut Context<Workspace>) -> A
         .into_any_element()
 }
 
-fn render_structure(state: &StructureState, cx: &mut Context<Workspace>) -> AnyElement {
+fn render_structure(
+    state: &StructureState,
+    scope: &str,
+    cx: &mut Context<Workspace>,
+) -> AnyElement {
     let t = *theme(cx);
     let code = fonts(cx).editor.clone();
 
@@ -1632,7 +1651,7 @@ fn render_structure(state: &StructureState, cx: &mut Context<Workspace>) -> AnyE
         .id("structure")
         .size_full()
         .overflow_y_scroll()
-        .smooth_scroll(&smooth("structure", cx))
+        .smooth_scroll(&smooth_scoped("structure", scope, cx))
         .p(px(layout::SPACE_LG))
         .font_family(code)
         .flex()
@@ -2714,7 +2733,7 @@ fn render_keybindings_settings(workspace: &Workspace, cx: &mut Context<Workspace
         .gap(px(layout::SPACE_XS))
         .max_h(px(360.))
         .overflow_y_scroll()
-        .smooth_scroll(&smooth("saved-queries", cx))
+        .smooth_scroll(&smooth("keybindings-list", cx))
         .children(rows)
         .into_any_element()
 }

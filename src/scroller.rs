@@ -19,10 +19,16 @@ const REST: Pixels = px(0.5);
 
 type Motion = Rc<RefCell<ScrollMotion>>;
 
+/// A pane's scroll state is shared by every instance of it unless `scope`
+/// tells them apart -- so a tab's own offset doesn't bleed into the next tab
+/// that reuses the same pane name. Panes with exactly one instance on screen
+/// (the tab strip, a settings list) use the empty scope.
+type Key = (&'static str, String);
+
 #[derive(Default)]
 struct Registry {
-    handles: HashMap<&'static str, ScrollHandle>,
-    motions: HashMap<&'static str, (Motion, Motion)>,
+    handles: HashMap<Key, ScrollHandle>,
+    motions: HashMap<Key, (Motion, Motion)>,
 }
 
 impl Global for Registry {}
@@ -40,9 +46,17 @@ pub struct Smooth {
 }
 
 pub fn smooth(id: &'static str, cx: &mut App) -> Smooth {
+    smooth_scoped(id, "", cx)
+}
+
+/// Like [`smooth`], keyed to one instance of the pane -- a tab, a connection
+/// being edited, a review dialog -- so switching to another instance starts
+/// from its own remembered offset instead of the last instance's.
+pub fn smooth_scoped(id: &'static str, scope: impl Into<String>, cx: &mut App) -> Smooth {
+    let key: Key = (id, scope.into());
     let registry = cx.default_global::<Registry>();
-    let handle = registry.handles.entry(id).or_default().clone();
-    let (motion, across_motion) = registry.motions.entry(id).or_default().clone();
+    let handle = registry.handles.entry(key.clone()).or_default().clone();
+    let (motion, across_motion) = registry.motions.entry(key).or_default().clone();
     Smooth {
         scroll: Rc::new(handle.clone()),
         across: Rc::new(handle.clone()),
@@ -66,21 +80,23 @@ const OVERLAY_CHILDREN: usize = 1;
 pub fn scroll_to(id: &'static str, ix: usize, cx: &mut App) {
     cx.default_global::<Registry>()
         .handles
-        .entry(id)
+        .entry((id, String::new()))
         .or_default()
         .scroll_to_item(ix + OVERLAY_CHILDREN);
 }
 
 pub fn smooth_for(
     id: &'static str,
+    scope: impl Into<String>,
     scroll: impl ScrollbarHandle,
     across: impl ScrollbarHandle,
     cx: &mut App,
 ) -> Smooth {
+    let key: Key = (id, scope.into());
     let (motion, across_motion) = cx
         .default_global::<Registry>()
         .motions
-        .entry(id)
+        .entry(key)
         .or_default()
         .clone();
     Smooth {

@@ -691,6 +691,17 @@ pub(crate) enum Tab {
     Object(u64),
 }
 
+impl Tab {
+    /// A key unique to this tab in this profile, for scroll state
+    /// (`scroller::smooth_scoped`) that must not bleed into another tab or
+    /// profile reusing the same id -- `next_query_id` and `next_object_id`
+    /// each count from zero per profile, so a bare id collides across both
+    /// kinds and across profiles.
+    pub(crate) fn scroll_scope(&self, profile_id: &str) -> String {
+        format!("{profile_id}-{self:?}")
+    }
+}
+
 /// A chip of the tab strip, which is not the same set as `Tab`: a saved query
 /// is listed whether or not a buffer holds it.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -1392,6 +1403,25 @@ pub(crate) fn result_pane_is_expanded(query: &QueryState) -> bool {
 mod tests {
     use super::*;
     use crate::sql;
+
+    #[test]
+    fn a_scroll_scope_tells_apart_tabs_that_share_an_id() {
+        // next_query_id and next_object_id each count from zero per profile,
+        // so a query tab and an object tab in the same profile -- or the same
+        // kind of tab in two profiles -- can share a bare id.
+        assert_ne!(
+            Tab::Query(1).scroll_scope("a"),
+            Tab::Object(1).scroll_scope("a")
+        );
+        assert_ne!(
+            Tab::Query(1).scroll_scope("a"),
+            Tab::Query(1).scroll_scope("b")
+        );
+        assert_eq!(
+            Tab::Query(1).scroll_scope("a"),
+            Tab::Query(1).scroll_scope("a")
+        );
+    }
 
     #[test]
     fn a_count_answers_only_the_filter_it_was_asked_under() {
