@@ -845,6 +845,17 @@ impl Workspace {
         // `EXPLAIN` never reaches the grid at all, so the rows already there are
         // not the previous statement's: they are still this tab's own result,
         // and are what the user flips back to.
+        let shown = {
+            let table = results.read(cx);
+            let (names, widths) = table.delegate().layout();
+            let vertical = table.vertical_scroll_handle.0.borrow().base_handle.offset();
+            (
+                names,
+                widths,
+                vertical,
+                table.horizontal_scroll_handle.offset(),
+            )
+        };
         if !keep_rows && explain.is_none() {
             results.update(cx, |table, cx| {
                 *table.delegate_mut() = ResultGrid::empty();
@@ -972,10 +983,21 @@ impl Workspace {
                                 let produced_grid = !result.columns.is_empty();
                                 results.update(cx, |table, cx| {
                                     let sort = sort_columns(engine, &keys, &result.columns);
+                                    let (names, widths, vertical, horizontal) = &shown;
                                     *table.delegate_mut() = ResultGrid::new(result, mode)
                                         .with_engine(engine)
-                                        .with_sort(sort, sortable);
+                                        .with_sort(sort, sortable)
+                                        .with_layout(names, widths);
                                     table.refresh(cx);
+                                    if table.delegate().layout().0 == *names {
+                                        table
+                                            .vertical_scroll_handle
+                                            .0
+                                            .borrow()
+                                            .base_handle
+                                            .set_offset(*vertical);
+                                        table.horizontal_scroll_handle.set_offset(*horizontal);
+                                    }
                                 });
                                 (true, produced_grid, None)
                             }

@@ -432,6 +432,31 @@ impl ResultGrid {
         &self.result.columns
     }
 
+    pub fn layout(&self) -> (Vec<String>, Vec<gpui::Pixels>) {
+        (
+            self.result
+                .columns
+                .iter()
+                .map(|column| column.name.clone())
+                .collect(),
+            self.columns.iter().map(|column| column.width).collect(),
+        )
+    }
+
+    pub fn with_layout(mut self, names: &[String], widths: &[gpui::Pixels]) -> Self {
+        let same = self.result.columns.len() == names.len()
+            && self
+                .result
+                .columns
+                .iter()
+                .zip(names)
+                .all(|(column, name)| column.name == *name);
+        if same {
+            self.set_widths(widths);
+        }
+        self
+    }
+
     /// Record which of this result's columns carry a foreign key, given the
     /// column names the relation's structure says do.
     ///
