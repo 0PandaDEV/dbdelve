@@ -129,21 +129,7 @@ pub fn render_rows_as(
                         .zip(&result.columns)
                         .zip(&sources)
                         .filter_map(|((cell, column), source)| {
-                            source.map(|_| match cell {
-                                None => "NULL".to_string(),
-                                Some(value)
-                                    if column
-                                        .data_type
-                                        .as_deref()
-                                        .is_some_and(crate::db::is_numeric_type)
-                                        && value.parse::<f64>().is_ok_and(f64::is_finite) =>
-                                {
-                                    value.clone()
-                                }
-                                Some(value) => {
-                                    engine.quote_value(value, column.data_type.as_deref())
-                                }
-                            })
+                            source.map(|_| insert_literal(engine, cell, column))
                         })
                         .collect::<Vec<_>>()
                         .join(", ");
@@ -153,6 +139,53 @@ pub fn render_rows_as(
                 .join("\n")
         }
     }
+}
+
+/// One value of an `INSERT … VALUES` row, as `render_rows_as`'s `InsertSql`
+/// writes it: a number bare, a fetched binary value in the engine's own
+/// literal (`0xAB`, `x'AB'`) bare, and everything else through
+/// [`Engine::quote_value`].
+///
+/// Binary is handled here rather than in `quote_value` because the two have
+/// different callers to answer for: `quote_value` also spells a value typed
+/// into a filter bar or an edit, free text that must stay a quoted string
+/// unless it is `SqlServer`'s own hex shape (its one unquoted path in).
+/// `insert_literal`'s value, by contrast, is never anything but what dbdelve
+/// itself rendered (`mssql::render`, `mysql::render`, `sqlite::render`), so a
+/// shape check alone is enough.
+fn insert_literal(engine: Engine, cell: &Cell, column: &Column) -> String {
+    let data_type = column.data_type.as_deref();
+    match cell {
+        None => "NULL".to_string(),
+        Some(value)
+            if data_type.is_some_and(crate::db::is_numeric_type)
+                && value.parse::<f64>().is_ok_and(f64::is_finite) =>
+        {
+            value.clone()
+        }
+        Some(value)
+            if data_type.is_some_and(|data_type| engine.is_binary_type(data_type))
+                && is_bare_binary_literal(value) =>
+        {
+            value.clone()
+        }
+        Some(value) => engine.quote_value(value, data_type),
+    }
+}
+
+/// Whether `value` is already a bare binary literal -- SQL Server and
+/// MySQL's `0xAB`, SQLite's `x'AB'` -- and not the text either would be if
+/// quoted as a string, which is what running the `INSERT` as text would
+/// store.
+fn is_bare_binary_literal(value: &str) -> bool {
+    value
+        .get(..2)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("0x"))
+        || (value
+            .get(..2)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("x'"))
+            && value.len() > 2
+            && value.ends_with('\''))
 }
 
 pub fn render(format: Format, result: &QueryResult) -> String {
@@ -347,6 +380,41 @@ mod tests {
         assert_eq!(
             render_rows_as(RowsAs::InsertSql, Engine::Postgres, Some(&edit), &result),
             "INSERT INTO \"public\".\"accounts\" (\"id\") VALUES (7);"
+        );
+    }
+
+    #[test]
+    fn insert_sql_writes_a_fetched_binary_value_as_its_engines_own_literal() {
+        // MySQL renders a fetched blob as `0xABCD` and SQLite as `x'ABCD'`
+        // (see `mysql::render`, `sqlite::render`); quoting either back as a
+        // string is what makes the statement store ASCII text instead of
+        // bytes. SQL Server's `0x…` already round-trips through `quote_value`.
+        let result = QueryResult {
+            columns: vec![Column {
+                name: "data".into(),
+                data_type: Some("blob".into()),
+            }],
+            rows: vec![vec![Some("0xABCD".into())]],
+            ..QueryResult::default()
+        };
+        let edit = edit_target(&["data"]);
+
+        assert_eq!(
+            render_rows_as(RowsAs::InsertSql, Engine::MySql, Some(&edit), &result),
+            "INSERT INTO `public`.`notes` (`data`) VALUES (0xABCD);"
+        );
+
+        let result = QueryResult {
+            columns: vec![Column {
+                name: "data".into(),
+                data_type: Some("blob".into()),
+            }],
+            rows: vec![vec![Some("x'ABCD'".into())]],
+            ..QueryResult::default()
+        };
+        assert_eq!(
+            render_rows_as(RowsAs::InsertSql, Engine::Sqlite, Some(&edit), &result),
+            "INSERT INTO \"public\".\"notes\" (\"data\") VALUES (x'ABCD');"
         );
     }
 
