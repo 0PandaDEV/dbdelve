@@ -843,7 +843,15 @@ impl Theme {
             text_muted: neutral(0.76),
             text_faint: neutral(0.62),
 
-            accent: Oklch::new(0.68, 0.15, 250.0).to_srgb(),
+            // 0.70, not the 0.68 `selection` still carries below: raised just
+            // far enough that the completion popup's matched-prefix text
+            // (painted in this colour over the library's own selected-row
+            // wash, `element_active` over `overlay`) clears the 3.0 floor --
+            // 2.99 at 0.68, since the gray wash `apply_to_components` moved
+            // that wash to is lighter than the blue `selection` wash it
+            // replaced. `on_accent over accent` and `accent on bg` only gain
+            // margin from the same move.
+            accent: Oklch::new(0.70, 0.15, 250.0).to_srgb(),
             on_accent: neutral(0.14),
             selection: Oklch::new(0.68, 0.15, 250.0).to_srgb().alpha(0.28),
             cursor: Oklch::new(0.72, 0.14, 250.0).to_srgb(),
@@ -1115,10 +1123,9 @@ mod tests {
         // popover surface, so the wallpaper cancels out.
         let level = |c: Srgb| (c.r + c.g + c.b) / 3.0 * 255.0;
         for t in Theme::all() {
-            // Mirrors `apply_to_components`.
-            let mut fill = t.selection;
-            fill.a *= 0.5;
-            let selected = fill.flatten(t.overlay);
+            // Mirrors `apply_to_components`, which sets the popup's `accent`
+            // (and so its selected row) from `element_active`, not `selection`.
+            let selected = t.element_active.flatten(t.overlay);
             let step = (level(selected) - level(t.overlay)).abs();
             assert!(
                 step >= 8.0,
