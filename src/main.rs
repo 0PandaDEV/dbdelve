@@ -8,9 +8,11 @@ mod export;
 mod filter;
 mod palette;
 mod result_grid;
+mod scroller;
 mod session;
 mod sql;
 mod store;
+mod tab_drag;
 mod views;
 mod workspace;
 
@@ -42,14 +44,14 @@ use gpui_component::{
 
 use actions::{
     AcceptCompletion, AddFilter, ApplyEdits, CancelQuery, ClearFilter, CloseTab, CommandPalette,
-    CopyCell, CopyResults, CopyRow, CycleTheme, DeleteRow, DiscardEdits, EditCell, ExplainQuery,
-    FollowForeignKey, FormatQuery, FuzzyOpen, NewConnection, NewQuery, NewRow, NextPage,
-    NextProfile, NextTab, OpenSettings, PaletteNext, PalettePrevious, PreviousPage,
-    PreviousProfile, PreviousTab, Quit, RefreshConnection, RefreshRelation, RemoveFilter,
-    RequestWriteMode, ResetConfirmations, ResetEditorZoom, RunQuery, SaveQuery, SetDefault,
-    SetEmpty, SetFilterColumn, SetFilterOperator, SetFilterRaw, SetMode, SetNull, SetRowLimit,
-    ShowEditor, SortColumn, ToggleFilterJoin, ToggleNextJoin, ToggleRowPanel, ToggleSidebar,
-    ZoomEditorIn, ZoomEditorOut,
+    CopyCell, CopyResults, CopyRow, CopyRows, CycleTheme, DeleteRow, DiscardEdits, EditCell,
+    ExplainQuery, FollowForeignKey, FormatQuery, FuzzyOpen, NewConnection, NewQuery, NewRow,
+    NextPage, NextProfile, NextTab, OpenReference, OpenSettings, PaletteNext, PalettePrevious,
+    PreviousPage, PreviousProfile, PreviousTab, Quit, RefreshConnection, RefreshRelation,
+    RemoveFilter, RequestWriteMode, ResetConfirmations, ResetEditorZoom, RunQuery, SaveQuery,
+    SetDefault, SetEmpty, SetFilterColumn, SetFilterOperator, SetFilterRaw, SetMode, SetNull,
+    SetRowLimit, ShowEditor, ShowReferences, SortColumn, ToggleFilterJoin, ToggleNextJoin,
+    ToggleRowPanel, ToggleSidebar, ZoomEditorIn, ZoomEditorOut,
 };
 use completion::SchemaCompletions;
 use connection_form::{ConnectionForm, default_profile_name};
@@ -61,8 +63,8 @@ use explorer::{ExplorerTarget, ObjectKind, PREVIEW_ROW_LIMIT, tree as build_expl
 use export::Format;
 use filter::{
     Conjunction, FilterBar, FilterRow, Operator, changed_filter, cycle, derived_filter,
-    filter_bars, filter_row, foreign_key_filter, relation_sql, restored_filter, sort_columns,
-    sort_expression, value_placeholder,
+    filter_bars, filter_row, foreign_key_filter, reference_filter, relation_sql, restored_filter,
+    sort_columns, sort_expression, value_placeholder,
 };
 use icons::{Icons, icon};
 use palette::{Command, Mode as PaletteMode, Palette};
@@ -70,8 +72,8 @@ use result_grid::{NewValue, ResultGrid};
 use session::{
     ApplyReview, CatalogState, CloseTarget, Explained, Focus, InsertField, InsertForm, ObjectBody,
     ObjectTab, OpenedObject, Profile, ProfileState, QueryState, QueryTab, Refresh, Routines,
-    Session, StructureState, Tab, close_target, insert_value, matching_tab, relation_kind,
-    restored_state, show_snapshot,
+    RowCount, Session, StructureState, Tab, TabKey, close_target, insert_value, matching_tab,
+    relation_kind, restored_state, show_snapshot,
 };
 use sql::{Buffer, SortKey};
 use theme::{ConnectionColor, FontSlot, Fonts, Theme, fonts, layout, theme};

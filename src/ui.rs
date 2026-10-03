@@ -46,7 +46,24 @@ pub(crate) fn object_icon(kind: ObjectKind) -> &'static str {
 /// One column of icons down the sidebar, so every label starts at the same x
 /// whether its row is a folder or an object.
 pub(crate) fn row_icon(t: Theme, path: &'static str) -> impl IntoElement {
-    row_icon_tinted(t, path, None)
+    row_icon_tinted(t, path, kind_color(path))
+}
+
+/// The hue an object's or a query's icon always wears, wherever it is drawn:
+/// tables and views blue, queries red, functions and structure yellow,
+/// procedures orange.
+/// Keyed by the icon rather than passed by each caller, so the sidebar, the
+/// tabs, the palette and the toggles cannot disagree.
+pub(crate) fn kind_color(path: &str) -> Option<ConnectionColor> {
+    match path {
+        icon::TABLE | icon::PARTITIONED_TABLE | icon::VIEW | icon::MATERIALIZED_VIEW => {
+            Some(ConnectionColor::Blue)
+        }
+        icon::SCRATCH_QUERY | icon::SAVED_QUERY => Some(ConnectionColor::Red),
+        icon::FUNCTION | icon::STRUCTURE => Some(ConnectionColor::Yellow),
+        icon::PROCEDURE => Some(ConnectionColor::Orange),
+        _ => None,
+    }
 }
 
 /// `row_icon`, in a connection's own colour. Without one it is `row_icon`
@@ -139,6 +156,7 @@ pub(crate) fn titlebar(
     t: Theme,
     pills: Vec<AnyElement>,
     leading: Vec<AnyElement>,
+    trailing: Vec<AnyElement>,
 ) -> impl IntoElement {
     div()
         .h(px(layout::TITLEBAR_HEIGHT))
@@ -146,14 +164,16 @@ pub(crate) fn titlebar(
         .flex()
         .flex_shrink_0()
         .items_center()
-        .gap(px(layout::SPACE_MD))
+        .gap(px(layout::SPACE_SM))
+        .border_b_1()
+        .border_color(t.border)
         .pl(px(if cfg!(target_os = "macos") {
             layout::TITLEBAR_LEADING_INSET
         } else {
-            layout::SPACE_MD
+            layout::SPACE_SM
         }))
         .when(!cfg!(target_os = "windows"), |row| {
-            row.pr(px(layout::SPACE_MD))
+            row.pr(px(layout::SPACE_SM))
         })
         .children(leading)
         .child(
@@ -171,6 +191,7 @@ pub(crate) fn titlebar(
                 .gap(px(layout::SPACE_SM))
                 .children(pills),
         )
+        .children(trailing)
         .when(cfg!(target_os = "windows"), |row| {
             row.child(caption_buttons(t))
         })
@@ -283,6 +304,12 @@ impl Control {
         }
     }
 
+    /// The same air on the sides as above and below the label: what is left of
+    /// the height once the text has its line, split in two.
+    pub(crate) fn padding(self) -> f32 {
+        (self.height() - self.text_size()) / 2.0
+    }
+
     pub(crate) fn text_size(self) -> f32 {
         match self {
             Control::Standard => layout::TEXT_MD,
@@ -311,7 +338,7 @@ pub(crate) fn button(
     t: Theme,
 ) -> Button {
     control(id, tone, size)
-        .px(px(layout::SPACE_MD))
+        .px(px(size.padding()))
         .when(size == Control::Standard, |standard| {
             standard.min_w(px(layout::CONTROL_MIN_WIDTH))
         })
@@ -344,7 +371,10 @@ pub(crate) fn button_label(
     t: Theme,
 ) -> impl IntoElement {
     div()
-        .flex_none()
+        .min_w_0()
+        .overflow_hidden()
+        .text_ellipsis()
+        .whitespace_nowrap()
         // Or the descenders decide where the text sits in the box.
         .line_height(gpui::relative(1.))
         .text_size(px(size.text_size()))
@@ -445,7 +475,12 @@ pub(crate) fn compact_count(rows: usize) -> String {
 /// `1234567` → `1,234,567`. Row counts are read at a glance, and groups are
 /// what keeps six digits legible.
 pub(crate) fn group_thousands(value: u64) -> String {
-    let digits = value.to_string();
+    group_digits(&value.to_string())
+}
+
+/// A run of ASCII digits in threes. Taken as text so a `NUMERIC` wider than
+/// any integer type still groups.
+pub(crate) fn group_digits(digits: &str) -> String {
     let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
     for (index, digit) in digits.chars().enumerate() {
         if index > 0 && (digits.len() - index).is_multiple_of(3) {

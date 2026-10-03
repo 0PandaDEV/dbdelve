@@ -249,6 +249,27 @@ impl Engine {
         }
     }
 
+    /// Whether the row count the catalog carries for a table is exact rather
+    /// than the statistics' estimate. Snowflake keeps an exact `ROW_COUNT` per
+    /// table; the others' numbers are as of the last time statistics were
+    /// gathered, and SQLite keeps none.
+    pub fn exact_row_estimates(self) -> bool {
+        match self {
+            Self::Snowflake => true,
+            Self::Postgres | Self::MySql | Self::Sqlite | Self::SqlServer => false,
+        }
+    }
+
+    /// The aggregate a relation's row count is written with. T-SQL's `COUNT`
+    /// is an `int` and fails past 2,147,483,647 rows, so SQL Server's is
+    /// `COUNT_BIG`; every other engine's `COUNT` is already 64-bit.
+    pub fn count_all(self) -> &'static str {
+        match self {
+            Self::SqlServer => "COUNT_BIG(*)",
+            Self::Postgres | Self::MySql | Self::Sqlite | Self::Snowflake => "COUNT(*)",
+        }
+    }
+
     /// Whether the server holds a Read-only session to reads -- the backstop
     /// `read_only_statement` sets. Without one, a statement `sql::classify`
     /// cannot read has nothing behind it that would stop a write, so the gate
@@ -827,8 +848,8 @@ impl Connection {
         }
     }
 
-    /// Each table's on-disk bytes, for [`Catalog::set_sizes`] to write onto
-    /// the relations already on screen.
+    /// Each table's on-disk bytes and row estimate, for [`Catalog::set_sizes`]
+    /// to write onto the relations already on screen.
     ///
     /// Apart from [`Connection::catalog`] because on Postgres and MySQL the
     /// numbers cost locks or opened tables, and both run it on a short-lived
@@ -841,6 +862,20 @@ impl Connection {
             Self::Postgres(connection) => connection.sizes(),
             Self::MySql(connection) => connection.sizes(),
             Self::SqlServer(_) | Self::Sqlite(_) | Self::Snowflake(_) => Ok(Sizes::new()),
+        }
+    }
+
+    /// The foreign keys of other relations that point at this one, for the
+    /// arrow that opens them. Snowflake declares its keys and enforces none of
+    /// them, and its exported-keys listing is not one this has been checked
+    /// against, so it answers nothing rather than a guess.
+    pub fn references(&self, schema: &str, relation: &str) -> Result<Vec<Reference>, DbError> {
+        match self {
+            Self::Postgres(connection) => connection.references(schema, relation),
+            Self::MySql(connection) => connection.references(schema, relation),
+            Self::SqlServer(connection) => connection.references(schema, relation),
+            Self::Sqlite(connection) => connection.references(schema, relation),
+            Self::Snowflake(_) => Ok(Vec::new()),
         }
     }
 
@@ -1003,6 +1038,11 @@ pub struct Relation {
     /// `None` for a view, on SQLite, and on Postgres and MySQL until
     /// [`Catalog::set_sizes`] has filled it in, which it may never do.
     pub size: Option<u64>,
+    /// How many rows the engine's statistics say the table holds, from the
+    /// same place `size` comes from, so it is `None` wherever `size` is and
+    /// also wherever the statistics were never gathered. An estimate unless
+    /// [`Engine::exact_row_estimates`] says otherwise.
+    pub rows: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1028,8 +1068,16 @@ pub struct Schema {
     pub routines: Vec<Routine>,
 }
 
-/// On-disk bytes by schema, then relation name.
-pub type Sizes = std::collections::HashMap<String, std::collections::HashMap<String, u64>>;
+/// On-disk bytes and row estimates by schema, then relation name.
+pub type Sizes = std::collections::HashMap<String, std::collections::HashMap<String, Statistics>>;
+
+/// What the engine's statistics say about one relation. Either half can be
+/// missing on its own: a never-analyzed table can still be measured.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Statistics {
+    pub size: Option<u64>,
+    pub rows: Option<u64>,
+}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Catalog {
@@ -1061,17 +1109,19 @@ impl Catalog {
         }
     }
 
-    /// Write sizes onto the relations already here, leaving any it has no
-    /// number for alone. It touches nothing but sizes and [`Self::merge`]
-    /// nothing but routines, so the two may land in either order.
+    /// Write sizes and row estimates onto the relations already here, leaving
+    /// any it has no number for alone. It touches nothing but those and
+    /// [`Self::merge`] nothing but routines, so the two may land in either
+    /// order.
     pub fn set_sizes(&mut self, sizes: &Sizes) {
         for schema in &mut self.schemas {
             let Some(sizes) = sizes.get(&schema.name) else {
                 continue;
             };
             for relation in &mut schema.relations {
-                if let Some(&size) = sizes.get(&relation.name) {
-                    relation.size = Some(size);
+                if let Some(statistics) = sizes.get(&relation.name) {
+                    relation.size = statistics.size.or(relation.size);
+                    relation.rows = statistics.rows.or(relation.rows);
                 }
             }
         }
@@ -1094,6 +1144,11 @@ pub struct Structure {
     pub indexes: Vec<NamedDefinition>,
     pub constraints: Vec<NamedDefinition>,
     pub foreign_keys: Vec<ForeignKey>,
+    /// The single-column foreign keys of other relations that point at this one.
+    /// Filled by `load_structure` from [`Connection::references`], not by
+    /// [`Connection::structure`]: completion calls that one per relation it
+    /// sees, and has no use for who points back.
+    pub referenced_by: Vec<Reference>,
 }
 
 impl Structure {
@@ -1102,24 +1157,36 @@ impl Structure {
     /// rendering. Empty when none reads back as columns the relation has --
     /// a name holding `, ` cannot be told from two names, and is not guessed at.
     pub fn row_key(&self) -> Vec<String> {
-        let key = |prefix: &str| {
-            self.constraints.iter().find_map(|constraint| {
-                let names: Vec<String> = constraint
-                    .definition
-                    .strip_prefix(prefix)?
-                    .strip_suffix(')')?
-                    .split(", ")
-                    .map(str::to_string)
-                    .collect();
-                names
-                    .iter()
-                    .all(|name| self.columns.iter().any(|column| &column.name == name))
-                    .then_some(names)
-            })
-        };
-        key("PRIMARY KEY (")
-            .or_else(|| key("UNIQUE ("))
+        self.key_of("PRIMARY KEY (", false)
+            .or_else(|| self.key_of("UNIQUE (", false))
             .unwrap_or_default()
+    }
+
+    /// The primary key's columns alone, where [`Structure::row_key`] falls back
+    /// to a unique constraint. Read through any quoting the rendering carries:
+    /// SQLite writes `PRIMARY KEY ("id")`, and this is for marking columns
+    /// rather than for writing SQL.
+    pub fn primary_key(&self) -> Vec<String> {
+        self.key_of("PRIMARY KEY (", true).unwrap_or_default()
+    }
+
+    fn key_of(&self, prefix: &str, unquote: bool) -> Option<Vec<String>> {
+        self.constraints.iter().find_map(|constraint| {
+            let names: Vec<String> = constraint
+                .definition
+                .strip_prefix(prefix)?
+                .strip_suffix(')')?
+                .split(", ")
+                .map(|name| match unquote {
+                    true => name.trim_matches(['"', '`', '[', ']']).to_string(),
+                    false => name.to_string(),
+                })
+                .collect();
+            names
+                .iter()
+                .all(|name| self.columns.iter().any(|column| &column.name == name))
+                .then_some(names)
+        })
     }
 }
 
@@ -1160,6 +1227,18 @@ pub struct ForeignKey {
     pub column: String,
     pub referenced_schema: String,
     pub referenced_table: String,
+    pub referenced_column: String,
+}
+
+/// A foreign key seen from the relation it points at: `column` of `schema.table`
+/// holds values of this relation's `referenced_column`. Single-column keys only,
+/// because a filter on one column of a composite key matches rows that do not
+/// reference the row it was asked from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Reference {
+    pub schema: String,
+    pub table: String,
+    pub column: String,
     pub referenced_column: String,
 }
 
@@ -1238,6 +1317,7 @@ pub(super) fn assemble_catalog(
             kind,
             partition_of: optional_cell(&relations, row, "partition_of").map(str::to_string),
             size: optional_cell(&relations, row, "size_bytes").and_then(|v| v.parse().ok()),
+            rows: optional_cell(&relations, row, "row_estimate").and_then(|v| v.parse().ok()),
         });
     }
 
@@ -1265,21 +1345,25 @@ pub(super) fn assemble_catalog(
     })
 }
 
-/// A row with no number (a null `DATA_LENGTH`) is left out rather than failing
-/// the rest.
+/// A row with neither number (a null `DATA_LENGTH` and `TABLE_ROWS`) is left
+/// out rather than failing the rest.
 pub(super) fn assemble_sizes(result: QueryResult) -> Result<Sizes, DbError> {
     let mut sizes = Sizes::new();
     for row in &result.rows {
-        let Some(size) = optional_cell(&result, row, "size_bytes").and_then(|v| v.parse().ok())
-        else {
-            continue;
+        let number = |column| optional_cell(&result, row, column).and_then(|v| v.parse().ok());
+        let statistics = Statistics {
+            size: number("size_bytes"),
+            rows: number("row_estimate"),
         };
+        if statistics == Statistics::default() {
+            continue;
+        }
         sizes
             .entry(required_cell(&result, row, "schema_name")?.to_string())
             .or_default()
             .insert(
                 required_cell(&result, row, "relation_name")?.to_string(),
-                size,
+                statistics,
             );
     }
     Ok(sizes)
@@ -1343,6 +1427,37 @@ pub(super) fn assemble_foreign_keys(result: &QueryResult) -> Result<Vec<ForeignK
             })
         })
         .collect()
+}
+
+/// The rows of a reverse foreign-key query: `source_schema`, `source_table`,
+/// `column_name`, `referenced_column` and `constraint_name`, one row per column
+/// of each key. Keys of more than one column are dropped here, once, for every
+/// engine that reads them this way.
+pub(super) fn assemble_references(result: &QueryResult) -> Result<Vec<Reference>, DbError> {
+    let mut keys: Vec<((String, String, String), Vec<Reference>)> = Vec::new();
+    for row in &result.rows {
+        let reference = Reference {
+            schema: required_cell(result, row, "source_schema")?.to_string(),
+            table: required_cell(result, row, "source_table")?.to_string(),
+            column: required_cell(result, row, "column_name")?.to_string(),
+            referenced_column: required_cell(result, row, "referenced_column")?.to_string(),
+        };
+        let name = (
+            reference.schema.clone(),
+            reference.table.clone(),
+            required_cell(result, row, "constraint_name")?.to_string(),
+        );
+        match keys.iter_mut().find(|(key, _)| *key == name) {
+            Some((_, columns)) => columns.push(reference),
+            None => keys.push((name, vec![reference])),
+        }
+    }
+    let mut references: Vec<Reference> = keys
+        .into_iter()
+        .filter_map(|(_, mut columns)| (columns.len() == 1).then(|| columns.remove(0)))
+        .collect();
+    references.dedup();
+    Ok(references)
 }
 
 fn schema<'a>(
@@ -1872,6 +1987,7 @@ mod tests {
                     kind: RelationKind::Table,
                     partition_of: None,
                     size: None,
+                    rows: None,
                 })
                 .collect(),
             routines: routines
@@ -2000,12 +2116,14 @@ mod tests {
                 "relation_kind",
                 "partition_of",
                 "size_bytes",
+                "row_estimate",
             ],
             &[
                 &[
                     Some("analytics"),
                     Some("events"),
                     Some("partitioned_table"),
+                    None,
                     None,
                     None,
                 ],
@@ -2015,6 +2133,7 @@ mod tests {
                     Some("table"),
                     Some("events"),
                     Some("8192"),
+                    Some("1200"),
                 ],
                 &[
                     Some("public"),
@@ -2022,6 +2141,7 @@ mod tests {
                     Some("table"),
                     None,
                     Some("24576000"),
+                    None,
                 ],
                 &[
                     Some("public"),
@@ -2029,6 +2149,7 @@ mod tests {
                     Some("view"),
                     None,
                     Some(""),
+                    None,
                 ],
             ],
         );
@@ -2076,12 +2197,14 @@ mod tests {
                     kind: RelationKind::PartitionedTable,
                     partition_of: None,
                     size: None,
+                    rows: None,
                 },
                 Relation {
                     name: "events_2026".into(),
                     kind: RelationKind::Table,
                     partition_of: Some("events".into()),
                     size: Some(8192),
+                    rows: Some(1200),
                 },
             ]
         );
@@ -2102,35 +2225,35 @@ mod tests {
                     &[Some("public"), Some("accounts"), Some("table")],
                     &[Some("public"), Some("account_overview"), Some("view")],
                     &[Some("archive"), Some("accounts"), Some("table")],
+                    &[Some("archive"), Some("unmeasured"), Some("table")],
                 ],
             ),
             QueryResult::default(),
         )
         .unwrap();
         let sizes = assemble_sizes(result(
-            &["schema_name", "relation_name", "size_bytes"],
+            &["schema_name", "relation_name", "size_bytes", "row_estimate"],
             &[
-                &[Some("public"), Some("accounts"), Some("8192")],
-                &[Some("archive"), Some("accounts"), None],
-                &[Some("public"), Some("dropped_since"), Some("16384")],
+                &[Some("public"), Some("accounts"), Some("8192"), Some("40")],
+                &[Some("archive"), Some("accounts"), None, None],
+                &[Some("archive"), Some("unmeasured"), None, Some("7")],
+                &[Some("public"), Some("dropped_since"), Some("16384"), None],
             ],
         ))
         .unwrap();
+        assert!(!sizes["archive"].contains_key("accounts"));
 
         catalog.set_sizes(&sizes);
 
-        let size = |schema: &str, name: &str| {
+        let relation = |schema: &str, name: &str| {
             let schema = catalog.schemas.iter().find(|s| s.name == schema).unwrap();
-            schema
-                .relations
-                .iter()
-                .find(|r| r.name == name)
-                .unwrap()
-                .size
+            let relation = schema.relations.iter().find(|r| r.name == name).unwrap();
+            (relation.size, relation.rows)
         };
-        assert_eq!(size("public", "accounts"), Some(8192));
-        assert_eq!(size("public", "account_overview"), None);
-        assert_eq!(size("archive", "accounts"), None);
+        assert_eq!(relation("public", "accounts"), (Some(8192), Some(40)));
+        assert_eq!(relation("public", "account_overview"), (None, None));
+        assert_eq!(relation("archive", "accounts"), (None, None));
+        assert_eq!(relation("archive", "unmeasured"), (None, Some(7)));
     }
 
     #[test]
@@ -2255,7 +2378,13 @@ mod tests {
                 })
                 .collect(),
             foreign_keys: Vec::new(),
+            referenced_by: Vec::new(),
         };
+        assert_eq!(
+            structure(&["UNIQUE (code)", "PRIMARY KEY (\"id\", `code`)"]).primary_key(),
+            ["id", "code"]
+        );
+        assert!(structure(&["UNIQUE (code)"]).primary_key().is_empty());
         assert_eq!(
             structure(&["UNIQUE (code)", "PRIMARY KEY (id, code)"]).row_key(),
             ["id", "code"]

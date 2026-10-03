@@ -6,7 +6,7 @@
 use std::ops::Range;
 
 use super::*;
-use crate::session::{PendingRun, Resume};
+use crate::session::{PendingRun, Resume, TabKey};
 
 impl Workspace {
     /// Edits sitting in the visible grid, waiting to be written back. Read off
@@ -97,6 +97,17 @@ impl Workspace {
             return;
         };
         let tab = profile.session.active;
+        // A relation tab whose rows are not loading may be counting them, and
+        // that is the run in front of the user.
+        if let Tab::Object(id) = tab
+            && !matches!(
+                profile.session.slot(tab),
+                Some((QueryState::Running { .. }, _))
+            )
+        {
+            self.cancel_count(id, cx);
+            return;
+        }
         // ponytail: per-slot UI truth about a request having been sent, not
         // a claim that anything stopped. It bounds the repeat clicks to one
         // cancel per run; a cancel that the server ignores has no answer
@@ -293,6 +304,15 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // No buffer in front is nothing to save, and a name asked for anyway
+        // would have nowhere to go when it is given.
+        if self
+            .profile()
+            .and_then(|profile| profile.session.active_query_tab())
+            .is_none()
+        {
+            return;
+        }
         // A named query is written on every swap and on quit, so calling this
         // on one is a confirmation rather than a decision. Only a buffer with
         // nowhere to go has to ask for a name.
@@ -387,6 +407,11 @@ impl Workspace {
             self.note(message, cx);
             return;
         }
+        let chip = match (tab, &previous) {
+            (Tab::Query(_), Some(previous)) => Some(TabKey::Saved(previous.clone())),
+            (Tab::Query(id), None) => Some(TabKey::Unsaved(id)),
+            (Tab::Object(_), _) => None,
+        };
         // Written first, then the old name dropped: a failed delete leaves two
         // copies, which is recoverable, and the other order loses the query.
         if let Some(previous) = previous.filter(|previous| previous != &name)
@@ -396,6 +421,11 @@ impl Workspace {
         }
 
         if let Some(profile) = self.profile_mut() {
+            // Before the list it reads moves: the chip's old key is only in the
+            // strip until then.
+            if let Some(from) = chip {
+                profile.session.rekey(&from, TabKey::Saved(name.clone()));
+            }
             profile.session.saved_queries = store::saved_queries(&id);
             profile.session.naming = false;
         }
@@ -457,6 +487,10 @@ impl Workspace {
         };
         let profile_id = profile.id.clone();
         profile.session.queries.push(tab);
+        // Placed at the end of the strip rather than left for `strip_order`'s
+        // default, which groups every unsaved buffer ahead of the saved
+        // queries and objects regardless of when each was opened.
+        profile.session.place_last(TabKey::Unsaved(id));
         self.install_completions(&profile_id, cx);
         self.activate_tab(Tab::Query(id), cx);
     }
@@ -471,20 +505,16 @@ impl Workspace {
         let Some(position) = position else {
             return;
         };
+        self.stop_run(Tab::Query(id), cx);
+        let Some(profile) = self.profile_mut() else {
+            return;
+        };
+        let in_front = (profile.session.active == Tab::Query(id))
+            .then(|| profile.session.fallback(Tab::Query(id)));
         profile.session.queries.remove(position);
         let profile_id = profile.id.clone();
-
-        if profile.session.active == Tab::Query(id) {
-            // The neighbour on the left, or the one that slid into this slot.
-            let next = profile
-                .session
-                .queries
-                .get(position.saturating_sub(1))
-                .map(|tab| tab.id);
-            if let Some(next) = next {
-                profile.session.active = Tab::Query(next);
-                profile.session.editor_needs_focus = true;
-            }
+        if let Some(fallback) = in_front {
+            self.front_after_close(fallback, cx);
         }
 
         if let Err(message) = store::delete_scratch(&profile_id, id) {
@@ -567,17 +597,25 @@ impl Workspace {
     /// appends: recalling a statement is not a reason to take away what is
     /// already written, and the statement that runs is the statement on screen.
     /// The cursor lands on it, because that is what `cmd+enter` reads to decide
-    /// what to send.
+    /// what to send. With no buffer in front it goes into a new one, rather
+    /// than into whichever buffer happens to be behind the tab in front.
     pub(crate) fn recall_statement(
         &mut self,
         sql: String,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(profile) = self.profile() else {
-            return;
-        };
-        let Some(tab) = profile.session.active_query_tab() else {
+        if self
+            .profile()
+            .and_then(|profile| profile.session.active_query_tab())
+            .is_none()
+        {
+            self.new_query(&NewQuery, window, cx);
+        }
+        let Some(tab) = self
+            .profile()
+            .and_then(|profile| profile.session.active_query_tab())
+        else {
             return;
         };
         let (id, editor) = (tab.id, tab.editor.clone());
@@ -633,9 +671,18 @@ impl Workspace {
         // Read before the delete, because afterwards nothing on the session
         // still points at the file and only this says which tab did.
         let was_open = profile.session.tab_holding(&name);
+        let in_front = was_open
+            .map(Tab::Query)
+            .filter(|open| profile.session.active == *open)
+            .map(|open| profile.session.fallback(open));
         if let Err(message) = store::delete_query(&id, &name) {
             self.note(message, cx);
             return;
+        }
+        // Here, once the file is gone, and not when `cmd+w` asked: answering
+        // Cancel to that leaves the tab, and its statement, running.
+        if let Some(open) = was_open {
+            self.stop_run(Tab::Query(open), cx);
         }
         if let Some(profile) = self.profile_mut() {
             profile.session.saved_queries = store::saved_queries(&id);
@@ -647,25 +694,15 @@ impl Workspace {
             // is what was deleted -- keeping it in an untitled buffer would
             // leave `cmd+w` looking like it had done nothing.
             if let Some(open) = was_open {
-                if profile.session.queries.len() > 1 {
-                    profile.session.queries.retain(|tab| tab.id != open);
-                    // With the tab, as in `close_buffer`: a snapshot with no
-                    // tab left to come back to is rows the next buffer to be
-                    // handed this id would show as its own.
-                    let _ = store::remove_grid(&id, &store::query_grid_key(open));
-                    if profile.session.active == Tab::Query(open)
-                        && let Some(next) = profile.session.queries.first().map(|tab| tab.id)
-                    {
-                        profile.session.active = Tab::Query(next);
-                        profile.session.editor_needs_focus = true;
-                    }
-                } else if let Some(tab) = profile.session.query_tab_mut(open) {
-                    // The only buffer. A profile always has somewhere to write,
-                    // so it is unnamed from here rather than closed, and the
-                    // strip keeps a place to type in.
-                    tab.open_query = None;
-                }
+                profile.session.queries.retain(|tab| tab.id != open);
+                // With the tab, as in `close_buffer`: a snapshot with no
+                // tab left to come back to is rows the next buffer to be
+                // handed this id would show as its own.
+                let _ = store::remove_grid(&id, &store::query_grid_key(open));
             }
+        }
+        if let Some(fallback) = in_front {
+            self.front_after_close(fallback, cx);
         }
         self.remember_profiles(cx);
         cx.notify();
@@ -683,8 +720,10 @@ impl Workspace {
     /// Runs a statement, if the connection's mode allows it.
     ///
     /// The check lives here rather than in each caller because every path that
-    /// runs SQL routes through this one -- `connection.query` and
-    /// `connection.generated` are called in one place, `execute_unchecked`. A stopped statement is
+    /// runs a tab's statement routes through this one -- `connection.query` is
+    /// called in one place, `execute_unchecked`, and `connection.generated`
+    /// there and for the status bar's Count and the reference arrow's checks,
+    /// which run the same gates themselves. A stopped statement is
     /// held on `pending_run` rather than run: nothing here sets
     /// `QueryState::Running` or appends to history, because a statement that
     /// did not run is not history and must not leave a spinner behind.
@@ -728,9 +767,10 @@ impl Workspace {
     /// prompt's own Run.
     ///
     /// `keep_rows` leaves whatever the grid is showing in place until the new
-    /// result lands, for the refresh of a tab whose rows came off disk. Every
-    /// other run clears them first, because rows from the previous statement
-    /// sitting under the one now running cannot be told from fresh ones.
+    /// result lands, for a relation's refresh: the same statement asked again,
+    /// so the rows under it are what it is about to return. Every other run
+    /// clears them first, because rows from the previous statement sitting
+    /// under the one now running cannot be told from fresh ones.
     ///
     /// `explain` says this submission is an `EXPLAIN`, and diverts its result
     /// away from the grid and into the tab's plan. It routes through here rather
@@ -835,12 +875,34 @@ impl Workspace {
         // `EXPLAIN` never reaches the grid at all, so the rows already there are
         // not the previous statement's: they are still this tab's own result,
         // and are what the user flips back to.
+        let shown = {
+            let table = results.read(cx);
+            let (names, widths) = table.delegate().layout();
+            let vertical = table.vertical_scroll_handle.0.borrow().base_handle.offset();
+            (
+                names,
+                widths,
+                vertical,
+                table.horizontal_scroll_handle.offset(),
+            )
+        };
         if !keep_rows && explain.is_none() {
             results.update(cx, |table, cx| {
                 *table.delegate_mut() = ResultGrid::empty();
+                // Rows dropped from the gutter's multi-row selection too, for
+                // the same reason.
+                table.delegate_mut().clear_row_selection();
                 // The inspector reads whatever row is selected, and a row index
                 // means nothing once the rows behind it are gone.
                 table.clear_selection(cx);
+                table.refresh(cx);
+            });
+        } else if keep_rows {
+            // Edits staged on the rows kept go now, as they went when a
+            // refresh blanked the grid: they were made against rows about to
+            // be replaced, and the replacement would drop them unseen.
+            results.update(cx, |table, cx| {
+                table.delegate_mut().discard_pending();
                 table.refresh(cx);
             });
         }
@@ -959,10 +1021,25 @@ impl Workspace {
                                 let produced_grid = !result.columns.is_empty();
                                 results.update(cx, |table, cx| {
                                     let sort = sort_columns(engine, &keys, &result.columns);
+                                    let (names, widths, vertical, horizontal) = &shown;
                                     *table.delegate_mut() = ResultGrid::new(result, mode)
                                         .with_engine(engine)
-                                        .with_sort(sort, sortable);
+                                        .with_sort(sort, sortable)
+                                        .with_layout(names, widths);
+                                    // Rows kept through a refresh kept their
+                                    // selection too, and its index now names
+                                    // whichever row the new result put there.
+                                    table.clear_selection(cx);
                                     table.refresh(cx);
+                                    if table.delegate().layout().0 == *names {
+                                        table
+                                            .vertical_scroll_handle
+                                            .0
+                                            .borrow()
+                                            .base_handle
+                                            .set_offset(*vertical);
+                                        table.horizontal_scroll_handle.set_offset(*horizontal);
+                                    }
                                 });
                                 (true, produced_grid, None)
                             }

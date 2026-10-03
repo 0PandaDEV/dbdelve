@@ -4,6 +4,7 @@
 //! impl live in as many modules as it has concerns; they moved out whole.
 
 use super::*;
+use crate::tab_drag::{self, Drag, Slot};
 
 impl Workspace {
     pub(crate) fn toggle_sidebar(
@@ -56,22 +57,9 @@ impl Workspace {
         let Some(session) = self.profile().map(|profile| &profile.session) else {
             return;
         };
-        // The chip row draws unsaved buffers, then saved queries, then object
-        // tabs, so cycling walks them in that order.
-        let tabs: Vec<Tab> = session
-            .queries
-            .iter()
-            .filter(|query| query.open_query.is_none())
-            .map(|tab| Tab::Query(tab.id))
-            .chain(
-                session
-                    .saved_queries
-                    .iter()
-                    .filter_map(|name| session.tab_holding(name))
-                    .map(Tab::Query),
-            )
-            .chain(session.objects.iter().map(|tab| Tab::Object(tab.id)))
-            .collect();
+        // Cycling walks the strip left to right, wherever the chips were
+        // dragged to.
+        let tabs = session.strip_tabs();
         if tabs.len() < 2 {
             return;
         }
@@ -80,6 +68,64 @@ impl Workspace {
         };
         let next = tabs[(index as isize + step).rem_euclid(tabs.len() as isize) as usize];
         self.activate_tab(next, cx);
+    }
+
+    /// A chip has been picked up. The chips are what the strip last drew, so
+    /// their bounds are where the drag measures from and not where it draws.
+    pub(crate) fn begin_tab_drag(&mut self, key: TabKey, pointer_x: f32, cx: &mut Context<Self>) {
+        let Some(profile) = self.profile() else {
+            return;
+        };
+        let order = profile.session.strip_order();
+        let bounds = self.tab_strip.bounds.borrow();
+        let mut slots: Vec<Slot> = bounds
+            .iter()
+            .filter(|(key, _)| order.contains(key))
+            .map(|(key, bounds)| Slot {
+                key: key.clone(),
+                left: f32::from(bounds.left()),
+                width: f32::from(bounds.size.width),
+            })
+            .collect();
+        drop(bounds);
+        slots.sort_by(|a, b| a.left.total_cmp(&b.left));
+        let Some(index) = slots.iter().position(|slot| slot.key == key) else {
+            return;
+        };
+        self.tab_strip.drag = Some(Drag {
+            grab: pointer_x - slots[index].left,
+            key,
+            slots,
+            index,
+            pointer_x,
+        });
+        cx.notify();
+    }
+
+    pub(crate) fn move_tab_drag(&mut self, pointer_x: f32, cx: &mut Context<Self>) {
+        if let Some(drag) = &mut self.tab_strip.drag {
+            drag.pointer_x = pointer_x;
+            cx.notify();
+        }
+    }
+
+    /// Dropped: the strip keeps the order the drag had made room for.
+    pub(crate) fn end_tab_drag(&mut self, cx: &mut Context<Self>) {
+        let Some(drag) = self.tab_strip.drag.take() else {
+            return;
+        };
+        let keys: Vec<TabKey> = drag.slots.iter().map(|slot| slot.key.clone()).collect();
+        let layout = drag.layout();
+        // The strip is about to be laid out in the new order, so each chip is
+        // drawn where it was and glides the rest of the way.
+        for (slot, moved) in drag.slots.iter().zip(&layout.landing) {
+            self.tab_strip.shift.settle_into(&slot.key, *moved);
+        }
+        let order = tab_drag::reordered(&keys, &drag.key, layout.target);
+        if let Some(profile) = self.profile_mut() {
+            profile.session.tab_order = order;
+        }
+        cx.notify();
     }
 
     pub(crate) fn next_tab(&mut self, _: &NextTab, _: &mut Window, cx: &mut Context<Self>) {
@@ -200,9 +246,11 @@ impl Workspace {
         if self.cancel_close_tab(cx) {
             return;
         }
-        // Before the apply review, because the form paints over it: generating
-        // from the form is what puts a review up, so the form is the newer of
-        // the two whenever both exist.
+        // Before the apply review, though confirming a row clears the form in
+        // the same step that opens the review, so the two are never both open
+        // on one tab. `close_new_row` is scoped to the active tab's own form,
+        // so one left open elsewhere falls through to the steps below instead
+        // of eating this keystroke.
         if self.close_new_row(cx) {
             return;
         }
@@ -284,14 +332,10 @@ impl Workspace {
             return;
         };
         let session = &profile.session;
-        let unsaved = session
-            .queries
-            .iter()
-            .filter(|tab| tab.open_query.is_none())
-            .count();
-        let Some(target) = close_target(session.active, session.open_query(), unsaved) else {
+        if session.active_query_tab().is_none() && session.active_object().is_none() {
             return;
-        };
+        }
+        let target = close_target(session.active, session.open_query());
         self.ask_before_close(target, cx);
     }
 
@@ -320,6 +364,9 @@ impl Workspace {
 
     /// Carry out a close that has been decided on. A saved query asks its own
     /// question from here: closing its tab deletes its file.
+    ///
+    /// Nothing is stopped here: each close stops its tab's statement as the
+    /// tab goes, and a saved query's goes only once its delete is confirmed.
     pub(crate) fn close_now(&mut self, target: CloseTarget, cx: &mut Context<Self>) {
         match target {
             CloseTarget::Object(id) => self.close_object(id, cx),
@@ -331,6 +378,34 @@ impl Workspace {
                 cx.notify();
             }
         }
+    }
+
+    /// Ask the server to stop what `tab` is running, if it is running something.
+    ///
+    /// For a tab on its way out: left running, its statement holds the
+    /// connection while nothing is left to show it.
+    pub(crate) fn stop_run(&mut self, tab: Tab, cx: &mut Context<Self>) {
+        let Some(connection) = self.profile().and_then(Profile::connection) else {
+            return;
+        };
+        let Some(profile) = self.profile_mut() else {
+            return;
+        };
+        let Some((QueryState::Running { cancel, .. }, _)) = profile.session.slot(tab) else {
+            return;
+        };
+        let cancel = cancel.clone();
+        let cancel_task = cx
+            .background_executor()
+            .spawn(async move { connection.cancel(&cancel) });
+        // Said as `cancel_query` says it: the tab has gone, so a statement
+        // still running behind it is all the more worth knowing about.
+        cx.spawn(async move |workspace, cx| {
+            if let Err(error) = cancel_task.await {
+                _ = workspace.update(cx, |workspace, cx| workspace.note(error.message, cx));
+            }
+        })
+        .detach();
     }
 
     /// Close the tab the discard prompt was raised over, edits and all.

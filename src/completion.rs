@@ -748,6 +748,7 @@ mod tests {
             kind: RelationKind::Table,
             partition_of: None,
             size: None,
+            rows: None,
         }
     }
 

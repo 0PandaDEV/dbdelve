@@ -73,6 +73,8 @@ pub enum Command {
     RecallStatement(String),
     ShowStructure(bool),
     RefreshRelation(u64),
+    /// Run the relation's `COUNT(*)` under its filter: the status bar's Count.
+    CountRows(u64),
     NextPage,
     PreviousPage,
     /// Put the cursor in the preview's filter, adding the bar to type into when
@@ -486,6 +488,7 @@ fn command_items(workspace: &Workspace, profile: &Profile, cx: &App) -> Vec<Item
             filter,
             limit,
             offset,
+            count,
             ..
         } = &tab.body
         {
@@ -522,6 +525,14 @@ fn command_items(workspace: &Workspace, profile: &Profile, cx: &App) -> Vec<Item
                         "",
                         icon::CHEVRON_LEFT,
                         Command::PreviousPage,
+                    ));
+                }
+                if !count.answers(filter) {
+                    items.push(Item::command(
+                        "Count rows",
+                        "",
+                        icon::TABLE,
+                        Command::CountRows(tab.id),
                     ));
                 }
                 items.push(Item::command(

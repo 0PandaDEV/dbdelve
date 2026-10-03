@@ -21,7 +21,7 @@ use gpui_component::menu::DropdownMenu;
 pub(crate) use queries::error_in_buffer;
 
 use crate::connection_form::{Origin, password_to_persist};
-use crate::session::{write_buffer, write_grids};
+use crate::session::{catalog_relation, write_buffer, write_grids};
 use crate::sql::{Mode, appended_statement, remember_statement, update_batch};
 use crate::theme::{install_fonts, install_theme, restored_fonts, restored_theme};
 use crate::*;
@@ -85,6 +85,23 @@ pub(crate) struct Workspace {
     /// Whether the explorer column is folded away. Not persisted: a hidden
     /// sidebar is a thing done for the next minute, not a preference.
     pub(crate) sidebar_hidden: bool,
+    pub(crate) shell_split: Entity<ResizableState>,
+    pub(crate) tab_strip: crate::tab_drag::TabStrip,
+    /// Where the sidebar's edge is unless a drag has moved it. The library
+    /// rescales every panel by its share when the window changes size, so this
+    /// is what puts the sidebar back.
+    pub(crate) sidebar_width: std::cell::Cell<gpui::Pixels>,
+    /// The window's width the last time the sidebar was put right, which is how
+    /// a window resize is told from a drag of the handle.
+    pub(crate) sidebar_container: std::cell::Cell<gpui::Pixels>,
+    /// The sidebar's actual width the last time `settle_sidebar` looked, which
+    /// may be less than `sidebar_width` when the container is too narrow to
+    /// hold it. Comparing against this rather than against `sidebar_width`
+    /// itself is what tells a real drag from that squeeze settling back out.
+    pub(crate) sidebar_last_size: std::cell::Cell<gpui::Pixels>,
+    /// The list a reference arrow opens, and which lookup it is waiting on.
+    pub(crate) reference_popup: Option<ReferencePopup>,
+    pub(crate) reference_checks: u64,
     pub(crate) row_panel: views::RowPanel,
     /// Whether the plan pane's copy button was just used, so it can show a
     /// tick the way `row_panel.copied` does. One flag rather than a keyed
@@ -139,6 +156,13 @@ impl Workspace {
             settings_tab: SettingsTab::default(),
             rebinding: None,
             sidebar_hidden: false,
+            shell_split: cx.new(|_| ResizableState::default()),
+            tab_strip: crate::tab_drag::TabStrip::default(),
+            sidebar_width: std::cell::Cell::new(px(layout::SIDEBAR_DEFAULT_WIDTH)),
+            sidebar_container: std::cell::Cell::new(px(0.)),
+            sidebar_last_size: std::cell::Cell::new(px(layout::SIDEBAR_DEFAULT_WIDTH)),
+            reference_popup: None,
+            reference_checks: 0,
             row_panel: views::RowPanel {
                 on_screen: Default::default(),
                 copied: None,
@@ -287,7 +311,12 @@ impl Workspace {
         cx.intercept_keystrokes(move |event, window, cx| {
             let keystroke = event.keystroke.clone();
             this.update(cx, |workspace, cx| {
-                if !workspace.settings_open || keybindings::is_modifier(&keystroke.key) {
+                // The palette opens over the modal (a font is picked from it) and
+                // holds the keyboard while it does.
+                if !workspace.settings_open
+                    || workspace.palette.is_some()
+                    || keybindings::is_modifier(&keystroke.key)
+                {
                     return;
                 }
                 match (workspace.rebinding, keystroke.key.as_str()) {
@@ -472,9 +501,79 @@ impl Workspace {
     }
 }
 
+/// What `settle_sidebar` should do with the split this frame, decided from
+/// numbers alone so the decision is testable without a window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SidebarSettle {
+    /// The container changed size: put the sidebar back at its remembered
+    /// width, clamped to whatever room the content panel's minimum leaves.
+    Resize,
+    /// The container didn't move, so nothing but a drag could have changed
+    /// the handle: adopt the new width as the one to remember.
+    Adopt,
+    /// Nothing changed since the last time this settled.
+    Settled,
+}
+
+/// `last_size` is the sidebar's actual width the last time this ran, which
+/// can differ from `target` (the width to put it back at) when the container
+/// was too narrow to hold `target` in full -- that squeeze must resolve
+/// through `Resize`, never `Adopt`, or widening the window again could never
+/// recover the width the user actually asked for.
+fn sidebar_settle(
+    container: gpui::Pixels,
+    last_container: gpui::Pixels,
+    sizes_0: gpui::Pixels,
+    last_size: gpui::Pixels,
+) -> SidebarSettle {
+    if container != last_container {
+        SidebarSettle::Resize
+    } else if sizes_0 != last_size {
+        SidebarSettle::Adopt
+    } else {
+        SidebarSettle::Settled
+    }
+}
+
+impl Workspace {
+    /// Puts the sidebar back at its width after a window resize, and takes the
+    /// width a drag has left it at.
+    fn settle_sidebar(&self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.sidebar_hidden {
+            return;
+        }
+        let (target, last_container, last_size) = (
+            self.sidebar_width.get(),
+            self.sidebar_container.get(),
+            self.sidebar_last_size.get(),
+        );
+        self.shell_split.update(cx, |state, cx| {
+            let container = state.container_size();
+            if container <= px(1.) || state.sizes().len() != 2 {
+                return;
+            }
+            match sidebar_settle(container, last_container, state.sizes()[0], last_size) {
+                SidebarSettle::Resize => {
+                    self.sidebar_container.set(container);
+                    if (state.sizes()[0] - target).abs() > px(0.5) {
+                        state.resize_panel(0, target, window, cx);
+                    }
+                    self.sidebar_last_size.set(state.sizes()[0]);
+                }
+                SidebarSettle::Adopt => {
+                    self.sidebar_width.set(state.sizes()[0]);
+                    self.sidebar_last_size.set(state.sizes()[0]);
+                }
+                SidebarSettle::Settled => {}
+            }
+        });
+    }
+}
+
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = *theme(cx);
+        self.settle_sidebar(window, cx);
         self.row_panel.on_screen.set(false);
         // Deferred to render for the `&mut Window` a background task does not
         // have: the catalog that names these tabs resolves off-thread, and a
@@ -482,9 +581,8 @@ impl Render for Workspace {
         self.restore_objects(window, cx);
         self.sync_page_input(window, cx);
         // Where a query tab that reached the front without `activate_tab` gets
-        // its snapshot read. `session.active` is written in six places --
-        // `Session::new`, `activate_tab`, `close_object`, `escape`,
-        // `close_buffer` and `delete_saved_query` -- and all but the first two
+        // its snapshot read. `session.active` is written in three places --
+        // `Session::new`, `activate_tab` and `escape` -- and the first and last
         // set a `Tab::Query` without hydrating it, so this cannot be narrowed
         // to the opening tab.
         //
@@ -514,21 +612,42 @@ impl Render for Workspace {
             if !profile.session.editor_needs_focus {
                 return None;
             }
+            // The chip for whatever just took focus glides into view beside
+            // it, one-shot the same way: a tab just opened or activated off
+            // screen is a tab the strip should show, not one it leaves the
+            // user to go scroll for.
+            if let Some(index) = profile
+                .session
+                .strip_order()
+                .iter()
+                .position(|key| profile.session.tab_of(key) == Some(profile.session.active))
+            {
+                crate::scroller::scroll_to("tab-strip", index, cx);
+            }
             // Whatever the surface in front is: a keystroke reaches the
             // workspace along the focused element's dispatch path, so a
             // surface with nothing focused makes every keybinding dead.
             let focus = match profile.session.active {
-                Tab::Query(id) => Focus::Buffer(profile.session.query_tab(id)?.editor.clone()),
-                Tab::Object(id) => {
-                    let tab = profile.session.objects.iter().find(|tab| tab.id == id)?;
-                    match &tab.body {
-                        ObjectBody::Relation { results, .. } => Focus::Grid(results.clone()),
-                        // A routine's tab is read: nothing in it takes a
-                        // keystroke. The window still has to hold focus, or
-                        // the bindings that leave this tab go with it.
-                        ObjectBody::Routine(_) => Focus::Window,
-                    }
-                }
+                // No tab at all is still a surface: the window holds focus
+                // for the bindings that open one.
+                Tab::Query(id) => match profile.session.query_tab(id) {
+                    Some(tab) => Focus::Buffer(tab.editor.clone()),
+                    None => Focus::Window,
+                },
+                Tab::Object(id) => match profile
+                    .session
+                    .objects
+                    .iter()
+                    .find(|tab| tab.id == id)
+                    .map(|tab| &tab.body)
+                {
+                    Some(ObjectBody::Relation { results, .. }) => Focus::Grid(results.clone()),
+                    // A routine's tab is read: nothing in it takes a
+                    // keystroke. The window still has to hold focus, or the
+                    // bindings that leave this tab go with it -- as it does
+                    // for the last object tab of all, closed.
+                    Some(ObjectBody::Routine(_)) | None => Focus::Window,
+                },
             };
             profile.session.editor_needs_focus = false;
             Some(focus)
@@ -577,7 +696,7 @@ impl Render for Workspace {
                 .on_action(cx.listener(Self::previous_profile))
                 // Without a titlebar of its own the form has no drag handle at
                 // all, since the platform's is transparent.
-                .child(titlebar(t, Vec::new(), Vec::new()))
+                .child(titlebar(t, Vec::new(), Vec::new(), Vec::new()))
                 .child(
                     div()
                         .flex_1()
@@ -611,6 +730,10 @@ impl Render for Workspace {
             .session
             .active_results()
             .map(|results| results.read(cx).delegate().result().rows.len());
+        let column_count = profile
+            .session
+            .active_results()
+            .map(|results| results.read(cx).delegate().columns().len());
         let snapshot_age = profile
             .session
             .active_results()
@@ -625,6 +748,81 @@ impl Render for Workspace {
                 .session
                 .active_query_tab()
                 .is_some_and(|tab| tab.last_query.is_some());
+        let paging = views::render_paging(profile, cx);
+        let relation = profile
+            .session
+            .active_object()
+            .and_then(|tab| match &tab.body {
+                ObjectBody::Relation {
+                    count,
+                    filter,
+                    query,
+                    limit,
+                    offset,
+                    showing_structure: false,
+                    ..
+                } => Some((tab, count, filter, query, *limit, *offset)),
+                _ => None,
+            });
+        let engine = profile.config.engine();
+        let relation_rows = relation.and_then(|(tab, count, filter, query, limit, offset)| {
+            let estimate = match &profile.catalog {
+                CatalogState::Loaded(catalog, _) => {
+                    catalog_relation(catalog, &tab.schema, &tab.name)
+                        .and_then(|relation| relation.rows)
+                }
+                _ => None,
+            };
+            let whole =
+                offset == 0 && matches!(query, QueryState::Complete { rows, .. } if *rows < limit);
+            session::relation_rows(count, filter, estimate, engine.exact_row_estimates(), whole)
+        });
+        // The way to an exact number, which is never run unasked. Its tooltip
+        // is the statement it runs.
+        let count_control = relation
+            .filter(|_| profile.connection().is_some())
+            .and_then(|(tab, count, filter, ..)| {
+                let id = tab.id;
+                let workspace = cx.entity().downgrade();
+                match count {
+                    RowCount::Counting { cancelling, .. } => Some(
+                        div()
+                            .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .gap(px(layout::SPACE_SM))
+                            .child(div().whitespace_nowrap().text_color(t.text_faint).child(
+                                match cancelling {
+                                    true => "Cancelling count…",
+                                    false => "Counting rows…",
+                                },
+                            ))
+                            .children((!cancelling).then(|| {
+                                button("cancel-count", "Cancel", Tone::Quiet, Control::Compact, t)
+                                    .on_click(move |_, _, cx| {
+                                        _ = workspace.update(cx, |workspace, cx| {
+                                            workspace.cancel_count(id, cx);
+                                        });
+                                    })
+                            }))
+                            .into_any_element(),
+                    ),
+                    _ if count.answers(filter) => None,
+                    _ => {
+                        let sql = explorer::count_sql(engine, &tab.schema, &tab.name, filter);
+                        Some(
+                            button("count-rows", "Count", Tone::Quiet, Control::Compact, t)
+                                .tooltip(sql)
+                                .on_click(move |_, _, cx| {
+                                    _ = workspace.update(cx, |workspace, cx| {
+                                        workspace.count_rows(id, cx);
+                                    });
+                                })
+                                .into_any_element(),
+                        )
+                    }
+                }
+            });
         let query_status = match profile.session.active_query() {
             Some(QueryState::Complete {
                 rows,
@@ -632,7 +830,15 @@ impl Render for Workspace {
                 elapsed,
                 ..
             }) => {
-                let count = row_readout(showing.unwrap_or(*rows), *rows);
+                // The rows on screen, unless the relation's own count or
+                // estimate is beside the stats already.
+                let count = relation_rows
+                    .is_none()
+                    .then(|| row_readout(showing.unwrap_or(*rows), *rows));
+                let joined = |rest: String| match count {
+                    Some(count) => format!("{count} \u{b7} {rest}"),
+                    None => rest,
+                };
                 // A snapshot knows neither how many bytes crossed the wire nor
                 // how long it took, so reporting `0 B · 0.0ns` invents two
                 // numbers. What it does know is when it was taken.
@@ -640,9 +846,12 @@ impl Render for Workspace {
                 // buffer's statement is the user's to run again, and nothing
                 // else would tell them the rows are waiting on it.
                 Some(match snapshot_age {
-                    Some(age) if stale_buffer => format!("{count} · from {age} ago"),
-                    Some(age) => format!("{count} · snapshot from {age} ago"),
-                    None => format!("{count} · {} · {elapsed:.1?}", human_bytes(*bytes as u64)),
+                    Some(age) if stale_buffer => joined(format!("from {age} ago")),
+                    Some(age) => joined(format!("snapshot from {age} ago")),
+                    None => joined(format!(
+                        "{} \u{b7} {elapsed:.1?}",
+                        human_bytes(*bytes as u64)
+                    )),
                 })
             }
             // The plan's own rows are not this tab's result and never reached
@@ -653,6 +862,48 @@ impl Render for Workspace {
                 Some(format!("{} · {elapsed:.1?}", mode.label()))
             }
             _ => None,
+        };
+        let left_stats = [
+            relation_rows,
+            column_count.filter(|columns| *columns > 0).map(|columns| {
+                format!(
+                    "{columns} {}",
+                    if columns == 1 { "column" } else { "columns" }
+                )
+            }),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+        let left_stats = (!left_stats.is_empty()).then(|| left_stats.join(" \u{b7} "));
+        // The dot carries the state and the text carries the words. A whole
+        // status line in green shouts about being connected, which is the
+        // least interesting thing dbdelve can tell you.
+        let status_group = div()
+            .flex()
+            .items_center()
+            .gap(px(layout::SPACE_SM))
+            .min_w_0()
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .size(px(layout::SPACE_XS + 2.))
+                    .rounded_full()
+                    .bg(status_color),
+            )
+            .child(
+                div()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .whitespace_nowrap()
+                    .text_color(if failed { t.danger } else { t.text_muted })
+                    .child(status),
+            );
+        let (sidebar_status, inline_status) = if self.sidebar_hidden {
+            (None, Some(status_group))
+        } else {
+            (Some(status_group), None)
         };
         let notice = profile.session.notice.clone();
         let newer_release = self.newer_release.clone();
@@ -665,29 +916,222 @@ impl Render for Workspace {
         let json_workspace = apply_workspace.clone();
         let refresh_workspace = apply_workspace.clone();
 
+        // Chrome for content, not a fixture of the window: with no tab open
+        // every field below is empty, and an empty bar is a background and a
+        // hairline with nothing on either side of them.
+        let bar_has_content = inline_status.is_some()
+            || left_stats.is_some()
+            || count_control.is_some()
+            || notice.is_some()
+            || paging.is_some()
+            || query_status.is_some()
+            || refreshable_snapshot
+            || has_results
+            || has_pending;
+
+        let results_status = bar_has_content.then(|| {
+            div()
+                .h(px(layout::STATUS_HEIGHT))
+                .flex_shrink_0()
+                .border_t_1()
+                .border_color(t.border)
+                .text_size(px(layout::TEXT_SM))
+                .min_w_0()
+                .flex()
+                .items_center()
+                .gap(px(layout::SPACE_SM))
+                .px(px(layout::SPACE_MD))
+                .bg(t.data_glass())
+                .children(inline_status)
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .items_center()
+                        .gap(px(layout::SPACE_SM))
+                        .children(left_stats.map(|stats| {
+                            div()
+                                .flex_shrink_0()
+                                .whitespace_nowrap()
+                                .text_color(t.text_faint)
+                                .child(stats)
+                        }))
+                        .children(count_control)
+                        .children(notice.map(|notice| {
+                            div()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .whitespace_nowrap()
+                                .text_color(t.text_muted)
+                                .child(notice)
+                        })),
+                )
+                // Between two sides that share the free space equally, so
+                // it sits at the middle of the bar whatever either holds.
+                .children(paging)
+                // One right-hand cluster taking the other half of that
+                // space, so the readout stays against the edge.
+                //
+                // Each control appears only when it does something. A pair
+                // of buttons that do nothing is a pair to read past --
+                // see `apply_edits` for its `cmd+s` binding.
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .justify_end()
+                        .flex()
+                        .items_center()
+                        .gap(px(layout::SPACE_SM))
+                        .children(query_status.map(|query_status| {
+                            div()
+                                .text_color(match stale_buffer {
+                                    true => t.text_muted,
+                                    false => t.text_faint,
+                                })
+                                .child(query_status)
+                        }))
+                        // Through the stale-rows prompt rather than straight
+                        // to a run, so the statement is read before it is
+                        // sent.
+                        .children(refreshable_snapshot.then(|| {
+                            button(
+                                "refresh-snapshot",
+                                "Refresh…",
+                                Tone::Quiet,
+                                Control::Compact,
+                                t,
+                            )
+                            .on_click(move |_, _, cx| {
+                                _ = refresh_workspace.update(cx, |workspace, cx| {
+                                    workspace.ask_refresh_stale(cx);
+                                });
+                            })
+                        }))
+                        .children(has_results.then(|| {
+                            button(
+                                "copy-results",
+                                "Copy Results",
+                                Tone::Quiet,
+                                Control::Compact,
+                                t,
+                            )
+                            .on_click(move |_, _, cx| {
+                                _ = copy_workspace.update(cx, |workspace, cx| {
+                                    workspace.copy_results_as(Format::Tsv, cx);
+                                });
+                            })
+                        }))
+                        // Named, not one button over a menu: the choice is
+                        // between two things, and a control that opens
+                        // another control to ask which is a click spent on
+                        // nothing. It also puts the format on screen, which
+                        // a lone "Export" left to the file extension.
+                        .children(has_results.then(|| {
+                            button("export-csv", "Export CSV", Tone::Quiet, Control::Compact, t)
+                                .on_click(move |_, _, cx| {
+                                    _ = csv_workspace.update(cx, |workspace, cx| {
+                                        workspace.export_results(Format::Csv, cx);
+                                    });
+                                })
+                        }))
+                        .children(has_results.then(|| {
+                            button(
+                                "export-json",
+                                "Export JSON",
+                                Tone::Quiet,
+                                Control::Compact,
+                                t,
+                            )
+                            .on_click(move |_, _, cx| {
+                                _ = json_workspace.update(cx, |workspace, cx| {
+                                    workspace.export_results(Format::Json, cx);
+                                });
+                            })
+                        }))
+                        .children(has_pending.then(|| {
+                            button("discard-edits", "Discard", Tone::Quiet, Control::Compact, t)
+                                .on_click(move |_, window, cx| {
+                                    _ = discard_workspace.update(cx, |workspace, cx| {
+                                        workspace.discard_edits(&DiscardEdits, window, cx);
+                                    });
+                                })
+                        }))
+                        .children(has_pending.then(|| {
+                            button(
+                                "apply-edits",
+                                "Apply edits",
+                                Tone::Primary,
+                                Control::Compact,
+                                t,
+                            )
+                            .on_click(move |_, window, cx| {
+                                _ = apply_workspace.update(cx, |workspace, cx| {
+                                    workspace.apply_edits(&ApplyEdits, window, cx);
+                                });
+                            })
+                        })),
+                )
+        });
+
         let content = div()
             // Flush, not a floating card: the split handle already draws the
             // one seam, and the planes inside separate by tone.
             .size_full()
             .min_w_0()
-            .child(views::render_main_content(
+            .flex()
+            .flex_col()
+            .child(div().flex_1().min_h_0().child(views::render_main_content(
                 profile,
                 self.settings.editor_font_size,
                 &self.row_panel,
                 self.plan_copied,
+                &self.tab_strip,
                 cx,
-            ));
+            )))
+            .children(results_status);
+        // The strip's chips glide for as long as the render above found one
+        // still on its way.
+        self.tab_strip.shift.drive(window);
         // With the sidebar folded there is nothing to split, and a split with
         // one panel still paints the handle it no longer divides anything with.
         let main_pane = if self.sidebar_hidden {
             content.into_any_element()
         } else {
             h_resizable("workspace-shell-split")
+                .with_state(&self.shell_split)
                 .child(
                     resizable_panel()
                         .size(px(layout::SIDEBAR_DEFAULT_WIDTH))
+                        .flex_none()
                         .size_range(px(layout::SIDEBAR_MIN_WIDTH)..px(layout::SIDEBAR_MAX_WIDTH))
-                        .child(self.render_explorer(profile, cx)),
+                        .child(
+                            div()
+                                .size_full()
+                                .flex()
+                                .flex_col()
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_h_0()
+                                        .child(self.render_explorer(profile, cx)),
+                                )
+                                .child(
+                                    div()
+                                        .h(px(layout::STATUS_HEIGHT))
+                                        .flex_shrink_0()
+                                        .flex()
+                                        .items_center()
+                                        .px(px(layout::SPACE_MD))
+                                        .border_t_1()
+                                        .border_color(t.border)
+                                        .text_size(px(layout::TEXT_SM))
+                                        .overflow_hidden()
+                                        .children(sidebar_status),
+                                ),
+                        ),
                 )
                 .child(resizable_panel().child(content))
                 .into_any_element()
@@ -825,136 +1269,22 @@ impl Render for Workspace {
                     .into_any_element(),
                     self.render_profile_switcher(cx),
                 ],
+                vec![
+                    icon_button(
+                        "open-settings",
+                        icon::SETTINGS,
+                        Tone::Quiet,
+                        Control::Compact,
+                        t,
+                    )
+                    .tooltip("Settings")
+                    .on_click(|_, window, cx| {
+                        window.dispatch_action(Box::new(OpenSettings), cx);
+                    })
+                    .into_any_element(),
+                ],
             ))
             .child(div().flex_1().min_h_0().child(main_pane))
-            .child(
-                div()
-                    .h(px(layout::STATUS_HEIGHT))
-                    .w_full()
-                    .flex()
-                    .items_center()
-                    .gap(px(layout::SPACE_SM))
-                    .px(px(layout::SPACE_MD))
-                    .text_size(px(layout::TEXT_SM))
-                    // The dot carries the state and the text carries the words.
-                    // A whole status line in green shouts about being connected,
-                    // which is the least interesting thing dbdelve can tell you.
-                    .child(
-                        div()
-                            .size(px(layout::SPACE_XS + 2.))
-                            .rounded_full()
-                            .bg(status_color),
-                    )
-                    .child(
-                        div()
-                            .text_color(if failed { t.danger } else { t.text_muted })
-                            .child(status),
-                    )
-                    .children(notice.map(|notice| div().text_color(t.text_muted).child(notice)))
-                    // One right-hand cluster, so there is a single `ml_auto`
-                    // in the row: two of them split the free space between
-                    // them and strand the readout in the middle of the bar.
-                    //
-                    // Each control appears only when it does something. A pair
-                    // of buttons that do nothing is a pair to read past --
-                    // see `apply_edits` for its `cmd+s` binding.
-                    .child(
-                        div()
-                            .ml_auto()
-                            .flex()
-                            .items_center()
-                            .gap(px(layout::SPACE_SM))
-                            .children(query_status.map(|query_status| {
-                                div()
-                                    .text_color(match stale_buffer {
-                                        true => t.text_muted,
-                                        false => t.text_faint,
-                                    })
-                                    .child(query_status)
-                            }))
-                            // Through the stale-rows prompt rather than straight
-                            // to a run, so the statement is read before it is
-                            // sent.
-                            .children(refreshable_snapshot.then(|| {
-                                button(
-                                    "refresh-snapshot",
-                                    "Refresh…",
-                                    Tone::Quiet,
-                                    Control::Compact,
-                                    t,
-                                )
-                                .on_click(move |_, _, cx| {
-                                    _ = refresh_workspace.update(cx, |workspace, cx| {
-                                        workspace.ask_refresh_stale(cx);
-                                    });
-                                })
-                            }))
-                            // Named, not one button over a menu: the choice is
-                            // between two things, and a control that opens
-                            // another control to ask which is a click spent on
-                            // nothing. It also puts the format on screen, which
-                            // a lone "Export" left to the file extension.
-                            .children(has_results.then(|| {
-                                button(
-                                    "copy-results",
-                                    "Copy Results",
-                                    Tone::Quiet,
-                                    Control::Compact,
-                                    t,
-                                )
-                                .on_click(move |_, _, cx| {
-                                    _ = copy_workspace.update(cx, |workspace, cx| {
-                                        workspace.copy_results_as(Format::Tsv, cx);
-                                    });
-                                })
-                            }))
-                            .children(has_results.then(|| {
-                                button("export-csv", "Export CSV", Tone::Quiet, Control::Compact, t)
-                                    .on_click(move |_, _, cx| {
-                                        _ = csv_workspace.update(cx, |workspace, cx| {
-                                            workspace.export_results(Format::Csv, cx);
-                                        });
-                                    })
-                            }))
-                            .children(has_results.then(|| {
-                                button(
-                                    "export-json",
-                                    "Export JSON",
-                                    Tone::Quiet,
-                                    Control::Compact,
-                                    t,
-                                )
-                                .on_click(move |_, _, cx| {
-                                    _ = json_workspace.update(cx, |workspace, cx| {
-                                        workspace.export_results(Format::Json, cx);
-                                    });
-                                })
-                            }))
-                            .children(has_pending.then(|| {
-                                button("discard-edits", "Discard", Tone::Quiet, Control::Compact, t)
-                                    .on_click(move |_, window, cx| {
-                                        _ = discard_workspace.update(cx, |workspace, cx| {
-                                            workspace.discard_edits(&DiscardEdits, window, cx);
-                                        });
-                                    })
-                            }))
-                            .children(has_pending.then(|| {
-                                button(
-                                    "apply-edits",
-                                    "Apply edits",
-                                    Tone::Primary,
-                                    Control::Compact,
-                                    t,
-                                )
-                                .on_click(move |_, window, cx| {
-                                    _ = apply_workspace.update(cx, |workspace, cx| {
-                                        workspace.apply_edits(&ApplyEdits, window, cx);
-                                    });
-                                })
-                            })),
-                    ),
-            )
-            .children(views::render_new_row_form(self, cx))
             .children(self.render_apply_review(cx))
             .children(self.render_close_confirmation(cx))
             .children(self.render_discard_confirmation(cx))
@@ -962,7 +1292,21 @@ impl Render for Workspace {
             .children(self.render_stale_edit(cx))
             .children(self.settings_open.then(|| views::render_settings(self, cx)))
             .children(self.render_palette(cx))
+            .children(self.render_reference_popup(cx))
     }
+}
+
+/// A relation a reference arrow lists, by its index into the structure's
+/// `referenced_by`: a row was found in it, or its check failed with this error.
+pub(crate) type ReferenceAnswer = (usize, gpui::SharedString, Result<(), String>);
+
+/// What a reference arrow opened: where it hangs, and the relations that turned
+/// out to hold rows for the key, or whose check failed with the error it gave.
+/// `None` while the lookup is still out.
+pub(crate) struct ReferencePopup {
+    pub(crate) at: gpui::Point<gpui::Pixels>,
+    pub(crate) choices: Option<Vec<ReferenceAnswer>>,
+    check: u64,
 }
 
 pub(crate) const EDITOR_FONT_SIZE_DEFAULT: f32 = 14.0;
@@ -1034,6 +1378,36 @@ pub(crate) fn opacity_from_percent_input(typed: &str, current: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_window_too_narrow_to_hold_the_sidebar_does_not_relabel_the_squeeze() {
+        // 400 wanted, container only leaves room for 350: Resize, not Adopt,
+        // even though the achieved size differs from what was asked for.
+        assert_eq!(
+            sidebar_settle(px(450.), px(1200.), px(350.), px(400.)),
+            SidebarSettle::Resize
+        );
+        // Settled at the squeezed width: another frame at the same container
+        // size must leave the remembered target alone.
+        assert_eq!(
+            sidebar_settle(px(450.), px(450.), px(350.), px(350.)),
+            SidebarSettle::Settled
+        );
+        // Widening back out is another container change, so the target gets
+        // another chance to apply in full.
+        assert_eq!(
+            sidebar_settle(px(1200.), px(450.), px(350.), px(350.)),
+            SidebarSettle::Resize
+        );
+    }
+
+    #[test]
+    fn a_drag_at_a_fixed_container_size_is_adopted() {
+        assert_eq!(
+            sidebar_settle(px(1200.), px(1200.), px(300.), px(400.)),
+            SidebarSettle::Adopt
+        );
+    }
 
     #[test]
     fn editor_zoom_stays_inside_its_readable_range() {

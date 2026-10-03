@@ -214,6 +214,7 @@ impl Workspace {
             Command::RecallStatement(sql) => self.recall_statement(sql, window, cx),
             Command::ShowStructure(showing) => self.show_structure(showing, cx),
             Command::RefreshRelation(id) => self.refresh_relation(id, cx),
+            Command::CountRows(id) => self.count_rows(id, cx),
             Command::NextPage => self.turn_page(true, cx),
             Command::PreviousPage => self.turn_page(false, cx),
             Command::FilterRows => self.focus_filter(window, cx),

@@ -22,7 +22,7 @@ use gpui_component::{
 use crate::{
     Workspace, completion,
     db::{
-        CancelToken, Catalog, Connection, ConnectionConfig, DbError, Engine, ExplainMode,
+        CancelToken, Catalog, Connection, ConnectionConfig, DbError, Engine, ExplainMode, Relation,
         RelationKind, Routine, Structure,
     },
     explain::Plan,
@@ -36,6 +36,7 @@ use crate::{
     sql::{Destructive, Mode, SortKey, Verdict},
     store,
     theme::ConnectionColor,
+    ui::row_readout,
 };
 
 /// A connection and everything it owns.
@@ -171,12 +172,16 @@ pub(crate) enum ProfileState {
 /// create, and the connection resolves on a task that has none — so this is
 /// built before the spawn and moved in once the connection opens.
 pub(crate) struct Session {
-    /// The open query buffers, in strip order. Never empty: a profile always
-    /// has somewhere to write, so the last unsaved buffer has no closed state
-    /// to go to.
+    /// The open query buffers, in strip order. Empty when the last one has been
+    /// closed; `active` may then name a tab that no longer exists, which every
+    /// lookup by id already answers with `None`.
     pub(crate) queries: Vec<QueryTab>,
     pub(crate) objects: Vec<ObjectTab>,
     pub(crate) active: Tab,
+    /// The order the strip was last left in, by a drag or by a tab opening at
+    /// its end. Chips it does not mention -- every tab restored at launch,
+    /// until either happens -- follow it, in their default order.
+    pub(crate) tab_order: Vec<TabKey>,
     pub(crate) next_query_id: u64,
     pub(crate) next_object_id: u64,
     /// Object tabs read back from disk, held until the catalog can name them.
@@ -388,26 +393,20 @@ impl Session {
         let saved_queries = store::saved_queries(&id);
         // A tab naming a query whose file has gone comes back as the unsaved
         // buffer it now is, rather than as a tab pointing at nothing.
-        let mut stored_queries = stored_queries
+        let stored_queries = stored_queries
             .into_iter()
             .map(|mut stored| {
                 stored.name = stored.name.filter(|name| saved_queries.contains(name));
                 stored
             })
             .collect::<Vec<_>>();
-        if stored_queries.is_empty() {
-            stored_queries.push(store::StoredQueryTab {
-                id: 0,
-                name: None,
-                active: true,
-            });
-        }
-
+        // No tab is a state a profile can be in: closing the last one leaves
+        // the strip empty, and it comes back empty.
         let active = stored_queries
             .iter()
             .find(|stored| stored.active)
-            .unwrap_or(&stored_queries[0])
-            .id;
+            .or(stored_queries.first())
+            .map_or(0, |stored| stored.id);
         let next_query_id = next_query_id(stored_next_query_id, &stored_queries);
 
         let mut notice = None;
@@ -424,6 +423,7 @@ impl Session {
             queries,
             objects: Vec::new(),
             active: Tab::Query(active),
+            tab_order: Vec::new(),
             next_query_id,
             next_object_id: 0,
             pending_objects,
@@ -464,6 +464,67 @@ impl Session {
         match self.active {
             Tab::Query(id) => self.query_tab(id),
             Tab::Object(_) => None,
+        }
+    }
+
+    /// Every chip the strip draws, left to right: the dragged order first,
+    /// then anything newer than it in the default one -- unsaved buffers, saved
+    /// queries, objects.
+    pub(crate) fn strip_order(&self) -> Vec<TabKey> {
+        let chips: Vec<TabKey> = self
+            .queries
+            .iter()
+            .filter(|tab| tab.open_query.is_none())
+            .map(|tab| TabKey::Unsaved(tab.id))
+            .chain(self.saved_queries.iter().cloned().map(TabKey::Saved))
+            .chain(self.objects.iter().map(|tab| TabKey::Object(tab.id)))
+            .collect();
+        strip_order(chips, &self.tab_order)
+    }
+
+    /// Put a chip just opened at the right end of the strip as it is drawn.
+    ///
+    /// The whole order is written down first, not just the new chip: the tabs
+    /// restored at launch are in no order but the default one, and pushing
+    /// onto that would put the newest chip ahead of all of them.
+    pub(crate) fn place_last(&mut self, key: TabKey) {
+        self.tab_order = placed_last(self.strip_order(), key);
+    }
+
+    /// Give a chip its new key where it stands, for a buffer whose name is
+    /// changing: saving or renaming it is not moving it.
+    pub(crate) fn rekey(&mut self, from: &TabKey, to: TabKey) {
+        let mut order = self.strip_order();
+        if let Some(key) = order.iter_mut().find(|key| *key == from) {
+            *key = to;
+        }
+        self.tab_order = order;
+    }
+
+    /// The tabs behind the strip's chips, left to right. A saved query with
+    /// no buffer open is a chip with no tab, and is not here.
+    pub(crate) fn strip_tabs(&self) -> Vec<Tab> {
+        self.strip_order()
+            .iter()
+            .filter_map(|key| self.tab_of(key))
+            .collect()
+    }
+
+    /// The tab that comes to the front when `closing` goes. Asked before it
+    /// goes, while the strip still says where it stood, and brought forward
+    /// through `activate_tab` as a click on its chip would be: a tab not
+    /// looked at since launch has its snapshot read and its rows refreshed
+    /// there and nowhere else.
+    pub(crate) fn fallback(&self, closing: Tab) -> Option<Tab> {
+        neighbour(&self.strip_tabs(), closing)
+    }
+
+    /// The tab a chip opens or shows, where it has one.
+    pub(crate) fn tab_of(&self, key: &TabKey) -> Option<Tab> {
+        match key {
+            TabKey::Unsaved(id) => Some(Tab::Query(*id)),
+            TabKey::Saved(name) => self.tab_holding(name).map(Tab::Query),
+            TabKey::Object(id) => Some(Tab::Object(*id)),
         }
     }
 
@@ -630,6 +691,26 @@ pub(crate) enum Tab {
     Object(u64),
 }
 
+impl Tab {
+    /// A key unique to this tab in this profile, for scroll state
+    /// (`scroller::smooth_scoped`) that must not bleed into another tab or
+    /// profile reusing the same id -- `next_query_id` and `next_object_id`
+    /// each count from zero per profile, so a bare id collides across both
+    /// kinds and across profiles.
+    pub(crate) fn scroll_scope(&self, profile_id: &str) -> String {
+        format!("{profile_id}-{self:?}")
+    }
+}
+
+/// A chip of the tab strip, which is not the same set as `Tab`: a saved query
+/// is listed whether or not a buffer holds it.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum TabKey {
+    Unsaved(u64),
+    Saved(String),
+    Object(u64),
+}
+
 /// What `cmd+w` has to do with the surface in front of it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CloseTarget {
@@ -639,8 +720,7 @@ pub(crate) enum CloseTarget {
     /// Ask first. A saved query is listed while its file exists and gone when
     /// it does not, so closing its tab is deleting it.
     SavedQuery(String),
-    /// Close it. An unsaved buffer that is not the last one is a scratch pad
-    /// someone is done with; its text goes with it, which is what closing an
+    /// Close it. An unsaved buffer is a scratch pad someone is done with; its text goes with it, which is what closing an
     /// unnamed buffer means everywhere else.
     Buffer(u64),
 }
@@ -658,18 +738,40 @@ impl CloseTarget {
     }
 }
 
-/// `None` for the last unsaved buffer, which is always in the strip: a profile
-/// always has somewhere to write, so there is no closed state for it to go to
-/// and `cmd+w` on it does nothing rather than inventing one.
-pub(crate) fn close_target(
-    active: Tab,
-    open_query: Option<&str>,
-    unsaved: usize,
-) -> Option<CloseTarget> {
+/// `chips` in default order, rearranged by the order the strip was last left
+/// in. A chip that order does not mention follows it.
+fn strip_order(mut chips: Vec<TabKey>, order: &[TabKey]) -> Vec<TabKey> {
+    let mut ordered: Vec<TabKey> = order
+        .iter()
+        .filter(|key| chips.contains(key))
+        .cloned()
+        .collect();
+    chips.retain(|key| !ordered.contains(key));
+    ordered.extend(chips);
+    ordered
+}
+
+fn placed_last(mut order: Vec<TabKey>, key: TabKey) -> Vec<TabKey> {
+    order.retain(|candidate| *candidate != key);
+    order.push(key);
+    order
+}
+
+/// The tab beside `closing` on the left, or on the right when it was the
+/// first: the chip the eye is already next to.
+fn neighbour(tabs: &[Tab], closing: Tab) -> Option<Tab> {
+    let at = tabs.iter().position(|tab| *tab == closing)?;
+    at.checked_sub(1)
+        .and_then(|left| tabs.get(left))
+        .or(tabs.get(at + 1))
+        .copied()
+}
+
+pub(crate) fn close_target(active: Tab, open_query: Option<&str>) -> CloseTarget {
     match (active, open_query) {
-        (Tab::Object(id), _) => Some(CloseTarget::Object(id)),
-        (Tab::Query(_), Some(name)) => Some(CloseTarget::SavedQuery(name.to_string())),
-        (Tab::Query(id), None) => (unsaved > 1).then_some(CloseTarget::Buffer(id)),
+        (Tab::Object(id), _) => CloseTarget::Object(id),
+        (Tab::Query(_), Some(name)) => CloseTarget::SavedQuery(name.to_string()),
+        (Tab::Query(id), None) => CloseTarget::Buffer(id),
     }
 }
 
@@ -959,6 +1061,14 @@ pub(crate) fn matching_tab<'a>(
 /// What the catalog says a relation is. The only authority on it: a stored
 /// tab's kind is a cache of this, and can be a default rather than a kind.
 pub(crate) fn relation_kind(catalog: &Catalog, schema: &str, name: &str) -> Option<RelationKind> {
+    catalog_relation(catalog, schema, name).map(|relation| relation.kind)
+}
+
+pub(crate) fn catalog_relation<'a>(
+    catalog: &'a Catalog,
+    schema: &str,
+    name: &str,
+) -> Option<&'a Relation> {
     catalog
         .schemas
         .iter()
@@ -966,7 +1076,6 @@ pub(crate) fn relation_kind(catalog: &Catalog, schema: &str, name: &str) -> Opti
         .relations
         .iter()
         .find(|relation| relation.name == name)
-        .map(|relation| relation.kind)
 }
 
 /// A routine's name carries its argument types, because a schema can hold
@@ -975,6 +1084,10 @@ pub(crate) fn routine_name(routine: &Routine) -> String {
     format!("{}({})", routine.name, routine.identity_arguments)
 }
 
+// One per open tab, and a routine tab is the rarity: boxing the relation's
+// fields would put an indirection on every one of them to save a few hundred
+// bytes per tab.
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum ObjectBody {
     /// An opened relation: its rows, full height, with the relation's
     /// definition behind the Structure toggle (spec §3.2).
@@ -1017,10 +1130,14 @@ pub(crate) enum ObjectBody {
         /// change of sort or limit puts it back to zero, because a window into
         /// an ordering that no longer exists is not a page of anything.
         offset: usize,
-        /// Whether the rows on screen came off disk rather than from the
-        /// server. Refreshed on the tab's first activation and cleared there,
-        /// not at startup: a session of restored tabs would otherwise open by
-        /// firing one query per tab at a database nobody has looked at yet.
+        /// Whether the rows on screen are owed a refresh that keeps them on
+        /// screen until it lands: rows that came off disk or over a connection
+        /// since replaced, which are refreshed on the tab's next activation
+        /// rather than at startup or reconnect -- a session of restored tabs
+        /// would otherwise open by firing one query per tab at a database
+        /// nobody has looked at yet -- and rows a refresh has just been asked
+        /// for. Spent by the run that refreshes them, or by the refusal of one
+        /// that never could.
         stale: bool,
         /// Whether this tab's snapshot has been looked for yet. See
         /// [`QueryTab::hydrated`].
@@ -1031,8 +1148,63 @@ pub(crate) enum ObjectBody {
         /// The row-inspector split's state, per tab. See
         /// [`QueryTab::row_panel_split`].
         row_panel_split: Entity<ResizableState>,
+        /// `COUNT(*)` under the current `filter`, run only when the user asks:
+        /// on a large table it is a full scan holding the connection.
+        count: RowCount,
     },
     Routine(Routine),
+}
+
+/// A relation's row count, each state carrying the filter it was asked under so
+/// that an answer for an older filter is never shown under a newer one.
+pub(crate) enum RowCount {
+    Unasked,
+    /// In flight. `started` tells this run's answer from an earlier one's, and
+    /// `cancelling` says a Cancel has gone out, as `QueryState::Running`'s does.
+    Counting {
+        filter: String,
+        started: std::time::Instant,
+        cancel: CancelToken,
+        cancelling: bool,
+    },
+    Counted(String, u64),
+}
+
+impl RowCount {
+    pub(crate) fn answers(&self, filter: &str) -> bool {
+        match self {
+            Self::Unasked => false,
+            Self::Counting { filter: asked, .. } | Self::Counted(asked, _) => asked == filter,
+        }
+    }
+}
+
+/// What the status bar says a relation tab's relation holds, or `None` to leave
+/// it to the rows on screen: a count the user asked for under the current
+/// filter, else the catalog's estimate for an unfiltered tab.
+///
+/// No estimate when the first page came back short (`whole`), since that page
+/// is the whole relation and its own readout is exact; and none of zero unless
+/// it is `exact`, because zero is what a table never analyzed reads as on
+/// several engines, and claiming an empty table is the misleading way to be
+/// wrong.
+pub(crate) fn relation_rows(
+    count: &RowCount,
+    filter: &str,
+    estimate: Option<u64>,
+    exact: bool,
+    whole: bool,
+) -> Option<String> {
+    if let RowCount::Counted(asked, rows) = count
+        && asked == filter
+    {
+        return Some(row_readout(*rows as usize, *rows as usize));
+    }
+    let rows = estimate.filter(|_| filter.trim().is_empty() && !whole)? as usize;
+    match exact {
+        true => Some(row_readout(rows, rows)),
+        false => (rows > 0).then(|| format!("\u{2248}{}", row_readout(rows, rows))),
+    }
 }
 
 pub(crate) enum StructureState {
@@ -1215,6 +1387,14 @@ pub(crate) fn next_query_id(stored: u64, tabs: &[store::StoredQueryTab]) -> u64 
     stored.max(tabs.iter().map(|tab| tab.id + 1).max().unwrap_or(0))
 }
 
+/// Whether the rows on screen are only waiting to be replaced. A relation
+/// keeps its rows on screen while it is refreshed, and the result replaces the
+/// grid wholesale, edits staged on it included. A query tab's run blanks its
+/// grid first, but for an `EXPLAIN`, which never touches it.
+pub(crate) fn refreshing(active: Tab, query: Option<&QueryState>) -> bool {
+    matches!(active, Tab::Object(_)) && matches!(query, Some(QueryState::Running { .. }))
+}
+
 pub(crate) fn result_pane_is_expanded(query: &QueryState) -> bool {
     !matches!(query, QueryState::Idle)
 }
@@ -1223,6 +1403,77 @@ pub(crate) fn result_pane_is_expanded(query: &QueryState) -> bool {
 mod tests {
     use super::*;
     use crate::sql;
+
+    #[test]
+    fn a_scroll_scope_tells_apart_tabs_that_share_an_id() {
+        // next_query_id and next_object_id each count from zero per profile,
+        // so a query tab and an object tab in the same profile -- or the same
+        // kind of tab in two profiles -- can share a bare id.
+        assert_ne!(
+            Tab::Query(1).scroll_scope("a"),
+            Tab::Object(1).scroll_scope("a")
+        );
+        assert_ne!(
+            Tab::Query(1).scroll_scope("a"),
+            Tab::Query(1).scroll_scope("b")
+        );
+        assert_eq!(
+            Tab::Query(1).scroll_scope("a"),
+            Tab::Query(1).scroll_scope("a")
+        );
+    }
+
+    #[test]
+    fn a_count_answers_only_the_filter_it_was_asked_under() {
+        let count = RowCount::Counted("id > 3".into(), 40);
+        assert!(count.answers("id > 3"));
+        assert!(!count.answers(""));
+        assert!(!RowCount::Unasked.answers(""));
+        let counting = RowCount::Counting {
+            filter: String::new(),
+            started: std::time::Instant::now(),
+            cancel: CancelToken::default(),
+            cancelling: false,
+        };
+        assert!(counting.answers(""));
+        assert_eq!(relation_rows(&counting, "", None, false, false), None);
+    }
+
+    #[test]
+    fn the_status_bar_shows_a_count_over_an_estimate_and_neither_when_unsure() {
+        let unasked = RowCount::Unasked;
+        let counted = RowCount::Counted("id > 3".into(), 1_234);
+
+        assert_eq!(
+            relation_rows(&unasked, "", Some(1_000_000), false, false).as_deref(),
+            Some("\u{2248}1,000,000 rows")
+        );
+        // Snowflake's count is the table's, not a sample's.
+        assert_eq!(
+            relation_rows(&unasked, "", Some(1_000_000), true, false).as_deref(),
+            Some("1,000,000 rows")
+        );
+        assert_eq!(
+            relation_rows(&counted, "id > 3", Some(1_000_000), false, false).as_deref(),
+            Some("1,234 rows")
+        );
+        // An estimate is of the whole table, so it says nothing under a filter,
+        // and a count asked under another filter says nothing under this one.
+        assert_eq!(
+            relation_rows(&unasked, "id > 3", Some(9), false, false),
+            None
+        );
+        assert_eq!(relation_rows(&counted, "id > 4", None, false, false), None);
+        // A never-analyzed table's zero, and a short first page whose own
+        // readout is already exact.
+        assert_eq!(relation_rows(&unasked, "", Some(0), false, false), None);
+        assert_eq!(
+            relation_rows(&unasked, "", Some(0), true, false).as_deref(),
+            Some("0 rows")
+        );
+        assert_eq!(relation_rows(&unasked, "", Some(900), false, true), None);
+        assert_eq!(relation_rows(&unasked, "", None, false, false), None);
+    }
 
     #[test]
     fn one_relation_and_one_filter_is_one_tab() {
@@ -1326,31 +1577,93 @@ mod tests {
 
     #[test]
     fn only_the_tab_that_is_a_file_is_asked_about_before_it_closes() {
-        let saved = |name: &str| Some(CloseTarget::SavedQuery(name.to_string()));
+        let saved = |name: &str| CloseTarget::SavedQuery(name.to_string());
 
-        assert_eq!(
-            close_target(Tab::Object(3), None, 1),
-            Some(CloseTarget::Object(3))
-        );
-        assert_eq!(
-            close_target(Tab::Query(0), Some("daily"), 1),
-            saved("daily")
-        );
-        // A profile always has somewhere to write, so the last unsaved buffer
-        // has nothing for `cmd+w` to close and nothing to ask about.
-        assert_eq!(close_target(Tab::Query(0), None, 1), None);
-        // One of several, though, is a scratch pad someone is done with: it
-        // goes without a question, the way an unnamed buffer does everywhere.
-        assert_eq!(
-            close_target(Tab::Query(7), None, 2),
-            Some(CloseTarget::Buffer(7))
-        );
+        assert_eq!(close_target(Tab::Object(3), None), CloseTarget::Object(3));
+        assert_eq!(close_target(Tab::Query(0), Some("daily")), saved("daily"));
+        // Any unsaved buffer, the last one too, is a scratch pad someone is
+        // done with: it goes without a question, the way an unnamed buffer
+        // does everywhere.
+        assert_eq!(close_target(Tab::Query(7), None), CloseTarget::Buffer(7));
         // What the query tab happens to be holding says nothing about an
         // object tab, which is the one in front.
         assert_eq!(
-            close_target(Tab::Object(3), Some("daily"), 2),
-            Some(CloseTarget::Object(3))
+            close_target(Tab::Object(3), Some("daily")),
+            CloseTarget::Object(3)
         );
+    }
+
+    #[test]
+    fn a_new_tab_opens_at_the_right_end_of_the_strip_as_drawn() {
+        let restored = vec![
+            TabKey::Unsaved(0),
+            TabKey::Saved("daily".into()),
+            TabKey::Object(0),
+        ];
+        // Nothing has been dragged, so the restored chips are in no order but
+        // the default one -- which files a new buffer beside the old one.
+        let mut chips = restored.clone();
+        chips.insert(1, TabKey::Unsaved(1));
+        let order = placed_last(strip_order(chips.clone(), &[]), TabKey::Unsaved(1));
+        assert_eq!(
+            strip_order(chips.clone(), &order),
+            [restored.clone(), vec![TabKey::Unsaved(1)]].concat()
+        );
+
+        // And the next one, an object, lands after that.
+        chips.push(TabKey::Object(1));
+        let order = placed_last(strip_order(chips.clone(), &order), TabKey::Object(1));
+        assert_eq!(
+            strip_order(chips, &order),
+            [restored, vec![TabKey::Unsaved(1), TabKey::Object(1)]].concat()
+        );
+    }
+
+    #[test]
+    fn a_dragged_order_survives_chips_it_does_not_mention() {
+        let chips = vec![TabKey::Unsaved(0), TabKey::Unsaved(1), TabKey::Object(0)];
+        let dragged = [TabKey::Object(0), TabKey::Unsaved(5), TabKey::Unsaved(0)];
+        // A key whose tab has gone is skipped, and a chip the order does not
+        // name follows it.
+        assert_eq!(
+            strip_order(chips, &dragged),
+            [TabKey::Object(0), TabKey::Unsaved(0), TabKey::Unsaved(1)]
+        );
+    }
+
+    #[test]
+    fn a_closed_tab_hands_the_front_to_its_neighbour_in_the_strip() {
+        let strip = [Tab::Query(0), Tab::Object(3), Tab::Query(7)];
+        assert_eq!(neighbour(&strip, Tab::Object(3)), Some(Tab::Query(0)));
+        assert_eq!(neighbour(&strip, Tab::Query(7)), Some(Tab::Object(3)));
+        // The first has nothing on its left.
+        assert_eq!(neighbour(&strip, Tab::Query(0)), Some(Tab::Object(3)));
+        // The last of all leaves nothing, and a tab not in the strip names no
+        // neighbour.
+        assert_eq!(neighbour(&[Tab::Query(0)], Tab::Query(0)), None);
+        assert_eq!(neighbour(&strip, Tab::Object(9)), None);
+    }
+
+    #[test]
+    fn only_a_relation_running_with_rows_kept_holds_them_read_only() {
+        let running = QueryState::Running {
+            started: std::time::Instant::now(),
+            cancelling: None,
+            cancel: CancelToken::default(),
+        };
+        let landed = QueryState::Complete {
+            rows: 1,
+            bytes: 0,
+            elapsed: std::time::Duration::ZERO,
+            rows_affected: None,
+        };
+        assert!(refreshing(Tab::Object(3), Some(&running)));
+        assert!(!refreshing(Tab::Object(3), Some(&landed)));
+        // A query tab running over rows is running an `EXPLAIN`, which leaves
+        // them where they are.
+        assert!(!refreshing(Tab::Query(0), Some(&running)));
+        // A routine runs nothing.
+        assert!(!refreshing(Tab::Object(3), None));
     }
 
     #[test]

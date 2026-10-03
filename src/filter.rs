@@ -566,6 +566,20 @@ pub(crate) fn foreign_key_filter(key: &db::ForeignKey, value: Option<&str>) -> O
     })
 }
 
+/// The filter bar an inbound reference writes: the referencing column against
+/// the value of the key the cell held. `None` for a NULL, for the reason
+/// [`foreign_key_filter`] gives.
+pub(crate) fn reference_filter(
+    reference: &db::Reference,
+    value: Option<&str>,
+) -> Option<FilterBar> {
+    Some(FilterBar {
+        column: Some(reference.column.clone()),
+        value: value?.to_string(),
+        ..FilterBar::default()
+    })
+}
+
 /// A bar on its way to disk. The operator and the joiner travel as names and
 /// the raw flag as itself, because a `WHERE` is never read back into controls.
 pub(crate) fn stored_filter(bar: &FilterBar) -> store::StoredFilter {
@@ -1177,6 +1191,24 @@ mod tests {
             followed(Engine::MySql, &account_key(), Some(r"a\b")).as_deref(),
             Some(r"`id` = 'a\\b'")
         );
+    }
+
+    #[test]
+    fn a_reference_filters_the_referencing_column_and_a_null_has_none() {
+        let reference = db::Reference {
+            schema: "public".into(),
+            table: "orders".into(),
+            column: "account_id".into(),
+            referenced_column: "id".into(),
+        };
+        let bar = reference_filter(&reference, Some("it's")).expect("a value to filter by");
+        let filter = derived_filter(Engine::Postgres, &[bar], &[]);
+
+        assert_eq!(filter, r#""account_id" = 'it''s'"#);
+        assert!(crate::sql::is_generated_select(&format!(
+            "SELECT * FROM t WHERE {filter}"
+        )));
+        assert_eq!(reference_filter(&reference, None), None);
     }
 
     #[test]

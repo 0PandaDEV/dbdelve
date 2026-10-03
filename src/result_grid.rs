@@ -1,23 +1,27 @@
+use std::rc::Rc;
+
 use gpui::{
-    App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
-    MouseButton, ParentElement, SharedString, StatefulInteractiveElement, Styled, Window, div,
-    prelude::FluentBuilder, px,
+    App, AppContext, Context, Div, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
+    MouseButton, ParentElement, Pixels, Point, SharedString, Stateful, StatefulInteractiveElement,
+    Styled, Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
     InteractiveElementExt,
     input::{Input, InputState},
-    menu::PopupMenu,
+    menu::{PopupMenu, PopupMenuItem},
     table::TableEvent,
     table::{Column, TableDelegate, TableState},
 };
 
 use crate::{
-    Workspace,
+    ShowReferences, Workspace,
     db::{self, EditTarget, QueryResult},
+    export::{self, RowsAs},
     icons::icon,
     sql::Mode,
     store::{GRID_ROW_CAP, StoredGrid, captured_at},
-    theme::{layout, theme},
+    theme::{ConnectionColor, color::Srgb, layout, theme},
+    ui::{Control, Tone, icon_button},
 };
 
 /// ponytail: a column is a few hundred pixels wide, so shaping more than this is
@@ -40,25 +44,33 @@ pub const NULL_LABEL: SharedString = SharedString::new_static("NULL");
 /// cell that painted one of them for the other would be lying about the write.
 const DEFAULT_LABEL: SharedString = SharedString::new_static("DEFAULT");
 
-/// The advance width of one character in the grid's monospaced face.
-///
-/// ponytail: a character count times one advance, not real text measurement --
-/// `TableDelegate` is asked for a column width long before there is a text
-/// system to measure with. It is exact for ASCII, which is what column names
-/// and most values are, and a column of wide glyphs is one drag from right.
-const CHAR_WIDTH: f32 = 7.8;
+/// Where every column starts and the narrowest a drag can leave it.
+const MIN_COLUMN_WIDTH: f32 = 180.0;
 
-/// Room for the sort control that rides at the trailing edge of a header, so a
-/// column sized to its own name still shows the whole name.
-const HEADER_CONTROL_WIDTH: f32 = 20.0;
+/// The table's column 0 is the row-number gutter, which is not part of the
+/// result: every index the library hands the delegate is one past the result's
+/// own, and every index the delegate hands back is put one past it.
+const GUTTER: usize = 1;
+/// One digit's advance in the grid's monospaced face, near enough to size the
+/// row-number column to its widest number.
+const DIGIT_WIDTH: f32 = 8.0;
+/// The empty strip the library leaves after the last column, sized here
+/// rather than by the library's own `w_3` so a row's width can count it.
+const TRAILING_GAP: f32 = 12.0;
 
-const MIN_COLUMN_WIDTH: f32 = 56.0;
-const MAX_COLUMN_WIDTH: f32 = 480.0;
+/// A gutter cell: the row number's box, evenly padded. It draws no divider of
+/// its own -- the library closes a fixed column with one.
+fn gutter_cell() -> Div {
+    div()
+        .flex()
+        .items_center()
+        .justify_center()
+        .px(px(layout::SPACE_SM))
+}
 
-/// ponytail: the widest of the first rows, not of every row. A column width is
-/// a first impression and a drag corrects a wrong one, so measuring 5,000 rows
-/// of geometry to place a column is time the user waits through for nothing.
-const WIDTH_SAMPLE_ROWS: usize = 200;
+/// The relations pointing at a column: an index into the structure's
+/// `referenced_by` and the label to show for it.
+type ReferenceMenu = Rc<Vec<(usize, SharedString)>>;
 
 /// A row's schema and table, and its primary key as column/value pairs — what a
 /// one-row `DELETE` needs and nothing else.
@@ -126,6 +138,28 @@ pub struct ResultGrid {
     /// every frame under a no-allocation rule, and a group named there would be
     /// a `format!` per cell per frame.
     follow_groups: Vec<SharedString>,
+    /// For each column another relation points at, the menu of those relations:
+    /// an index into the structure's `referenced_by` and the label to show.
+    /// Built where the references are marked, for the reason `follow_groups`
+    /// is, and shared into each cell's menu.
+    reference_menus: Vec<(usize, ReferenceMenu)>,
+    /// The result columns that make up the relation's primary key, marked
+    /// where the structure arrives, by name for the reason `foreign_keys` is.
+    primary_key: Vec<usize>,
+    /// The rows picked out by clicks in the gutter or cells, for a multi-row copy.
+    /// Separate from `active`, which is the single cell the keyboard and the
+    /// single-cell gestures act on.
+    selected_rows: std::collections::BTreeSet<usize>,
+    /// The row a plain click lands on, which a shift-click
+    /// extends a range from.
+    row_selection_anchor: Option<usize>,
+    /// A row the pointer has just selected itself. Telling the library about
+    /// it echoes back as `TableEvent::SelectRow`, which must not collapse the
+    /// range or toggle the click just made the way a keyboard move does.
+    pointer_row: Option<usize>,
+    /// Where the pointer last went down on a reference arrow, for the popup it
+    /// opens to hang from.
+    reference_anchor: Option<Point<Pixels>>,
     /// The connection's mode, cached because `editable` is asked by the grid's
     /// own double-click handler, which has no route back to the profile.
     /// `Workspace::set_mode` is the only thing that writes it after construction.
@@ -196,12 +230,23 @@ impl ResultGrid {
     }
 
     pub fn new(result: QueryResult, mode: Mode) -> Self {
+        let numeric: Vec<bool> = result
+            .columns
+            .iter()
+            .map(|column| column.data_type.as_deref().is_some_and(db::is_numeric_type))
+            .collect();
         let display: Vec<Vec<Option<SharedString>>> = result
             .rows
             .iter()
             .map(|row| {
                 row.iter()
-                    .map(|cell| cell.as_deref().map(|value| clip(value).into()))
+                    .enumerate()
+                    .map(|(col, cell)| {
+                        cell.as_deref().map(|value| match numeric.get(col) {
+                            Some(true) => clip(&grouped_digits(value)).into(),
+                            _ => clip(value).into(),
+                        })
+                    })
                     .collect()
             })
             .collect();
@@ -211,7 +256,8 @@ impl ResultGrid {
             .enumerate()
             .map(|(index, column)| {
                 Column::new(index.to_string(), column.name.clone())
-                    .width(fitted_width(&column.name, &display, index))
+                    .width(px(MIN_COLUMN_WIDTH))
+                    .min_width(px(MIN_COLUMN_WIDTH))
                     .resizable(true)
                     .movable(false)
                     // The cell padding is dbdelve's, applied in `render_td` and
@@ -237,6 +283,12 @@ impl ResultGrid {
             not_nullable: Vec::new(),
             has_default: Vec::new(),
             follow_groups: Vec::new(),
+            reference_menus: Vec::new(),
+            primary_key: Vec::new(),
+            selected_rows: std::collections::BTreeSet::new(),
+            row_selection_anchor: None,
+            pointer_row: None,
+            reference_anchor: None,
             mode,
             engine: db::Engine::default(),
             focus: None,
@@ -282,14 +334,12 @@ impl ResultGrid {
             mode,
         );
 
-        // Over the widths `new` just fitted, which measured the capped rows
-        // rather than the layout the user was actually looking at.
-        for (column, width) in grid.columns.iter_mut().zip(&stored.widths) {
-            column.width = px(*width);
-        }
         // The headers say what the rows are ordered by. `sortable` stays false:
         // whether a header click can do anything is a fact about the statement,
         // and a snapshot is not a statement -- the next run settles it.
+        for (column, width) in grid.columns.iter_mut().zip(&stored.widths) {
+            column.width = px(width.max(MIN_COLUMN_WIDTH));
+        }
         grid.sort = stored.sort.clone();
         let (rows, columns) = (grid.result.rows.len(), grid.columns.len());
         // A snapshot is capped, so the cell that was active may be past the
@@ -379,8 +429,7 @@ impl ResultGrid {
     }
 
     /// The widths the table is drawing, which is where a drag lands: the
-    /// library resizes its own copy of the columns, so without this a snapshot
-    /// would keep the width every column was first fitted to.
+    /// library resizes its own copy of the columns.
     pub fn set_widths(&mut self, widths: &[gpui::Pixels]) {
         for (column, width) in self.columns.iter_mut().zip(widths) {
             column.width = *width;
@@ -389,6 +438,31 @@ impl ResultGrid {
 
     pub fn columns(&self) -> &[crate::db::Column] {
         &self.result.columns
+    }
+
+    pub fn layout(&self) -> (Vec<String>, Vec<gpui::Pixels>) {
+        (
+            self.result
+                .columns
+                .iter()
+                .map(|column| column.name.clone())
+                .collect(),
+            self.columns.iter().map(|column| column.width).collect(),
+        )
+    }
+
+    pub fn with_layout(mut self, names: &[String], widths: &[gpui::Pixels]) -> Self {
+        let same = self.result.columns.len() == names.len()
+            && self
+                .result
+                .columns
+                .iter()
+                .zip(names)
+                .all(|(column, name)| column.name == *name);
+        if same {
+            self.set_widths(widths);
+        }
+        self
     }
 
     /// Record which of this result's columns carry a foreign key, given the
@@ -406,6 +480,117 @@ impl ResultGrid {
             .iter()
             .map(|col| SharedString::from(format!("follow-key-{col}")))
             .collect();
+    }
+
+    /// Record which of this result's columns other relations point at, given
+    /// the references from the structure and the schema the relation lives in.
+    /// Matched by name for the reason [`ResultGrid::mark_foreign_keys`] is. A
+    /// reference is labelled `table.column`, with the schema in front when it is
+    /// not this relation's own.
+    pub fn mark_references(&mut self, references: &[db::Reference], schema: &str) {
+        self.reference_menus = self
+            .result
+            .columns
+            .iter()
+            .enumerate()
+            .filter_map(|(col, column)| {
+                let menu: Vec<(usize, SharedString)> = references
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, reference)| reference.referenced_column == column.name)
+                    .map(|(index, reference)| {
+                        let label = match reference.schema == schema {
+                            true => format!("{}.{}", reference.table, reference.column),
+                            false => format!(
+                                "{}.{}.{}",
+                                reference.schema, reference.table, reference.column
+                            ),
+                        };
+                        (index, SharedString::from(label))
+                    })
+                    .collect();
+                (!menu.is_empty()).then(|| (col, Rc::new(menu)))
+            })
+            .collect();
+    }
+
+    /// Wide enough for the last row's number and no wider, padded the same on
+    /// both sides.
+    fn gutter_width(&self) -> f32 {
+        let digits = self.result.rows.len().max(1).to_string().len() as f32;
+        digits * DIGIT_WIDTH + 2.0 * layout::SPACE_SM
+    }
+
+    /// Cells and the gutter share one anchor, so Shift can be pressed after
+    /// the first click and a range can be extended from either surface.
+    fn click_row(&mut self, row: usize, shift: bool, toggle: bool) {
+        if shift {
+            let anchor = *self.row_selection_anchor.get_or_insert(row);
+            let (start, end) = (anchor.min(row), anchor.max(row));
+            if !toggle {
+                self.selected_rows.clear();
+            }
+            self.selected_rows.extend(start..=end);
+            return;
+        }
+        if toggle {
+            if !self.selected_rows.remove(&row) {
+                self.selected_rows.insert(row);
+            }
+            self.row_selection_anchor = Some(row);
+            return;
+        }
+        self.selected_rows.clear();
+        self.selected_rows.insert(row);
+        self.row_selection_anchor = Some(row);
+    }
+
+    /// What a right click does to the selection: a row already in it is left
+    /// untouched, so the menu acts on the selection the user made; a row
+    /// outside it becomes the whole selection, the way a plain left click
+    /// would -- so "Copy Row(s) As" never copies a selection the click
+    /// landed nowhere near.
+    fn right_click_row(&mut self, row: usize) {
+        if !self.selected_rows.contains(&row) {
+            self.click_row(row, false, false);
+        }
+    }
+
+    pub fn clear_row_selection(&mut self) {
+        self.selected_rows.clear();
+        self.row_selection_anchor = None;
+    }
+
+    pub fn mark_primary_key(&mut self, columns: &[String]) {
+        self.primary_key = self.columns_named(columns);
+    }
+
+    fn key_icon(&self, col: usize, color: Srgb) -> Option<impl IntoElement> {
+        self.primary_key.contains(&col).then(|| {
+            icon(icon::PRIMARY_KEY)
+                .size(px(12.))
+                .flex_shrink_0()
+                .text_color(color)
+        })
+    }
+
+    pub fn reference_anchor(&self) -> Option<Point<Pixels>> {
+        self.reference_anchor
+    }
+
+    /// The relations pointing at this column, as an index into the structure's
+    /// `referenced_by` and the label to show for each.
+    pub fn reference_choices(&self, col: usize) -> Vec<(usize, SharedString)> {
+        self.reference_menu(col)
+            .map(|menu| menu.as_ref().clone())
+            .unwrap_or_default()
+    }
+
+    fn reference_menu(&self, col: usize) -> Option<&ReferenceMenu> {
+        self.reference_menus
+            .iter()
+            .find(|(column, _)| *column == col)
+            .map(|(_, menu)| menu)
     }
 
     /// Record which of this result's columns the server declared `NOT NULL`
@@ -499,6 +684,42 @@ impl ResultGrid {
         &self.result
     }
 
+    /// The selected rows as text in `kind`'s shape: what "Copy Rows As" puts on
+    /// the clipboard. The whole values, not the clipped ones the cells paint,
+    /// in row order. Every row of a multi-row selection, or else the active
+    /// cell's row alone -- so the entry works exactly as it did before there
+    /// was a selection to make plural.
+    pub fn rows_as(&self, kind: RowsAs) -> Option<String> {
+        let rows = self.selected_row_indices();
+        if rows.is_empty() {
+            return None;
+        }
+        let result = QueryResult {
+            columns: self.result.columns.clone(),
+            rows: rows
+                .iter()
+                .filter_map(|&row| self.result.rows.get(row).cloned())
+                .collect(),
+            ..QueryResult::default()
+        };
+        Some(export::render_rows_as(
+            kind,
+            self.engine,
+            self.result.edit.as_ref(),
+            &result,
+        ))
+    }
+
+    /// The rows "Copy Rows As" and the row-number gutter's own highlight agree
+    /// on: every row the user has selected there, in order, or the active
+    /// cell's row alone when nothing has been.
+    pub fn selected_row_indices(&self) -> Vec<usize> {
+        if self.row_selection_anchor.is_some() {
+            return self.selected_rows.iter().copied().collect();
+        }
+        self.active.map(|(row, _)| vec![row]).unwrap_or_default()
+    }
+
     /// The whole value behind the active cell, which is what `cmd+c` copies —
     /// not the clipped string the column had room for. `None` while an input is
     /// open, because there `cmd+c` is the input's own text selection, and on a
@@ -518,7 +739,16 @@ impl ResultGrid {
     /// The column is kept: moving down a column is not moving out of it. With
     /// nothing active yet the first column is the origin, because a keystroke
     /// on a grid has to leave the ring somewhere readable.
+    ///
+    /// Also folds into the row selection, exactly as a plain click on this
+    /// row would: without it, arrow-key movement would leave a stale
+    /// selection behind for "Copy Row(s) As" to copy and the gutter to tint,
+    /// while the ring itself moved on. Not for the echo of a pointer
+    /// selection, which has already chosen the rows.
     pub fn select_row(&mut self, row: usize) {
+        if self.pointer_row.take() != Some(row) {
+            self.click_row(row, false, false);
+        }
         self.set_active(row, self.active.map_or(0, |(_, col)| col));
     }
 
@@ -579,16 +809,6 @@ impl ResultGrid {
                 .get(col)
                 .and_then(|column| column.data_type.as_deref())
                 .is_some_and(|data_type| self.engine.is_binary_type(data_type))
-    }
-
-    /// Whether a column's values want their last digit lined up with the one
-    /// above — see [`db::is_numeric_type`].
-    ///
-    /// Never a foreign key, whatever it is typed as: that column carries the
-    /// follow affordance at its trailing edge, and a number flushed against it
-    /// would sit under the icon.
-    fn is_numeric(&self, col: usize) -> bool {
-        !self.follows_a_key(col) && self.is_numeric_column(col)
     }
 
     fn is_numeric_column(&self, col: usize) -> bool {
@@ -697,8 +917,21 @@ impl ResultGrid {
         }
 
         // Bytes, not characters: it only has to be cheap and never under-count,
-        // and `clip` is a no-op on anything that turns out to fit.
+        // and `clip` is a no-op on anything that turns out to fit. Grouped the
+        // same way a fetched value is, on the same column check `display`
+        // uses, so a pending edit does not stand out from the rows around it
+        // by losing its separators -- the value staged for the `UPDATE` stays
+        // exactly as typed, since this is what the cell paints and nothing else.
         let shown = match &value {
+            NewValue::Value(value) if self.is_numeric_column(col) => {
+                let grouped = grouped_digits(value);
+                Some(
+                    match grouped.len() > CELL_DISPLAY_LIMIT || grouped.contains(['\n', '\r']) {
+                        true => SharedString::from(clip(&grouped)),
+                        false => SharedString::from(grouped),
+                    },
+                )
+            }
             NewValue::Value(value) => Some(
                 match value.len() > CELL_DISPLAY_LIMIT || value.contains(['\n', '\r']) {
                     true => SharedString::from(clip(value)),
@@ -959,7 +1192,7 @@ fn commit_and_step(
     table.delegate_mut().begin_edit(to.0, to.1);
     match step {
         Step::Rows(_) => table.set_selected_row(to.0, cx),
-        Step::Cols(_) => table.set_selected_col(to.1, cx),
+        Step::Cols(_) => table.set_selected_col(to.1 + GUTTER, cx),
     }
 }
 
@@ -978,27 +1211,29 @@ fn step_target(
     Some(to)
 }
 
-/// A column wide enough for what it holds. One fixed width for every column
-/// wastes the screen on a boolean and hides most of a UUID; a table's own
-/// shape is the only thing that knows how wide its columns want to be.
-fn fitted_width(name: &str, display: &[Vec<Option<SharedString>>], col_ix: usize) -> gpui::Pixels {
-    let widest = display
-        .iter()
-        .take(WIDTH_SAMPLE_ROWS)
-        .filter_map(|row| row.get(col_ix))
-        // A NULL still paints a word, so an all-NULL column is not zero wide.
-        .map(|cell| {
-            cell.as_ref()
-                .map_or(NULL_LABEL.len(), |value| value.chars().count())
-        })
-        .max()
-        .unwrap_or(0);
-
-    let values = widest as f32 * CHAR_WIDTH;
-    let header = name.chars().count() as f32 * CHAR_WIDTH + HEADER_CONTROL_WIDTH;
-    let padding = 2.0 * layout::SPACE_SM;
-
-    px((values.max(header) + padding).clamp(MIN_COLUMN_WIDTH, MAX_COLUMN_WIDTH))
+/// A plain number with its integer digits in threes, `1723858791` as
+/// `1,723,858,791`, as the status bar groups its counts. Display only: `display` is what the cell paints and the
+/// copy, the inspector and every statement read the value as fetched. Anything
+/// that is not a bare decimal -- an exponent, a currency sign -- is left alone.
+fn grouped_digits(value: &str) -> String {
+    let (sign, unsigned) = match value.strip_prefix(['-', '+']) {
+        Some(rest) => (&value[..1], rest),
+        None => ("", value),
+    };
+    let (whole, fraction) = match unsigned.split_once('.') {
+        Some((whole, fraction)) => (whole, Some(fraction)),
+        None => (unsigned, None),
+    };
+    let digits = |part: &str| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit());
+    if !digits(whole) || fraction.is_some_and(|fraction| !digits(fraction)) || whole.len() <= 3 {
+        return value.to_string();
+    }
+    let mut grouped = format!("{sign}{}", crate::ui::group_digits(whole));
+    if let Some(fraction) = fraction {
+        grouped.push('.');
+        grouped.push_str(fraction);
+    }
+    grouped
 }
 
 /// What a cell paints: one line, cut to the display limit.
@@ -1096,18 +1331,216 @@ fn clip_to(value: &str, limit: usize) -> String {
 
 impl TableDelegate for ResultGrid {
     fn columns_count(&self, _: &App) -> usize {
-        self.columns.len()
+        self.columns.len() + GUTTER
     }
 
     fn rows_count(&self, _: &App) -> usize {
         self.result.rows.len()
     }
 
+    /// A wash across the row, for one the gutter has picked out. Painted here
+    /// rather than per cell, so it reaches the gutter's own padding too and
+    /// reads as one row rather than a strip of separately-tinted cells.
+    ///
+    /// A child rather than the row's own `bg`: the library wraps every row in
+    /// its own `.hover()`, which it skips only for its single `selected_row`,
+    /// not for the rest of a multi-row selection here. Anywhere else in that
+    /// selection, its hover style replaces the row's background outright,
+    /// turning the blue tint gray. A child paints above that background
+    /// regardless of which one the library chose, so the tint survives.
+    fn render_tr(
+        &mut self,
+        row_ix: usize,
+        _window: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) -> Stateful<Div> {
+        let t = *theme(cx);
+        // The library sizes every row `w_full` -- the table's whole width, not
+        // the columns actually in it -- so its border and hover wash run on
+        // past the last column to the edge of the screen over nothing. It
+        // refines that with the style returned here, so a cap here wins.
+        // A cap and not a width: each row scrolls its own cells sideways
+        // within its bounds, so a row as wide as its columns has nothing to
+        // scroll and the cells stay put while the header moves.
+        // Not a mask painted over the margin: on a glass theme a second
+        // `data_glass` stacks on the plane's own and the margin turns solid.
+        let content_width = self.gutter_width()
+            + self
+                .columns
+                .iter()
+                .map(|column| f32::from(column.width))
+                .sum::<f32>()
+            + TRAILING_GAP;
+        let row = div()
+            .id(("row", row_ix))
+            .relative()
+            .max_w(px(content_width));
+        if !self.selected_rows.contains(&row_ix) {
+            return row;
+        }
+        row.child(div().absolute().size_full().bg(t.selection))
+    }
+
+    fn render_last_empty_col(
+        &mut self,
+        _window: &mut Window,
+        _cx: &mut Context<TableState<Self>>,
+    ) -> impl IntoElement {
+        div().w(px(TRAILING_GAP)).h_full().flex_shrink_0()
+    }
+
     fn column(&self, col_ix: usize, _: &App) -> Column {
-        self.columns[col_ix].clone()
+        match col_ix.checked_sub(GUTTER) {
+            Some(col) => self.columns[col].clone(),
+            None => Column::new("row-number", "#")
+                .width(px(self.gutter_width()))
+                .resizable(false)
+                .movable(false)
+                .selectable(false)
+                .fixed_left()
+                .p_0(),
+        }
     }
 
     fn render_th(
+        &mut self,
+        col_ix: usize,
+        window: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) -> impl IntoElement {
+        match col_ix.checked_sub(GUTTER) {
+            Some(col) => self.data_th(col, window, cx).into_any_element(),
+            None => {
+                let faint = theme(cx).text_faint;
+                gutter_cell()
+                    .size_full()
+                    // The library reserves a sort icon's room on the right of
+                    // every header, which leaves this one off-centre unless
+                    // the left side reserves the same.
+                    .pl(px(layout::SPACE_SM)
+                        + gpui_component::Size::Medium.table_cell_padding().right)
+                    .text_size(px(layout::TEXT_SM))
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .text_color(faint)
+                    .child("#")
+                    .into_any_element()
+            }
+        }
+    }
+
+    fn render_td(
+        &mut self,
+        row_ix: usize,
+        col_ix: usize,
+        window: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) -> impl IntoElement {
+        match col_ix.checked_sub(GUTTER) {
+            Some(col) => self.data_td(row_ix, col, window, cx).into_any_element(),
+            None => {
+                let (faint, text, selected_bg) = {
+                    let t = theme(cx);
+                    (t.text_faint, t.text, t.selection)
+                };
+                let selected = self.selected_rows.contains(&row_ix);
+                gutter_cell()
+                    .id(("row-number", row_ix))
+                    .size_full()
+                    .when(selected, |cell| cell.bg(selected_bg))
+                    .text_color(if selected { text } else { faint })
+                    .child((row_ix + 1).to_string())
+                    // Left click only: a right click still opens the cell
+                    // menu the row's own cells offer, and a gutter with two
+                    // different rules for the two buttons would be a gutter
+                    // nobody could predict.
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |table, event: &gpui::MouseDownEvent, window, cx| {
+                            click_row(table, row_ix, event, window, cx);
+                        }),
+                    )
+                    .on_click(|_, _, cx| cx.stop_propagation())
+                    .into_any_element()
+            }
+        }
+    }
+
+    /// The mouse's way to the writes a cell input cannot express. An input
+    /// cannot be typed empty into a `NULL`, and neither the empty string nor
+    /// `DEFAULT` can be typed into the other two (spec §3) -- so the gesture is
+    /// this menu, which reaches the same actions the keystroke and the palette
+    /// reach.
+    ///
+    /// Flat rather than nested under "Set Value": a submenu has to be an
+    /// entity wired to its parent, and the delegate hook is handed a
+    /// `Context<TableState>` that cannot build one.
+    ///
+    /// Nothing at all without an active cell; an empty menu is not opened. A
+    /// cell that cannot be written still offers the copy, because copying is
+    /// not a write. A mode too low withholds nothing: the entry is offered and
+    /// the prompt is what answers it, the way the keystroke behaves.
+    fn context_menu(
+        &mut self,
+        _: usize,
+        menu: PopupMenu,
+        window: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) -> PopupMenu {
+        // The right click that opened this pinned the cell on its way past
+        // `render_td`, so the column the library never records is known here.
+        let Some((row, col)) = self.active else {
+            return menu;
+        };
+        let stages: Vec<(&str, Box<dyn gpui::Action>)> = match self.editable(row, col) {
+            false => Vec::new(),
+            true => [
+                self.offers_null(col)
+                    .then(|| ("Set Value to NULL", Box::new(crate::SetNull) as _)),
+                self.offers_empty(col)
+                    .then(|| ("Set Value to Empty", Box::new(crate::SetEmpty) as _)),
+                self.offers_default(col)
+                    .then(|| ("Set Value to Default", Box::new(crate::SetDefault) as _)),
+            ]
+            .into_iter()
+            .flatten()
+            .collect(),
+        };
+
+        // Built here rather than through `PopupMenu::submenu`, which wants the
+        // menu's own context and a delegate is handed the table's. The
+        // library wires the parent of a submenu added this way when it paints.
+        let focus = self.focus.clone();
+        let rows_as = PopupMenu::build(window, cx, move |submenu, _, _| {
+            RowsAs::ALL.into_iter().fold(
+                submenu.when_some(focus.clone(), PopupMenu::action_context),
+                |submenu, kind| {
+                    submenu
+                        .when(kind == RowsAs::Csv, PopupMenu::separator)
+                        .when(kind == RowsAs::Json, PopupMenu::separator)
+                        .menu(kind.label(), Box::new(crate::CopyRows { kind }))
+                },
+            )
+        });
+        // "Copy Row" is redundant beside this once it reads as one row: the
+        // submenu's own "Text" entry already puts the same TSV on the
+        // clipboard.
+        let rows_as_label = match self.selected_row_indices().len() {
+            1 => "Copy Row As",
+            _ => "Copy Rows As",
+        };
+        let menu = menu
+            .when_some(self.focus.clone(), PopupMenu::action_context)
+            .menu("Copy Cell", Box::new(crate::CopyCell))
+            .item(PopupMenuItem::submenu(rows_as_label, rows_as))
+            .when(!stages.is_empty(), PopupMenu::separator);
+        stages
+            .into_iter()
+            .fold(menu, |menu, (label, action)| menu.menu(label, action))
+    }
+}
+
+impl ResultGrid {
+    fn data_th(
         &mut self,
         col_ix: usize,
         _window: &mut Window,
@@ -1130,7 +1563,11 @@ impl TableDelegate for ResultGrid {
             // lives at its trailing edge.
             .flex_1()
             .min_w_0()
-            .px(px(layout::SPACE_SM))
+            // A body cell's text starts a border's width in from its padding,
+            // and a header name that did not would sit a pixel left of every
+            // value under it.
+            .pl(px(layout::SPACE_SM + 1.))
+            .pr(px(layout::SPACE_SM))
             .flex()
             .items_center()
             .gap(px(layout::SPACE_XS))
@@ -1145,121 +1582,94 @@ impl TableDelegate for ResultGrid {
             // survives being glanced at.
             .text_color(text);
 
-        base.child(
-            div()
-                .min_w_0()
-                .overflow_hidden()
-                .text_ellipsis()
-                // Against the values it names, not the edge of the cell.
-                .when(self.is_numeric(col_ix), |name| name.ml_auto())
-                .child(self.columns[col_ix].name.clone()),
-        )
-        .child(
-            div()
-                .ml_auto()
-                .flex_shrink_0()
-                .flex()
-                .items_center()
-                .gap(px(2.))
-                .map(|control| match key {
-                    Some((_, ascending)) => control.child(
-                        icon(match ascending {
-                            true => icon::SORT_UP,
-                            false => icon::SORT_DOWN,
-                        })
-                        .size(px(12.))
-                        .text_color(text),
-                    ),
-                    // Faint rather than absent: a header that shows nothing
-                    // until it is clicked does not read as clickable. And
-                    // absent rather than faint where a click would do
-                    // nothing, which is the same rule the other way round.
-                    None => control.children(
-                        self.sortable
-                            .then(|| icon(icon::SORTABLE).size(px(12.)).text_color(faint)),
-                    ),
-                })
-                // Only worth saying which key this is when there is more
-                // than one of them.
-                .children(key.filter(|_| self.sort.len() > 1).map(|(position, _)| {
-                    div()
-                        .text_size(px(layout::TEXT_XS))
-                        .text_color(muted)
-                        .child((position + 1).to_string())
-                })),
-        )
-        // The click goes to the workspace, which owns the statement: a sort
-        // is a change to the SQL and a re-run, not a reordering of rows the
-        // grid happens to be holding.
-        .on_click(cx.listener(move |_, _, window, cx| {
-            window.dispatch_action(Box::new(crate::SortColumn { column: col_ix }), cx);
-        }))
+        base.children(self.key_icon(col_ix, ConnectionColor::Yellow.swatch()))
+            .child(
+                div()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .child(self.columns[col_ix].name.clone()),
+            )
+            .children(
+                self.result
+                    .columns
+                    .get(col_ix)
+                    .and_then(|column| column.data_type.clone())
+                    .map(|data_type| {
+                        div()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .text_size(px(layout::TEXT_XS))
+                            .font_weight(gpui::FontWeight::NORMAL)
+                            .text_color(faint)
+                            .child(data_type.to_uppercase())
+                    }),
+            )
+            .child(
+                div()
+                    .ml_auto()
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .gap(px(2.))
+                    .map(|control| match key {
+                        Some((_, ascending)) => control.child(
+                            icon(match ascending {
+                                true => icon::SORT_UP,
+                                false => icon::SORT_DOWN,
+                            })
+                            .size(px(12.))
+                            .text_color(text),
+                        ),
+                        // Faint rather than absent: a header that shows nothing
+                        // until it is clicked does not read as clickable. And
+                        // absent rather than faint where a click would do
+                        // nothing, which is the same rule the other way round.
+                        None => control.children(
+                            self.sortable
+                                .then(|| icon(icon::SORTABLE).size(px(12.)).text_color(faint)),
+                        ),
+                    })
+                    // Only worth saying which key this is when there is more
+                    // than one of them.
+                    .children(key.filter(|_| self.sort.len() > 1).map(|(position, _)| {
+                        div()
+                            .text_size(px(layout::TEXT_XS))
+                            .text_color(muted)
+                            .child((position + 1).to_string())
+                    })),
+            )
+            // The click goes to the workspace, which owns the statement: a sort
+            // is a change to the SQL and a re-run, not a reordering of rows the
+            // grid happens to be holding.
+            .on_click(cx.listener(move |_, _, window, cx| {
+                window.dispatch_action(Box::new(crate::SortColumn { column: col_ix }), cx);
+            }))
     }
 
-    /// The mouse's way to the writes a cell input cannot express. An input
-    /// cannot be typed empty into a `NULL`, and neither the empty string nor
-    /// `DEFAULT` can be typed into the other two (spec §3) -- so the gesture is
-    /// this menu, which reaches the same actions the keystroke and the palette
-    /// reach.
-    ///
-    /// Flat rather than nested under "Set Value": a submenu has to be an
-    /// entity wired to its parent, and the delegate hook is handed a
-    /// `Context<TableState>` that cannot build one.
-    ///
-    /// Nothing at all without an active cell; an empty menu is not opened. A
-    /// cell that cannot be written still offers the copy, because copying is
-    /// not a write. A mode too low withholds nothing: the entry is offered and
-    /// the prompt is what answers it, the way the keystroke behaves.
-    fn context_menu(
-        &mut self,
-        _: usize,
-        menu: PopupMenu,
-        _: &mut Window,
-        _: &mut Context<TableState<Self>>,
-    ) -> PopupMenu {
-        // The right click that opened this pinned the cell on its way past
-        // `render_td`, so the column the library never records is known here.
-        let Some((row, col)) = self.active else {
-            return menu;
-        };
-        let stages: Vec<(&str, Box<dyn gpui::Action>)> = match self.editable(row, col) {
-            false => Vec::new(),
-            true => [
-                self.offers_null(col)
-                    .then(|| ("Set Value to NULL", Box::new(crate::SetNull) as _)),
-                self.offers_empty(col)
-                    .then(|| ("Set Value to Empty", Box::new(crate::SetEmpty) as _)),
-                self.offers_default(col)
-                    .then(|| ("Set Value to Default", Box::new(crate::SetDefault) as _)),
-            ]
-            .into_iter()
-            .flatten()
-            .collect(),
-        };
-
-        let menu = menu
-            .when_some(self.focus.clone(), PopupMenu::action_context)
-            .menu("Copy Cell", Box::new(crate::CopyCell))
-            .menu("Copy Row", Box::new(crate::CopyRow))
-            .when(!stages.is_empty(), PopupMenu::separator);
-        stages
-            .into_iter()
-            .fold(menu, |menu, (label, action)| menu.menu(label, action))
-    }
-
-    fn render_td(
+    fn data_td(
         &mut self,
         row_ix: usize,
         col_ix: usize,
         window: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        let (text, faint, edited_bg, active_ring) = {
+        let (text, faint, edited_bg, active_ring, divider, number, palette) = {
             let t = theme(cx);
-            (t.text, t.text_faint, t.edited, t.accent)
+            (
+                t.text,
+                t.text_faint,
+                t.edited,
+                t.accent,
+                t.border,
+                t.syntax_function,
+                *t,
+            )
         };
         let base = div()
             .id(("cell", row_ix * self.columns.len() + col_ix))
+            .relative()
             .size_full()
             .px(px(layout::SPACE_SM))
             // A ring rather than a wash: the pending-edit wash is taken, and
@@ -1273,6 +1683,18 @@ impl TableDelegate for ResultGrid {
             })
             .flex()
             .items_center()
+            .child(
+                div()
+                    .absolute()
+                    // Out over the cell's own border, which insets every edge
+                    // by a pixel: the header's hairline sits on the column edge
+                    // and runs the height of the row.
+                    .top(px(-1.))
+                    .bottom(px(-1.))
+                    .right(px(-1.))
+                    .w(px(1.))
+                    .bg(divider),
+            )
             // The row menu is the library's, and it records the row a right
             // click landed on and never the column, so the cell is pinned here
             // the way the left click pins it. Focus with it: the menu dispatches
@@ -1284,8 +1706,23 @@ impl TableDelegate for ResultGrid {
                     handle.focus(window, cx);
                     let grid = table.delegate_mut();
                     grid.set_active(row_ix, col_ix);
+                    grid.right_click_row(row_ix);
                     grid.focus = Some(handle);
-                    cx.notify();
+                    grid.pointer_row = Some(row_ix);
+                    table.set_selected_row(row_ix, cx);
+                    // set_selected_row consumes the event; the row beneath
+                    // still needs its own right click to record where the
+                    // context menu opens.
+                    cx.propagate();
+                }),
+            )
+            // A plain cell click must establish the anchor before Shift is
+            // pressed, exactly as a click on its row number does.
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |table, event: &gpui::MouseDownEvent, window, cx| {
+                    table.delegate_mut().set_active(row_ix, col_ix);
+                    click_row(table, row_ix, event, window, cx);
                 }),
             );
 
@@ -1389,46 +1826,67 @@ impl TableDelegate for ResultGrid {
         let group = follows_a_key
             .then(|| self.follow_group(col_ix).cloned())
             .flatten();
-        // Faint on hover over any cell of the column, and always on the active
-        // one, so the gesture is reachable from the keyboard as well as the
-        // mouse. Present either way rather than added on hover: a cell that
-        // reflows under the pointer is a cell that moves as it is read.
-        let active = self.active == Some((row_ix, col_ix));
 
         base.overflow_hidden()
             .whitespace_nowrap()
             .text_ellipsis()
-            // A column of numbers is read down its last digit, and left-aligned
-            // it has no last digit to read down: 9 and 1000 start in the same
-            // place and end nowhere near each other.
-            .when(self.is_numeric(col_ix), |cell| cell.justify_end())
-            .text_color(if cell.is_some() { text } else { faint })
+            .text_color(match (cell.is_some(), self.is_numeric_column(col_ix)) {
+                (false, _) => faint,
+                (true, true) => number,
+                (true, false) => text,
+            })
             // Italic so a NULL cannot be mistaken for the four-letter string.
             .when(cell.is_none(), |cell| cell.italic())
             .when(pending.is_some(), |cell| cell.bg(edited_bg))
-            // Beside an arrow the value is the child that gives way. Bare text
-            // in a row does not shrink, so a value as wide as its column --
-            // every cell of a column of 32-character keys -- pushed the arrow
-            // past the clipped edge, where it could be neither seen nor found.
-            .map(|this| {
-                let value = cell.unwrap_or(keyword);
-                match group.is_some() {
-                    true => this.child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .when(self.is_numeric(col_ix), |value| value.text_right())
-                            .child(value),
-                    ),
-                    false => this.child(value),
-                }
-            })
+            // The value is the child that gives way, beside an arrow or not.
+            // Bare text in a row does not shrink and a flex container does not
+            // ellipsise its own text, so a value as wide as its column -- every
+            // cell of a column of 32-character keys -- either pushed the arrow
+            // past the clipped edge or was cut with no ellipsis.
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
+                    .child(cell.unwrap_or(keyword)),
+            )
+            // A NULL is referenced by nothing, so it has no arrow either.
+            .children(
+                self.cell(row_ix, col_ix)
+                    .and_then(|_| self.reference_menu(col_ix))
+                    .map(|_| {
+                        icon_button(
+                            ("references", row_ix * self.columns.len() + col_ix),
+                            icon::REFERENCED_BY,
+                            Tone::Quiet,
+                            Control::Inline,
+                            palette,
+                        )
+                        // Pinned on the way down, so the action the click
+                        // dispatches finds this cell active and the table
+                        // focused, the way the cell menu's right click does.
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |table, event: &gpui::MouseDownEvent, window, cx| {
+                                let handle = table.focus_handle(cx);
+                                handle.focus(window, cx);
+                                let grid = table.delegate_mut();
+                                grid.set_active(row_ix, col_ix);
+                                grid.focus = Some(handle);
+                                grid.reference_anchor = Some(event.position);
+                                cx.notify();
+                            }),
+                        )
+                        .on_click(|_, window, cx| {
+                            window.dispatch_action(Box::new(ShowReferences), cx);
+                        })
+                    }),
+            )
             // The workspace owns the statement and the tabs and the grid owns
             // neither, so this leaves exactly as a header's sort click does.
-            .when_some(group.clone(), |cell, group| cell.group(group))
-            .children(group.map(|group| {
+            .children(group.map(|_| {
                 div()
                     .id(("follow-key", row_ix * self.columns.len() + col_ix))
                     // A square at the trailing edge rather than a glyph
@@ -1445,11 +1903,6 @@ impl TableDelegate for ResultGrid {
                     .justify_center()
                     .text_color(faint)
                     .hover(|button| button.text_color(text))
-                    .when(!active, |hidden| {
-                        hidden
-                            .opacity(0.)
-                            .group_hover(group, |shown| shown.opacity(1.))
-                    })
                     .child(icon(icon::FOLLOW_KEY).size(px(14.)))
                     .on_click(cx.listener(move |table, _, window, cx| {
                         // The action follows the active cell, and this one is
@@ -1471,19 +1924,33 @@ impl TableDelegate for ResultGrid {
                 window.dispatch_action(Box::new(crate::EditCell), cx);
                 cx.notify();
             }))
-            // What `Enter` will act on. The library records the row of a cell
-            // click and never the column, so the coordinate is set here whole.
-            // The row it does record arrives as `SelectRow` and folds back in
-            // keeping this column, so the two orders converge on the same cell.
-            // Runs on the first click of a double click too, and
-            // `set_active` on the cell an editor just opened on is a no-op --
-            // same coordinates, so `editing` survives -- which is what keeps
-            // the second listener from closing what the first just opened.
-            .on_click(cx.listener(move |table, _, _, cx| {
-                table.delegate_mut().set_active(row_ix, col_ix);
-                cx.notify();
-            }))
+            // The library's row click would select a toggled-off row again.
+            .on_click(|_, _, cx| cx.stop_propagation())
     }
+}
+
+fn click_row(
+    table: &mut TableState<ResultGrid>,
+    row: usize,
+    event: &gpui::MouseDownEvent,
+    window: &mut Window,
+    cx: &mut Context<TableState<ResultGrid>>,
+) {
+    table.focus_handle(cx).focus(window, cx);
+    table
+        .delegate_mut()
+        .click_row(row, event.modifiers.shift, event.modifiers.secondary());
+    // Both states paint blue. Updating the library on mouse-up leaves its
+    // old highlight behind, indefinitely if the button is released elsewhere.
+    if table.delegate().selected_rows.contains(&row) {
+        table.delegate_mut().pointer_row = Some(row);
+        table.set_selected_row(row, cx);
+    } else {
+        table.clear_selection(cx);
+    }
+    // set_selected_row consumes the event; the cell still needs mouse-down
+    // for its click and double-click handlers.
+    cx.propagate();
 }
 
 pub(crate) fn new_grid(
@@ -1518,19 +1985,18 @@ pub(crate) fn new_grid(
                 cx.notify();
             });
         }
+        TableEvent::ColumnWidthsChanged(widths) => {
+            let widths = widths.get(GUTTER..).unwrap_or_default().to_vec();
+            table.update(cx, |table, _| table.delegate_mut().set_widths(&widths));
+        }
         TableEvent::SelectColumn(col) => {
-            let col = *col;
+            let Some(col) = col.checked_sub(GUTTER) else {
+                return;
+            };
             table.update(cx, |table, cx| {
                 table.delegate_mut().select_col(col);
                 cx.notify();
             });
-        }
-        // The library resizes its own copy of the columns, so a drag is only
-        // in the delegate -- the thing a snapshot is taken from -- if it is
-        // written back here.
-        TableEvent::ColumnWidthsChanged(widths) => {
-            let widths = widths.clone();
-            table.update(cx, |table, _| table.delegate_mut().set_widths(&widths));
         }
         _ => {}
     })
@@ -1693,6 +2159,24 @@ mod tests {
     }
 
     #[test]
+    fn digits_are_grouped_in_threes_and_only_when_the_value_is_a_plain_number() {
+        for (value, shown) in [
+            ("1723858791", "1,723,858,791"),
+            ("-1234.5678", "-1,234.5678"),
+            ("+1000", "+1,000"),
+            ("999", "999"),
+            ("12", "12"),
+            ("1e10", "1e10"),
+            ("$1234", "$1234"),
+            ("1234abc", "1234abc"),
+            ("", ""),
+            (".5", ".5"),
+        ] {
+            assert_eq!(grouped_digits(value), shown, "{value}");
+        }
+    }
+
+    #[test]
     fn a_pending_edit_leaves_the_fetched_rows_alone() {
         // The grid shows changed-against-server by holding both. Writing the
         // edit into `result.rows` would lose the server's value for good.
@@ -1745,7 +2229,7 @@ mod tests {
         // the ring on another cell.
         let mut grid = editable_grid();
         grid.sort = vec![(2, false), (0, true)];
-        grid.set_widths(&[px(120.), px(64.), px(200.)]);
+        grid.set_widths(&[px(200.), px(190.), px(240.)]);
         grid.set_active(1, 2);
         // An edit nobody applied stays with the session that typed it.
         assert!(grid.set_pending(0, 1, value("changed")));
@@ -1766,7 +2250,7 @@ mod tests {
                 .iter()
                 .map(|column| column.width)
                 .collect::<Vec<_>>(),
-            [px(120.), px(64.), px(200.)]
+            [px(200.), px(190.), px(240.)]
         );
         assert_eq!(restored.result.rows, grid.result.rows);
         assert_eq!(restored.sort, vec![(2, false), (0, true)]);
@@ -2281,6 +2765,20 @@ mod tests {
     }
 
     #[test]
+    fn a_pending_numeric_edit_is_shown_grouped_but_staged_raw() {
+        // `display` groups a fetched number's digits; a pending edit over one
+        // must read the same way or it stands out from the rows around it --
+        // but what the `UPDATE` carries is the value exactly as typed.
+        let mut grid = marked_grid();
+        assert!(grid.set_pending(0, 2, value("7654321")));
+
+        let pending = grid.pending_at(0, 2).unwrap();
+        assert_eq!(pending.shown.as_deref(), Some("7,654,321"));
+        assert_eq!(pending.value, value("7654321"));
+        assert_eq!(grid.pending_updates()[0].sets[0].1, value("7654321"));
+    }
+
+    #[test]
     fn a_clicked_cell_is_remembered_as_the_active_one() {
         // gpui-component has no cell selection -- `set_selected_row` and
         // `set_selected_col` are mutually exclusive modes, not two halves of a
@@ -2511,6 +3009,35 @@ mod tests {
     }
 
     #[test]
+    fn a_column_other_relations_point_at_lists_them_by_table_and_column() {
+        let mut grid = keyed_grid();
+        let reference = |schema: &str, table: &str, column: &str, referenced: &str| db::Reference {
+            schema: schema.into(),
+            table: table.into(),
+            column: column.into(),
+            referenced_column: referenced.into(),
+        };
+        grid.mark_references(
+            &[
+                reference("public", "orders", "account_id", "id"),
+                reference("audit", "log", "subject", "id"),
+                reference("public", "tags", "sku", "sku"),
+            ],
+            "public",
+        );
+
+        let labels: Vec<_> = grid
+            .reference_menu(0)
+            .expect("id is pointed at")
+            .iter()
+            .map(|(index, label)| (*index, label.as_ref()))
+            .collect();
+        assert_eq!(labels, [(0, "orders.account_id"), (1, "audit.log.subject")]);
+        assert!(grid.reference_menu(1).is_none());
+        assert_eq!(grid.reference_menu(2).map(|menu| menu[0].0), Some(2));
+    }
+
+    #[test]
     fn only_the_columns_a_key_names_offer_to_follow_it() {
         let mut grid = keyed_grid();
         grid.mark_foreign_keys(&["account_id".to_string()]);
@@ -2551,20 +3078,170 @@ mod tests {
     }
 
     #[test]
-    fn a_column_is_as_wide_as_what_it_holds() {
-        let display = vec![
-            vec![Some(SharedString::from("t")), Some("a longer value".into())],
-            vec![Some("f".into()), Some("x".into())],
-        ];
-        let narrow = fitted_width("ok", &display, 0);
-        let wide = fitted_width("note", &display, 1);
+    fn a_column_starts_at_the_minimum_width_and_a_restore_never_goes_below_it() {
+        let mut grid = editable_grid();
+        assert!(
+            grid.columns
+                .iter()
+                .all(|column| column.width == px(MIN_COLUMN_WIDTH))
+        );
 
-        assert!(narrow < wide, "{narrow:?} should be narrower than {wide:?}");
-        // Clamped at both ends: a boolean column still has to be clickable,
-        // and one JSONB document must not take the whole pane.
-        assert!(f32::from(narrow) >= MIN_COLUMN_WIDTH);
-        let document = vec![vec![Some(SharedString::from("y".repeat(9_000)))]];
-        assert!(f32::from(fitted_width("x", &document, 0)) <= MAX_COLUMN_WIDTH);
+        grid.set_widths(&[px(100.), px(190.), px(240.)]);
+        let restored = ResultGrid::restored(&grid.stored(), Mode::ReadWrite);
+        assert_eq!(
+            restored
+                .columns
+                .iter()
+                .map(|column| column.width)
+                .collect::<Vec<_>>(),
+            [px(MIN_COLUMN_WIDTH), px(190.), px(240.)]
+        );
+    }
+
+    fn four_row_grid() -> ResultGrid {
+        ResultGrid::new(
+            QueryResult {
+                columns: vec![column("id")],
+                rows: (0..4).map(|row| vec![Some(row.to_string())]).collect(),
+                ..QueryResult::default()
+            },
+            Mode::ReadWrite,
+        )
+    }
+
+    #[test]
+    fn a_plain_click_replaces_the_selection_a_shift_click_extends_it_and_a_toggle_click_adds_or_removes_one()
+     {
+        let mut grid = four_row_grid();
+        grid.click_row(1, false, false);
+        assert_eq!(grid.selected_row_indices(), vec![1]);
+
+        grid.click_row(3, true, false);
+        assert_eq!(grid.selected_row_indices(), vec![1, 2, 3]);
+
+        grid.click_row(0, false, true);
+        assert_eq!(grid.selected_row_indices(), vec![0, 1, 2, 3]);
+
+        // Toggling an already-selected row removes just that one.
+        grid.click_row(2, false, true);
+        assert_eq!(grid.selected_row_indices(), vec![0, 1, 3]);
+
+        // A plain click replaces the whole selection with the one row.
+        grid.click_row(3, false, false);
+        assert_eq!(grid.selected_row_indices(), vec![3]);
+
+        grid.clear_row_selection();
+        assert!(grid.selected_row_indices().is_empty());
+    }
+
+    #[test]
+    fn with_nothing_selected_the_active_cells_row_is_what_copies() {
+        let mut grid = four_row_grid();
+        assert!(grid.selected_row_indices().is_empty());
+        grid.set_active(2, 0);
+        assert_eq!(grid.selected_row_indices(), vec![2]);
+    }
+
+    #[test]
+    fn shift_click_keeps_the_first_click_as_anchor_when_the_range_shrinks_or_reverses() {
+        let mut grid = four_row_grid();
+        grid.click_row(1, false, false);
+        grid.set_active(1, 0);
+
+        for (row, expected) in [(3, vec![1, 2, 3]), (2, vec![1, 2]), (0, vec![0, 1])] {
+            grid.click_row(row, true, false);
+            grid.set_active(row, 0);
+            assert_eq!(grid.selected_row_indices(), expected);
+            assert_eq!(grid.row_selection_anchor, Some(1));
+        }
+    }
+
+    #[test]
+    fn keyboard_movement_folds_into_the_selection_like_a_plain_click() {
+        // `select_row` is what `TableEvent::SelectRow` -- the library's own
+        // arrow-key movement -- folds into. Without updating the selection
+        // too, the ring would move off a multi-row selection while the old
+        // rows kept their tint and "Copy Rows As" kept copying them.
+        let mut grid = four_row_grid();
+        grid.click_row(1, false, false);
+        grid.click_row(3, true, false);
+        assert_eq!(grid.selected_row_indices(), vec![1, 2, 3]);
+
+        grid.select_row(2);
+        assert_eq!(grid.selected_row_indices(), vec![2]);
+        assert_eq!(grid.row_selection_anchor, Some(2));
+    }
+
+    #[test]
+    fn the_echo_of_a_pointer_selection_keeps_the_rows_it_chose() {
+        // A shift- or toggle-click tells the library its row, and the library
+        // answers with the same `SelectRow` a keyboard move sends. Folding that
+        // echo like a keystroke collapsed every range to the clicked row.
+        let mut grid = four_row_grid();
+        grid.click_row(0, false, false);
+        grid.click_row(2, true, false);
+        grid.pointer_row = Some(2);
+        grid.select_row(2);
+        assert_eq!(grid.selected_row_indices(), vec![0, 1, 2]);
+
+        grid.click_row(3, false, true);
+        grid.pointer_row = Some(3);
+        grid.select_row(3);
+        assert_eq!(grid.selected_row_indices(), vec![0, 1, 2, 3]);
+
+        // Spent by its echo: the next keyboard move collapses as before.
+        grid.select_row(1);
+        assert_eq!(grid.selected_row_indices(), vec![1]);
+    }
+
+    #[test]
+    fn a_right_click_outside_the_selection_replaces_it_and_inside_it_leaves_it_alone() {
+        // Scenario: left-click row 1, right-click row 3 -- "Copy Row(s) As"
+        // must act on row 3, the row actually under the pointer, not the
+        // stale selection from before.
+        let mut grid = four_row_grid();
+        grid.click_row(1, false, false);
+        grid.right_click_row(3);
+        assert_eq!(grid.selected_row_indices(), vec![3]);
+
+        grid.click_row(1, false, false);
+        grid.click_row(2, true, false);
+        grid.right_click_row(2);
+        assert_eq!(grid.selected_row_indices(), vec![1, 2]);
+    }
+
+    #[test]
+    fn toggle_can_remove_the_last_row_without_copying_the_active_cell_instead() {
+        let mut grid = four_row_grid();
+        grid.click_row(1, false, false);
+        grid.set_active(1, 0);
+        grid.click_row(1, false, true);
+        assert!(grid.selected_row_indices().is_empty());
+        assert!(grid.rows_as(RowsAs::Text).is_none());
+    }
+
+    #[test]
+    fn shift_alone_replaces_disjoint_rows_and_secondary_shift_adds_a_range() {
+        let mut grid = four_row_grid();
+        grid.click_row(0, false, false);
+        grid.click_row(2, false, true);
+        grid.click_row(3, true, true);
+        assert_eq!(grid.selected_row_indices(), vec![0, 2, 3]);
+        grid.click_row(3, true, false);
+        assert_eq!(grid.selected_row_indices(), vec![2, 3]);
+
+        grid.clear_row_selection();
+        grid.click_row(1, true, false);
+        grid.click_row(3, true, false);
+        assert_eq!(grid.selected_row_indices(), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn copy_rows_as_text_joins_every_selected_row_in_order() {
+        let mut grid = four_row_grid();
+        grid.click_row(2, false, false);
+        grid.click_row(0, true, false);
+        assert_eq!(grid.rows_as(RowsAs::Text).as_deref(), Some("0\n1\n2"));
     }
 
     #[test]

@@ -4,7 +4,7 @@
 //! impl live in as many modules as it has concerns; they moved out whole.
 
 use super::*;
-use crate::session::{StaleEdit, StaleResume};
+use crate::session::{StaleEdit, StaleResume, refreshing};
 
 impl Workspace {
     /// Open the "New row" form over the preview in front, one field per column
@@ -25,6 +25,17 @@ impl Workspace {
         let Tab::Object(id) = profile.session.active else {
             return;
         };
+        // A form already open for this tab is focused rather than reset, so
+        // pressing New row (or its shortcut) again does not silently wipe a
+        // half-filled row.
+        if let Some(form) = &profile.session.insert_form
+            && form.tab == Tab::Object(id)
+        {
+            if let Some(field) = form.fields.first() {
+                field.input.focus_handle(cx).focus(window, cx);
+            }
+            return;
+        }
         let Some(tab) = profile.session.objects.iter().find(|tab| tab.id == id) else {
             return;
         };
@@ -32,7 +43,9 @@ impl Workspace {
             return;
         };
         // The columns are the form: without them there is nothing to draw, and
-        // guessing at them would be inventing a table.
+        // guessing at them would be inventing a table. Checked before
+        // `show_structure` flips the tab, so a refused New row leaves
+        // Structure showing rather than switching to Data for nothing.
         let StructureState::Loaded(structure) = structure else {
             self.note(
                 "DBDelve has not read this relation's columns yet.".into(),
@@ -46,6 +59,9 @@ impl Workspace {
             .iter()
             .map(|column| (column.name.clone(), column.data_type.clone()))
             .collect();
+        // From the structure view the form belongs to the data, so it goes
+        // back there first -- now that every refusal above is past.
+        self.show_structure(false, cx);
 
         let mut fields = Vec::with_capacity(columns.len());
         for (index, (column, data_type)) in columns.into_iter().enumerate() {
@@ -155,10 +171,23 @@ impl Workspace {
 
     /// Put the form away. Nothing has been generated yet, so there is nothing
     /// to keep.
+    ///
+    /// Scoped to the active tab's own form: one left open on another tab is
+    /// not what `escape` on this surface means, and must not eat the
+    /// keystroke meant for whatever this tab actually has in front.
     pub(crate) fn close_new_row(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(profile) = self.profile_mut() else {
             return false;
         };
+        let active = profile.session.active;
+        let on_active_tab = profile
+            .session
+            .insert_form
+            .as_ref()
+            .is_some_and(|form| form.tab == active);
+        if !on_active_tab {
+            return false;
+        }
         let closed = profile.session.insert_form.take().is_some();
         if closed {
             cx.notify();
@@ -553,8 +582,9 @@ impl Workspace {
         self.note("This column cannot be edited.".into(), cx);
     }
 
-    /// Whether an edit may go ahead on the grid in front, raising the stale-rows
-    /// prompt when it may not. Callers ask only once the grid would otherwise
+    /// Whether an edit may go ahead on the grid in front: not while its rows are
+    /// being refreshed, and on restored rows only once the stale-rows prompt
+    /// has been answered. Callers ask only once the grid would otherwise
     /// take the edit, so the prompt never stands in front of a refusal.
     fn confirm_stale(&mut self, resume: StaleResume, cx: &mut Context<Self>) -> bool {
         let Some(profile) = self.profile_mut() else {
@@ -563,17 +593,12 @@ impl Workspace {
         let Some(results) = profile.session.active_results().cloned() else {
             return false;
         };
-        if !results.read(cx).delegate().unconfirmed() {
-            return true;
-        }
-        // Restored rows with a run in flight are the background refresh's, and
-        // its result replaces the grid wholesale, edits staged on it included.
-        if matches!(
-            profile.session.active_query(),
-            Some(QueryState::Running { .. })
-        ) {
+        if refreshing(profile.session.active, profile.session.active_query()) {
             self.note(Self::REFRESHING.into(), cx);
             return false;
+        }
+        if !results.read(cx).delegate().unconfirmed() {
+            return true;
         }
         if profile.confirmed_stale {
             results.update(cx, |table, _| table.delegate_mut().confirm_stale());
@@ -692,7 +717,18 @@ impl Workspace {
         };
         // A statement already generated is the one the user is reading; another
         // behind it would leave that panel describing something else.
-        if profile.session.apply_review.is_some() || profile.session.insert_form.is_some() {
+        if profile.session.apply_review.is_some() {
+            return;
+        }
+        // Scoped to the active tab's own form: one left open on another tab
+        // (or a closed one, cleared at close) must not block this one.
+        if profile
+            .session
+            .insert_form
+            .as_ref()
+            .is_some_and(|form| form.tab == profile.session.active)
+        {
+            self.note("Close the new row form before deleting a row.".into(), cx);
             return;
         }
         // Browsing surfaces only. A query tab's grid is a view of the user's own
@@ -804,6 +840,21 @@ impl Workspace {
         };
         let result = grid.result();
         let text = export::render_rows(Format::Tsv, &result.columns, &result.rows[row..=row]);
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
+    }
+
+    /// The selected rows, or the active cell's alone with nothing selected, in
+    /// whichever format the "Copy Rows As" submenu was asked for.
+    pub(crate) fn copy_rows(&mut self, action: &CopyRows, _: &mut Window, cx: &mut Context<Self>) {
+        let Some(results) = self
+            .profile()
+            .and_then(|profile| profile.session.active_results())
+        else {
+            return;
+        };
+        let Some(text) = results.read(cx).delegate().rows_as(action.kind) else {
+            return;
+        };
         cx.write_to_clipboard(ClipboardItem::new_string(text));
     }
 

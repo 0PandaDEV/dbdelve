@@ -1013,7 +1013,8 @@ SELECT TABLE_SCHEMA AS "schema_name",
            -- are all browsed the way a table is.
            ELSE 'table'
        END AS "relation_kind",
-       BYTES AS "size_bytes"
+       BYTES AS "size_bytes",
+       ROW_COUNT AS "row_estimate"
 FROM INFORMATION_SCHEMA.TABLES
 WHERE TABLE_SCHEMA <> 'INFORMATION_SCHEMA'
 ORDER BY 1, 2"#;
@@ -1891,6 +1892,7 @@ mod tests {
             "relation_name",
             "relation_kind",
             "size_bytes",
+            "row_estimate",
         ] {
             assert!(
                 RELATIONS_SQL.contains(&format!("AS \"{alias}\"")),

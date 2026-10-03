@@ -76,7 +76,10 @@ pub mod layout {
     /// confirm come out the same size instead of one word wide each.
     pub const CONTROL_MIN_WIDTH: f32 = 76.0;
 
-    pub const TITLEBAR_HEIGHT: f32 = 38.0;
+    /// The bars across the window -- titlebar, tab strip, filter rows -- are one
+    /// compact control high with `SPACE_SM` of air on every side, so their
+    /// heights are that sum and nothing else.
+    pub const TITLEBAR_HEIGHT: f32 = CONTROL_HEIGHT_COMPACT + 2.0 * SPACE_SM;
     /// Where the titlebar's own content can start without colliding with the
     /// platform's window buttons, which are drawn over it.
     pub const TITLEBAR_LEADING_INSET: f32 = 78.0;
@@ -84,10 +87,10 @@ pub mod layout {
     /// lives in this strip, and a button wedged edge to edge in its own bar
     /// reads as something that overflowed rather than something placed.
     pub const STATUS_HEIGHT: f32 = 32.0;
-    pub const TAB_HEIGHT: f32 = 34.0;
+    pub const TAB_HEIGHT: f32 = CONTROL_HEIGHT_COMPACT + 2.0 * SPACE_SM;
     /// A tab is a chip inside the strip, so it gets a chip height rather than
     /// the full bar.
-    pub const TAB_CHIP_HEIGHT: f32 = 26.0;
+    pub const TAB_CHIP_HEIGHT: f32 = CONTROL_HEIGHT_COMPACT;
     pub const EDITOR_EMPTY_HEIGHT: f32 = 680.0;
     pub const EDITOR_DEFAULT_HEIGHT: f32 = 420.0;
     pub const EDITOR_MIN_HEIGHT: f32 = 120.0;
@@ -100,7 +103,7 @@ pub mod layout {
     pub const INSPECTOR_WIDTH: f32 = 300.0;
     pub const INSPECTOR_MIN_WIDTH: f32 = 200.0;
     pub const INSPECTOR_MAX_WIDTH: f32 = 900.0;
-    pub const SIDEBAR_DEFAULT_WIDTH: f32 = 256.0;
+    pub const SIDEBAR_DEFAULT_WIDTH: f32 = 220.0;
     pub const SIDEBAR_MIN_WIDTH: f32 = 180.0;
     pub const SIDEBAR_MAX_WIDTH: f32 = 480.0;
     pub const DIALOG_WIDTH: f32 = 420.0;
@@ -603,31 +606,15 @@ impl Theme {
         component.colors.secondary_foreground = self.text.into();
         component.colors.secondary_hover = control_hover.into();
         component.colors.secondary_active = control_active.into();
-        // What a ghost button washes with on hover -- the tab pair lives on it.
-        // The completion popup's selected row, and the highlight on a
-        // right-click menu item. Was `element_hover` flattened onto `panel`: a
-        // ~5% wash, and computed against the wrong plane, since both of those
-        // surfaces paint on `overlay`. A selected suggestion was therefore
-        // indistinguishable from an unselected one. `selection` is what a
-        // selected row already wears in the explorer tree and the result grid,
-        // so autocomplete now agrees with the rest of dbdelve.
-        //
-        // A tint rather than the accent at full strength, deliberately: the
-        // popup paints a suggestion's matched prefix in `blue` and its detail
-        // in `muted_foreground` whatever the selection state, so a saturated
-        // fill behind them would win the row and lose the text.
-        // Half strength, and the prefix is what sets it: the popup paints a
-        // suggestion's matched characters in `blue` -- dbdelve's accent, just
-        // above -- so an accent wash behind them is accent on accent. At full
-        // `selection` that prefix measures 2.65 against the fill in the dark
-        // theme, under the 3.0 floor for UI text; halved it reaches 3.25 while
-        // the fill still steps 13.5 sRGB levels off the popover plane, well
-        // clear of the 8 that `the_three_planes_are_told_apart_at_a_glance`
-        // treats as visible. Graded in
-        // `a_selected_suggestion_is_told_apart_from_an_unselected_one`.
-        let mut selected_row = self.selection;
-        selected_row.a *= 0.5;
-        component.colors.accent = selected_row.into();
+        // One highlight for everything that lights up under the pointer, so a
+        // ghost button, a menu item and dbdelve's own chips agree: the library
+        // washes all of them with `accent` (a ghost button at half strength on
+        // dark themes), and dbdelve's own hovers are `element_hover`, so this
+        // is the gray wash and never the blue of a selection. The completion
+        // popup's selected row and a right-click menu's highlighted item take
+        // it too; `selection` stays what a selected row in the tree and the
+        // grid wears.
+        component.colors.accent = self.element_active.into();
         component.colors.accent_foreground = self.text.into();
         component.colors.danger = self.danger.into();
         component.colors.danger_foreground = self.on_accent.into();
@@ -856,7 +843,15 @@ impl Theme {
             text_muted: neutral(0.76),
             text_faint: neutral(0.62),
 
-            accent: Oklch::new(0.68, 0.15, 250.0).to_srgb(),
+            // 0.70, not the 0.68 `selection` still carries below: raised just
+            // far enough that the completion popup's matched-prefix text
+            // (painted in this colour over the library's own selected-row
+            // wash, `element_active` over `overlay`) clears the 3.0 floor --
+            // 2.99 at 0.68, since the gray wash `apply_to_components` moved
+            // that wash to is lighter than the blue `selection` wash it
+            // replaced. `on_accent over accent` and `accent on bg` only gain
+            // margin from the same move.
+            accent: Oklch::new(0.70, 0.15, 250.0).to_srgb(),
             on_accent: neutral(0.14),
             selection: Oklch::new(0.68, 0.15, 250.0).to_srgb().alpha(0.28),
             cursor: Oklch::new(0.72, 0.14, 250.0).to_srgb(),
@@ -1128,10 +1123,9 @@ mod tests {
         // popover surface, so the wallpaper cancels out.
         let level = |c: Srgb| (c.r + c.g + c.b) / 3.0 * 255.0;
         for t in Theme::all() {
-            // Mirrors `apply_to_components`.
-            let mut fill = t.selection;
-            fill.a *= 0.5;
-            let selected = fill.flatten(t.overlay);
+            // Mirrors `apply_to_components`, which sets the popup's `accent`
+            // (and so its selected row) from `element_active`, not `selection`.
+            let selected = t.element_active.flatten(t.overlay);
             let step = (level(selected) - level(t.overlay)).abs();
             assert!(
                 step >= 8.0,

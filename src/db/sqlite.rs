@@ -26,8 +26,8 @@ use rusqlite::{Batch, InterruptHandle, OpenFlags};
 
 use super::{
     Catalog, Cell, Column, DbError, EditTarget, Engine, ForeignKey, NamedDefinition, QueryResult,
-    Structure, assemble_catalog, assemble_structure, non_utf8_error, percent_decoded, plain_error,
-    required_cell,
+    Reference, Structure, assemble_catalog, assemble_references, assemble_structure,
+    non_utf8_error, percent_decoded, plain_error, required_cell,
 };
 
 /// The path out of a `sqlite:` or `file:` URL.
@@ -335,6 +335,45 @@ impl Connection {
             .internal_query("SELECT name AS schema_name FROM pragma_database_list ORDER BY seq")?;
 
         column_of(&result, "schema_name")
+    }
+
+    /// Who points at this relation. SQLite has no catalog to ask from the
+    /// referenced side, so every table of the schema is asked what it
+    /// references. A key that names no column of the parent references the
+    /// parent's primary key, filled in the way [`Connection::foreign_keys`] does.
+    pub fn references(&self, schema: &str, relation: &str) -> Result<Vec<Reference>, DbError> {
+        let mut result = self.internal_query(&format!(
+            "SELECT {schema_literal} AS source_schema,
+                    tables.name AS source_table,
+                    keys.\"from\" AS column_name,
+                    COALESCE(keys.\"to\", '') AS referenced_column,
+                    keys.id AS constraint_name
+             FROM {schema_name}.sqlite_master AS tables,
+                  pragma_foreign_key_list(tables.name, {schema_literal}) AS keys
+             WHERE tables.type = 'table'
+               AND keys.\"table\" = {relation} COLLATE NOCASE
+             ORDER BY tables.name, keys.id, keys.seq",
+            schema_literal = Engine::Sqlite.quote_literal(schema),
+            schema_name = Engine::Sqlite.quote_identifier(schema),
+            relation = Engine::Sqlite.quote_literal(relation),
+        ))?;
+        if result
+            .rows
+            .iter()
+            .any(|row| row.get(3).is_some_and(|cell| cell.as_deref() == Some("")))
+        {
+            let key = self.primary_key(schema, relation)?;
+            for row in &mut result.rows {
+                if row[3].as_deref() == Some("") {
+                    row[3] = match key.as_slice() {
+                        [only] => Some(only.clone()),
+                        _ => None,
+                    };
+                }
+            }
+            result.rows.retain(|row| row[3].is_some());
+        }
+        assemble_references(&result)
     }
 
     pub fn structure(&self, schema: &str, relation: &str) -> Result<Structure, DbError> {
@@ -1368,6 +1407,34 @@ SELECT count(*) FROM forever
                     == "FOREIGN KEY (\"parent_id\") REFERENCES \"parent\" (\"id\")"),
             "{:?}",
             structure.constraints
+        );
+    }
+
+    #[test]
+    fn a_relation_lists_the_single_column_keys_that_point_at_it() {
+        let connection = memory(
+            "CREATE TABLE parent (id INTEGER PRIMARY KEY, a INTEGER, b TEXT, UNIQUE (a, b));
+             CREATE TABLE named (parent_id INTEGER REFERENCES parent (id));
+             CREATE TABLE implicit (parent_id INTEGER REFERENCES parent);
+             CREATE TABLE pair (x INTEGER, y TEXT, FOREIGN KEY (x, y) REFERENCES parent (a, b));
+             CREATE TABLE unrelated (id INTEGER PRIMARY KEY);",
+        );
+
+        let reference = |table: &str| Reference {
+            schema: "main".into(),
+            table: table.into(),
+            column: "parent_id".into(),
+            referenced_column: "id".into(),
+        };
+        assert_eq!(
+            connection.references("main", "parent").expect("references"),
+            vec![reference("implicit"), reference("named")]
+        );
+        assert!(
+            connection
+                .references("main", "unrelated")
+                .expect("references")
+                .is_empty()
         );
     }
 

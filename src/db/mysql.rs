@@ -29,9 +29,9 @@ use ::mysql::{Conn, OptsBuilder, SslOpts, Value};
 
 use super::ssh::{Tunnel, tunnelled};
 use super::{
-    Catalog, Cell, Column, DbError, EditTarget, Engine, QueryResult, ServerConfig, Sizes, SslMode,
-    Structure, assemble_catalog, assemble_foreign_keys, assemble_sizes, assemble_structure,
-    non_utf8_error, plain_error, required_cell,
+    Catalog, Cell, Column, DbError, EditTarget, Engine, QueryResult, Reference, ServerConfig,
+    Sizes, SslMode, Structure, assemble_catalog, assemble_foreign_keys, assemble_references,
+    assemble_sizes, assemble_structure, non_utf8_error, plain_error, required_cell,
 };
 
 /// Without this the driver waits out the OS SYN retry budget, so a host that
@@ -74,11 +74,13 @@ ORDER BY TABLE_SCHEMA, TABLE_NAME
 
 // Apart from `RELATIONS_SQL` because naming `DATA_LENGTH` makes the server open
 // every table for its engine's statistics, where the name and type alone come
-// from the data dictionary.
+// from the data dictionary. `TABLE_ROWS` is InnoDB's sampled estimate, from the
+// same statistics.
 const SIZES_SQL: &str = "
 SELECT TABLE_SCHEMA AS schema_name,
        TABLE_NAME AS relation_name,
-       DATA_LENGTH + INDEX_LENGTH AS size_bytes
+       DATA_LENGTH + INDEX_LENGTH AS size_bytes,
+       TABLE_ROWS AS row_estimate
 FROM information_schema.TABLES
 WHERE TABLE_SCHEMA NOT IN {system}
   AND TABLE_TYPE = 'BASE TABLE'
@@ -205,6 +207,19 @@ WHERE TABLE_SCHEMA = {schema}
   AND TABLE_NAME = {relation}
   AND REFERENCED_TABLE_NAME IS NOT NULL
 ORDER BY CONSTRAINT_NAME, ORDINAL_POSITION
+";
+
+// The same view read from the referenced side: who points at this relation.
+const REFERENCES_SQL: &str = "
+SELECT TABLE_SCHEMA AS source_schema,
+       TABLE_NAME AS source_table,
+       COLUMN_NAME AS column_name,
+       REFERENCED_COLUMN_NAME AS referenced_column,
+       CONSTRAINT_NAME AS constraint_name
+FROM information_schema.KEY_COLUMN_USAGE
+WHERE REFERENCED_TABLE_SCHEMA = {schema}
+  AND REFERENCED_TABLE_NAME = {relation}
+ORDER BY TABLE_SCHEMA, TABLE_NAME, CONSTRAINT_NAME, ORDINAL_POSITION
 ";
 
 /// The columns a constraint covers, in key order. Spliced into the query above
@@ -523,6 +538,14 @@ impl Connection {
             tunnel: self.tunnel.clone(),
         };
         assemble_sizes(side.internal_query(&SIZES_SQL.replace("{system}", SYSTEM_SCHEMAS))?)
+    }
+
+    pub fn references(&self, schema: &str, relation: &str) -> Result<Vec<Reference>, DbError> {
+        assemble_references(&self.internal_query(&structure_sql(
+            REFERENCES_SQL,
+            schema,
+            relation,
+        ))?)
     }
 
     pub fn structure(&self, schema: &str, relation: &str) -> Result<Structure, DbError> {

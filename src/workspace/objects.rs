@@ -6,6 +6,7 @@
 use super::*;
 
 use crate::db::ColumnDefinition;
+use crate::session::TabKey;
 
 impl Workspace {
     pub(crate) fn open_explorer_target(
@@ -106,16 +107,22 @@ impl Workspace {
                     hydrated: false,
                     row_panel_folded: false,
                     row_panel_split: cx.new(|_| ResizableState::default()),
+                    count: RowCount::Unasked,
                 }
             }
         };
-        self.profile_mut()?.session.objects.push(ObjectTab {
+        let profile = self.profile_mut()?;
+        profile.session.objects.push(ObjectTab {
             id,
             schema,
             name,
             kind,
             body,
         });
+        // See `new_query`'s own `place_last`. A session restored at launch
+        // comes through here too, one object at a time and in its stored
+        // order, so its objects still follow its queries.
+        profile.session.place_last(TabKey::Object(id));
         Some(id)
     }
 
@@ -177,6 +184,7 @@ impl Workspace {
             offset,
             stale,
             structure,
+            count,
             ..
         } = &mut tab.body
         else {
@@ -184,6 +192,11 @@ impl Workspace {
         };
         if !change(filter, sort, limit, offset) {
             return;
+        }
+        // Discarded, not cancelled: on most engines a cancel stops whatever
+        // the connection is running, which need not be this count.
+        if !count.answers(filter) {
+            *count = RowCount::Unasked;
         }
         let key = match structure {
             StructureState::Loaded(structure) => structure.row_key(),
@@ -193,19 +206,24 @@ impl Workspace {
             // then no structure is coming (`load_structure` gave up, or a
             // reconnect is dropping its answer) and the run is what says the
             // connection is not open. A reconnect reloads the tab in front,
-            // and any other on its next visit.
+            // and any other on its next visit. `stale` is left for the run the
+            // structure's arrival makes, which is this one, deferred.
             StructureState::Loading if engine.pages_by_key() && connected => return,
             _ => Vec::new(),
         };
 
         let sql = relation_sql(engine, &schema, &relation, filter, sort, *limit, *offset);
-        // Checked before anything leaves the machine, and before the tab's
-        // staleness is spent: a refused filter leaves the rows on screen and
-        // the bars as they stand, so it can be corrected rather than retyped.
+        // Checked before anything leaves the machine: a refused filter leaves
+        // the rows on screen and the bars as they stand, so it can be corrected
+        // rather than retyped.
         let paged = sql::is_generated_select(&sql)
             .then(|| sql::paged(engine, &sql, &key))
             .flatten();
         let Some(sql) = paged else {
+            // Spent all the same. Left standing, it would have `load_relation`
+            // load the structure and try again on every visit to the tab, for
+            // a filter refused every time.
+            *stale = false;
             self.note(
                 "dbdelve will not run a filter it cannot read as one SELECT.".into(),
                 cx,
@@ -226,6 +244,150 @@ impl Workspace {
             *query = QueryState::Idle;
         }
         self.execute_and_then(sql, Tab::Object(id), None, keep_rows, None, cx);
+    }
+
+    /// Count the rows under a relation tab's filter, because the user asked.
+    ///
+    /// Never run unasked: on a large table it is a full scan, and on every
+    /// engine but Snowflake it holds the profile's connection while it runs.
+    /// So it goes through what a user's run does -- the same two gates the
+    /// preview of this filter passed, the history, and a cancel handle the
+    /// normal Cancel reaches -- but answers into the status bar rather than
+    /// the grid. A statement the mode check would stop is refused rather than
+    /// prompted for: the prompt resumes into the tab's grid, which is not where
+    /// a count goes.
+    pub(crate) fn count_rows(&mut self, id: u64, cx: &mut Context<Self>) {
+        self.clear_notice();
+        let engine = self.engine();
+        let Some(profile) = self.profile_mut() else {
+            return;
+        };
+        let Some(connection) = profile.connection() else {
+            self.note("The connection is not open.".into(), cx);
+            return;
+        };
+        let (profile_id, generation, mode) = (profile.id.clone(), profile.generation, profile.mode);
+        let confirmed = profile.confirmed.clone();
+        let Some(tab) = profile.session.objects.iter_mut().find(|tab| tab.id == id) else {
+            return;
+        };
+        let (schema, relation) = (tab.schema.clone(), tab.name.clone());
+        let ObjectBody::Relation { filter, count, .. } = &mut tab.body else {
+            return;
+        };
+        if matches!(count, RowCount::Counting { .. }) {
+            return;
+        }
+        let sql = explorer::count_sql(engine, &schema, &relation, filter);
+        if !sql::is_generated_select(&sql)
+            || sql::gate(&sql::classify(engine, &sql), mode, &confirmed).is_some()
+        {
+            self.note(
+                "dbdelve will not count rows under a filter it cannot run unprompted.".into(),
+                cx,
+            );
+            return;
+        }
+        let asked = filter.clone();
+        let started = std::time::Instant::now();
+        let cancel = CancelToken::default();
+        *count = RowCount::Counting {
+            filter: asked.clone(),
+            started,
+            cancel: cancel.clone(),
+            cancelling: false,
+        };
+        let _ = store::append_history(&profile_id, &sql);
+        remember_statement(&mut profile.session.history, &sql);
+        cx.notify();
+
+        let task = cx
+            .background_executor()
+            .spawn(async move { connection.generated(&sql, &cancel) });
+        cx.spawn(async move |workspace, cx| {
+            let result = task.await;
+            _ = workspace.update(cx, |workspace, cx| {
+                // By id alone, so a reconnect that retired this run still
+                // takes its "Counting…" down rather than leaving it forever.
+                let Some(profile) = workspace
+                    .profiles
+                    .iter_mut()
+                    .find(|profile| profile.id == profile_id)
+                else {
+                    return;
+                };
+                let current = profile.generation == generation;
+                let Some(tab) = profile.session.objects.iter_mut().find(|tab| tab.id == id) else {
+                    return;
+                };
+                let ObjectBody::Relation { count, .. } = &mut tab.body else {
+                    return;
+                };
+                // A newer count, or a filter that moved since, owns the state.
+                if !matches!(count, RowCount::Counting { started: at, .. } if *at == started) {
+                    return;
+                }
+                let rows = result.map(|result| {
+                    result
+                        .rows
+                        .first()
+                        .and_then(|row| row.first()?.as_deref()?.trim().parse::<u64>().ok())
+                });
+                *count = match rows {
+                    Ok(Some(rows)) if current => RowCount::Counted(asked, rows),
+                    _ => RowCount::Unasked,
+                };
+                if current {
+                    match rows {
+                        Ok(Some(_)) => {}
+                        Ok(None) => {
+                            profile.session.notice =
+                                Some("The count came back without a number.".into());
+                        }
+                        Err(error) => {
+                            profile.session.notice =
+                                Some(format!("The count failed: {}", error.message));
+                        }
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Stop a relation tab's count. Like Cancel on a run, it records only that
+    /// the request went out; the count's own answer says what happened.
+    pub(crate) fn cancel_count(&mut self, id: u64, cx: &mut Context<Self>) {
+        let Some(connection) = self.profile().and_then(Profile::connection) else {
+            return;
+        };
+        let Some(ObjectBody::Relation {
+            count: RowCount::Counting {
+                cancel, cancelling, ..
+            },
+            ..
+        }) = self
+            .profile_mut()
+            .and_then(|profile| profile.session.objects.iter_mut().find(|tab| tab.id == id))
+            .map(|tab| &mut tab.body)
+        else {
+            return;
+        };
+        if std::mem::replace(cancelling, true) {
+            return;
+        }
+        let cancel = cancel.clone();
+        cx.notify();
+        let task = cx
+            .background_executor()
+            .spawn(async move { connection.cancel(&cancel) });
+        cx.spawn(async move |workspace, cx| {
+            if let Err(error) = task.await {
+                _ = workspace.update(cx, |workspace, cx| workspace.note(error.message, cx));
+            }
+        })
+        .detach();
     }
 
     /// A header click on a relation tab: move that column through the sort and
@@ -277,9 +439,15 @@ impl Workspace {
             *issued
         };
         let key = (schema.clone(), relation.clone());
-        let structure_task = cx
-            .background_executor()
-            .spawn(async move { connection.structure(&schema, &relation) });
+        let structure_task = cx.background_executor().spawn(async move {
+            let mut structure = connection.structure(&schema, &relation)?;
+            // Only an arrow hangs off this, so a failed lookup is no arrows
+            // and not a failed structure.
+            structure.referenced_by = connection
+                .references(&schema, &relation)
+                .unwrap_or_default();
+            Ok::<_, DbError>(structure)
+        });
 
         cx.spawn(async move |workspace, cx| {
             let result = structure_task.await;
@@ -363,12 +531,17 @@ impl Workspace {
             .iter()
             .map(|key| key.column.clone())
             .collect();
+        let referenced_by = structure.referenced_by.clone();
+        let primary_key = structure.primary_key();
+        let schema = tab.schema.clone();
         let not_nullable = columns_not_nullable(&structure.columns);
         let has_default = columns_with_defaults(engine, &structure.columns);
         let results = results.clone();
         results.update(cx, |table, cx| {
             let grid = table.delegate_mut();
             grid.mark_foreign_keys(&foreign_keys);
+            grid.mark_references(&referenced_by, &schema);
+            grid.mark_primary_key(&primary_key);
             grid.mark_columns(&not_nullable, &has_default);
             cx.notify();
         });
@@ -377,7 +550,8 @@ impl Workspace {
     /// Open the row the active cell references (spec §6.2): a preview of the
     /// referenced relation, filtered to the value the cell holds.
     ///
-    /// Outbound only — from the row holding the key to the row it references.
+    /// Outbound only — from the row holding the key to the row it references;
+    /// [`Workspace::open_reference`] goes the other way.
     /// Nothing runs for a NULL, which references nothing.
     pub(crate) fn follow_foreign_key(
         &mut self,
@@ -446,6 +620,190 @@ impl Workspace {
         let opened = OpenedObject::Relation {
             schema: key.referenced_schema,
             name: key.referenced_table,
+            kind,
+            filter,
+            filters,
+        };
+
+        if let Some(id) = self.open_object(opened, window, cx) {
+            self.activate_tab(Tab::Object(id), cx);
+            self.remember_profiles(cx);
+        }
+    }
+
+    /// The arrow on a key cell. Which relations reference the key is not what
+    /// the structure says -- that is every relation that *could* -- but which
+    /// hold a row for this value, so each candidate is asked for one row and
+    /// only the ones that answer are listed, beside any whose check failed.
+    pub(crate) fn show_references(
+        &mut self,
+        _: &ShowReferences,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let engine = self.engine();
+        let Some(profile) = self.profile() else {
+            return;
+        };
+        let Some(connection) = profile.connection() else {
+            return;
+        };
+        let (profile_id, generation) = (profile.id.clone(), profile.generation);
+        let Some(tab) = profile.session.active_object() else {
+            return;
+        };
+        let ObjectBody::Relation {
+            structure: StructureState::Loaded(structure),
+            results,
+            ..
+        } = &tab.body
+        else {
+            return;
+        };
+        let grid = results.read(cx);
+        let grid = grid.delegate();
+        let Some((_, col)) = grid.active() else {
+            return;
+        };
+        let Some(name) = grid.columns().get(col).map(|column| column.name.clone()) else {
+            return;
+        };
+        let (Some(value), Some(at)) = (grid.active_value(), grid.reference_anchor()) else {
+            return;
+        };
+        let candidates: Vec<(usize, gpui::SharedString, Option<String>)> = grid
+            .reference_choices(col)
+            .into_iter()
+            .filter_map(|(index, label)| {
+                let reference = structure.referenced_by.get(index)?;
+                let bar = reference_filter(reference, Some(value))?;
+                let columns: Vec<ColumnDefinition> = structure
+                    .columns
+                    .iter()
+                    .filter(|column| column.name == name)
+                    .map(|column| ColumnDefinition {
+                        name: reference.column.clone(),
+                        ..column.clone()
+                    })
+                    .collect();
+                let filter = derived_filter(engine, &[bar], &columns);
+                let sql = explorer::probe_sql(engine, &reference.schema, &reference.table, &filter);
+                let sql = sql::is_generated_select(&sql)
+                    .then(|| sql::paged(engine, &sql, &[]))
+                    .flatten();
+                Some((index, label, sql))
+            })
+            .collect();
+
+        self.reference_checks += 1;
+        let check = self.reference_checks;
+        self.reference_popup = Some(ReferencePopup {
+            at,
+            choices: None,
+            check,
+        });
+        cx.notify();
+
+        let task = cx.background_executor().spawn(async move {
+            reference_answers(
+                candidates
+                    .into_iter()
+                    .map(|(index, label, sql)| {
+                        let answer = match sql {
+                            Some(sql) => connection
+                                .generated(&sql, &CancelToken::default())
+                                .map(|result| !result.rows.is_empty())
+                                .map_err(|error| error.message),
+                            None => {
+                                Err("dbdelve will not run a check it cannot read as one SELECT."
+                                    .into())
+                            }
+                        };
+                        (index, label, answer)
+                    })
+                    .collect(),
+            )
+        });
+        cx.spawn(async move |workspace, cx| {
+            let found = task.await;
+            _ = workspace.update(cx, |workspace, cx| {
+                if workspace.issued_to(&profile_id, generation).is_none() {
+                    return;
+                }
+                if let Some(popup) = &mut workspace.reference_popup
+                    && popup.check == check
+                {
+                    popup.choices = Some(found);
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Open a relation that references the key in the active cell, filtered to
+    /// the rows that hold it: the inbound half of [`Workspace::follow_foreign_key`].
+    /// Nothing runs for a NULL, which no row references.
+    pub(crate) fn open_reference(
+        &mut self,
+        action: &OpenReference,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let engine = self.engine();
+        let Some(profile) = self.profile() else {
+            return;
+        };
+        let Some(tab) = profile.session.active_object() else {
+            return;
+        };
+        let ObjectBody::Relation {
+            structure: StructureState::Loaded(structure),
+            results,
+            ..
+        } = &tab.body
+        else {
+            return;
+        };
+        let grid = results.read(cx);
+        let grid = grid.delegate();
+        let Some((_, col)) = grid.active() else {
+            return;
+        };
+        let Some(name) = grid.columns().get(col).map(|column| column.name.clone()) else {
+            return;
+        };
+        let Some(reference) = structure.referenced_by.get(action.index).cloned() else {
+            return;
+        };
+        if reference.referenced_column != name {
+            return;
+        }
+        let Some(bar) = reference_filter(&reference, grid.active_value()) else {
+            return;
+        };
+        // The key's own type stands in for the referencing column's, which
+        // SQL Server requires to match and whose structure is not loaded.
+        let columns: Vec<ColumnDefinition> = structure
+            .columns
+            .iter()
+            .filter(|column| column.name == name)
+            .map(|column| ColumnDefinition {
+                name: reference.column.clone(),
+                ..column.clone()
+            })
+            .collect();
+        let filters = vec![bar];
+        let filter = derived_filter(engine, &filters, &columns);
+        let kind = match &profile.catalog {
+            CatalogState::Loaded(catalog, _) => {
+                relation_kind(catalog, &reference.schema, &reference.table).unwrap_or_default()
+            }
+            _ => RelationKind::default(),
+        };
+        let opened = OpenedObject::Relation {
+            schema: reference.schema,
+            name: reference.table,
             kind,
             filter,
             filters,
@@ -599,8 +957,32 @@ impl Workspace {
         cx.notify();
     }
 
+    /// What comes to the front once the tab in front has closed: the tab
+    /// `Session::fallback` named, or with none left, the window. Never
+    /// nothing: the editor that had focus has just unmounted, and focus left
+    /// to fall would land outside every binding the workspace listens for.
+    pub(crate) fn front_after_close(&mut self, fallback: Option<Tab>, cx: &mut Context<Self>) {
+        match fallback {
+            Some(next) => self.activate_tab(next, cx),
+            None => {
+                if let Some(profile) = self.profile_mut() {
+                    profile.session.clear_prompts();
+                    profile.session.editor_needs_focus = true;
+                }
+            }
+        }
+    }
+
     pub(crate) fn close_object(&mut self, id: u64, cx: &mut Context<Self>) {
+        self.stop_run(Tab::Object(id), cx);
+        // A count outliving its tab would hold the connection for an answer
+        // nothing is left to show.
+        self.cancel_count(id, cx);
+        let mut in_front = None;
         if let Some(profile) = self.profile_mut() {
+            if profile.session.active == Tab::Object(id) {
+                in_front = Some(profile.session.fallback(Tab::Object(id)));
+            }
             // Read before the tab goes, because the key is made of its schema,
             // name and filter, and there is nothing left to make it from
             // afterwards.
@@ -613,15 +995,24 @@ impl Workspace {
             let profile_id = profile.id.clone();
             profile.session.objects.retain(|tab| tab.id != id);
             profile.session.structure_requests.remove(&id);
+            // Nothing else clears a form once its tab is gone: left in place,
+            // it would hold its input fields alive for nothing and `new_row`
+            // reopening this id, impossible since ids never recur, is the
+            // only other thing that would have found it again.
+            if profile
+                .session
+                .insert_form
+                .as_ref()
+                .is_some_and(|form| form.tab == Tab::Object(id))
+            {
+                profile.session.insert_form = None;
+            }
             if let Some(key) = snapshot {
                 let _ = store::remove_grid(&profile_id, &key);
             }
-            if profile.session.active == Tab::Object(id)
-                && let Some(first) = profile.session.queries.first().map(|tab| tab.id)
-            {
-                profile.session.active = Tab::Query(first);
-                profile.session.editor_needs_focus = true;
-            }
+        }
+        if let Some(fallback) = in_front {
+            self.front_after_close(fallback, cx);
         }
         self.remember_profiles(cx);
         cx.notify();
@@ -731,6 +1122,25 @@ fn restorable(
     (opened, still_pending)
 }
 
+/// The relations to list under a reference arrow: each one a row was found in,
+/// and each one whose check failed, carrying what went wrong. A failed check
+/// says nothing about whether a row is there, so it is never folded into the
+/// relations that hold none.
+fn reference_answers(
+    answers: Vec<(usize, gpui::SharedString, Result<bool, String>)>,
+) -> Vec<ReferenceAnswer> {
+    answers
+        .into_iter()
+        .filter_map(|(index, label, answer)| {
+            Some((
+                index,
+                label,
+                answer.map(|found| found.then_some(())).transpose()?,
+            ))
+        })
+        .collect()
+}
+
 /// The columns a `NULL` cannot be written into.
 fn columns_not_nullable(columns: &[ColumnDefinition]) -> Vec<String> {
     columns
@@ -827,6 +1237,32 @@ mod tests {
         );
         assert_eq!(opened.len(), 2);
         assert!(waiting.is_empty());
+    }
+
+    #[test]
+    fn a_reference_check_that_failed_is_listed_with_its_error_not_as_no_rows() {
+        let answers = reference_answers(vec![
+            (0, "orders.account_id".into(), Ok(true)),
+            (1, "invoices.account_id".into(), Ok(false)),
+            (
+                2,
+                "audit.account_id".into(),
+                Err("permission denied".into()),
+            ),
+        ]);
+
+        assert_eq!(
+            answers,
+            [
+                (0, "orders.account_id".into(), Ok(())),
+                (
+                    2,
+                    "audit.account_id".into(),
+                    Err("permission denied".into())
+                ),
+            ]
+        );
+        assert!(reference_answers(vec![(1, "invoices.account_id".into(), Ok(false))]).is_empty());
     }
 
     fn definition(name: &str, nullable: bool, default: Option<&str>) -> ColumnDefinition {

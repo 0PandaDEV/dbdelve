@@ -7,7 +7,7 @@
 use gpui::{Action, actions};
 use serde::Deserialize;
 
-use crate::{db::ExplainMode, filter::Operator, sql::Mode};
+use crate::{db::ExplainMode, export::RowsAs, filter::Operator, sql::Mode};
 
 /// A header click. The column is the one in the grid; which statement it
 /// belongs to is whatever surface is in front, because that is the grid the
@@ -54,6 +54,27 @@ pub(crate) struct ToggleFilterJoin {
 #[action(namespace = dbdelve, no_json)]
 pub(crate) struct RemoveFilter {
     pub(crate) row: usize,
+}
+
+/// Copy the active cell's row to the clipboard in the chosen shape.
+#[derive(Clone, PartialEq, Eq, Deserialize, Action)]
+#[action(namespace = dbdelve, no_json)]
+pub(crate) struct CopyRows {
+    pub(crate) kind: RowsAs,
+}
+
+/// The arrow on a key cell: find which relations hold rows that reference the
+/// key in the active cell, and offer them.
+#[derive(Clone, PartialEq, Eq, Deserialize, Action)]
+#[action(namespace = dbdelve, no_json)]
+pub(crate) struct ShowReferences;
+
+/// Open a relation that points at the key in the active cell, filtered to the
+/// rows that reference it. The index is into the tab's `Structure::referenced_by`.
+#[derive(Clone, PartialEq, Eq, Deserialize, Action)]
+#[action(namespace = dbdelve, no_json)]
+pub(crate) struct OpenReference {
+    pub(crate) index: usize,
 }
 
 /// How many rows a relation's preview asks for. dbdelve's own statement carries

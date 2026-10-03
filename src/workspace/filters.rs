@@ -25,6 +25,20 @@ impl Workspace {
         {
             self.load_structure(id, schema, relation, cx);
         }
+        if let Some(ObjectBody::Relation { count, stale, .. }) = self
+            .profile_mut()
+            .and_then(|profile| profile.session.objects.iter_mut().find(|tab| tab.id == id))
+            .map(|tab| &mut tab.body)
+        {
+            // A count from before the refresh describes rows that may be
+            // gone; one still running is left to answer.
+            if let RowCount::Counted(..) = count {
+                *count = RowCount::Unasked;
+            }
+            // What tells `requery_relation` to keep these rows on screen until
+            // the new ones land.
+            *stale = true;
+        }
         self.requery_relation(id, |_, _, _, _| true, cx);
     }
 

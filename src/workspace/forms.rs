@@ -7,6 +7,7 @@ use gpui_component::checkbox::Checkbox;
 
 use super::*;
 use crate::connection_form::ConnectionTest;
+use crate::scroller::{SmoothScrollable, smooth_scoped};
 use crate::sql::{Destructive, Stop};
 
 impl Workspace {
@@ -18,6 +19,10 @@ impl Workspace {
             .expect("form is rendered only while open");
         let message = form.error.clone();
         let editing = form.editing.is_some();
+        // Scoped to the profile being edited, or "new", so switching from
+        // editing one profile to another (or to a fresh connection) doesn't
+        // open on the last profile's scroll offset.
+        let scope = form.editing.as_deref().unwrap_or("new");
         let hairline = || div().h(px(1.)).flex_1().bg(t.border);
         let labelled = |label: &'static str, control: AnyElement| {
             div()
@@ -40,6 +45,7 @@ impl Workspace {
             .id("connection-form-scroll")
             .size_full()
             .overflow_y_scroll()
+            .smooth_scroll(&smooth_scoped("connection-form-scroll", scope, cx))
             .p(px(layout::SPACE_LG))
             .flex()
             .flex_col()
@@ -433,6 +439,7 @@ impl Workspace {
             div()
                 .absolute()
                 .inset_0()
+                .occlude()
                 .flex()
                 .justify_center()
                 // Cross-axis stretch is the flex default, and it would take the
@@ -471,6 +478,83 @@ impl Workspace {
     }
 
     /// What `cmd+w` asks before it takes unapplied cell edits with the tab.
+    pub(crate) fn render_reference_popup(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let t = *theme(cx);
+        let popup = self.reference_popup.as_ref()?;
+        let rows: Vec<AnyElement> = match &popup.choices {
+            None => vec![note(t, "Checking…")],
+            Some(choices) if choices.is_empty() => {
+                vec![note(t, "No rows reference this key.")]
+            }
+            Some(choices) => choices
+                .iter()
+                .map(|(index, label, answer)| {
+                    let index = *index;
+                    if let Err(message) = answer {
+                        return div()
+                            .px(px(layout::SPACE_SM))
+                            .py(px(layout::SPACE_XS))
+                            .text_size(px(layout::TEXT_SM))
+                            .child(div().text_color(t.text_muted).child(label.clone()))
+                            .child(
+                                div()
+                                    .text_color(t.danger)
+                                    .child(format!("Could not check: {message}")),
+                            )
+                            .into_any_element();
+                    }
+                    div()
+                        .id(("reference-choice", index))
+                        .px(px(layout::SPACE_SM))
+                        .py(px(layout::SPACE_XS))
+                        .rounded(px(layout::RADIUS_CONTROL))
+                        .text_size(px(layout::TEXT_SM))
+                        .text_color(t.text)
+                        .cursor_pointer()
+                        .hover(|row| row.bg(t.element_hover))
+                        .child(label.clone())
+                        .on_click(cx.listener(move |workspace, _, window, cx| {
+                            workspace.reference_popup = None;
+                            workspace.open_reference(&OpenReference { index }, window, cx);
+                        }))
+                        .into_any_element()
+                })
+                .collect(),
+        };
+
+        Some(
+            div()
+                .id("reference-backdrop")
+                .absolute()
+                .inset_0()
+                .occlude()
+                .on_mouse_down(
+                    gpui::MouseButton::Left,
+                    cx.listener(|workspace, _, _, cx| {
+                        workspace.reference_popup = None;
+                        cx.notify();
+                    }),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .left(popup.at.x)
+                        .top(popup.at.y)
+                        .min_w(px(180.))
+                        .max_w(px(420.))
+                        .p(px(layout::SPACE_XS))
+                        .flex()
+                        .flex_col()
+                        .rounded(px(layout::RADIUS_CONTROL))
+                        .bg(t.overlay)
+                        .border_1()
+                        .border_color(t.border)
+                        .children(rows),
+                )
+                .into_any_element(),
+        )
+    }
+
     pub(crate) fn render_discard_confirmation(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let t = *theme(cx);
         self.profile()?.session.pending_discard.as_ref()?;
@@ -481,6 +565,7 @@ impl Workspace {
             div()
                 .absolute()
                 .inset_0()
+                .occlude()
                 .flex()
                 .items_center()
                 .justify_center()
@@ -554,6 +639,7 @@ impl Workspace {
             div()
                 .absolute()
                 .inset_0()
+                .occlude()
                 .flex()
                 .items_center()
                 .justify_center()
@@ -687,6 +773,7 @@ impl Workspace {
             div()
                 .absolute()
                 .inset_0()
+                .occlude()
                 .flex()
                 .items_center()
                 .justify_center()
@@ -807,6 +894,7 @@ impl Workspace {
             div()
                 .absolute()
                 .inset_0()
+                .occlude()
                 .flex()
                 .items_center()
                 .justify_center()
@@ -945,6 +1033,7 @@ impl Workspace {
         if review.tab != profile.session.active {
             return None;
         }
+        let scope = review.tab.scroll_scope(&profile.id);
         // The batch is the only thing this tab can have run while the panel is
         // open, so a failure on it is this batch's failure.
         let error = match profile.session.active_query() {
@@ -963,6 +1052,7 @@ impl Workspace {
             div()
                 .absolute()
                 .inset_0()
+                .occlude()
                 .flex()
                 .items_center()
                 .justify_center()
@@ -974,6 +1064,7 @@ impl Workspace {
                                 .id("apply-review-sql")
                                 .max_h(px(220.))
                                 .overflow_y_scroll()
+                                .smooth_scroll(&smooth_scoped("apply-review-sql", &scope, cx))
                                 .font_family(code)
                                 .text_size(px(layout::TEXT_SM))
                                 // Line by line: a single child carrying newlines
@@ -1439,22 +1530,32 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .gap(px(layout::SPACE_XS))
-                    .pl(px(layout::SPACE_MD))
-                    .pr(px(layout::SPACE_SM))
+                    .px(px(layout::SPACE_SM))
+                    .border_b_1()
+                    .border_color(t.border)
                     .child(row_icon(t, icon::SEARCH))
+                    // Clipped by a box of its own: the input lays its placeholder
+                    // out at its full width and ellipsises it against that,
+                    // so without a clip the text runs on past the row.
                     .child(
-                        Input::new(&profile.session.explorer_filter)
-                            .min_w_0()
-                            .flex_1()
-                            .appearance(false),
+                        div().flex_1().min_w_0().overflow_hidden().child(
+                            Input::new(&profile.session.explorer_filter)
+                                .w_full()
+                                .min_w_0()
+                                .appearance(false),
+                        ),
                     ),
             )
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .py(px(layout::SPACE_XS))
-                    .child(content),
-            )
+            .child(div().flex_1().min_h_0().child(content))
     }
+}
+
+fn note(t: Theme, text: &'static str) -> AnyElement {
+    div()
+        .px(px(layout::SPACE_SM))
+        .py(px(layout::SPACE_XS))
+        .text_size(px(layout::TEXT_SM))
+        .text_color(t.text_muted)
+        .child(text)
+        .into_any_element()
 }

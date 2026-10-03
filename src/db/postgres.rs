@@ -10,9 +10,9 @@ use crate::tls;
 
 use super::ssh::{Tunnel, tunnelled};
 use super::{
-    Catalog, Cell, Column, DbError, EditTarget, QueryResult, ServerConfig, Sizes, Structure,
-    assemble_catalog, assemble_foreign_keys, assemble_sizes, assemble_structure, non_utf8_error,
-    required_cell,
+    Catalog, Cell, Column, DbError, EditTarget, QueryResult, Reference, ServerConfig, Sizes,
+    Structure, assemble_catalog, assemble_foreign_keys, assemble_references, assemble_sizes,
+    assemble_structure, non_utf8_error, required_cell,
 };
 
 /// The port the server listens on when the profile does not say.
@@ -90,7 +90,14 @@ WITH sized AS (
                     WHERE i.indrelid = class.oid
                 ), 0)
             )::bigint * current_setting('block_size')::bigint
-        END AS size_bytes
+        END AS size_bytes,
+        -- The planner's estimate, as of the same VACUUM or ANALYZE. Below zero
+        -- is the never-analyzed mark from PG14; before it that mark is a zero,
+        -- which the status bar never shows as an estimate.
+        CASE
+        WHEN class.relkind = 'p' OR class.reltuples < 0 THEN NULL
+        ELSE class.reltuples::bigint
+        END AS row_estimate
     FROM pg_catalog.pg_class AS class
     JOIN pg_catalog.pg_namespace AS namespace
         ON namespace.oid = class.relnamespace
@@ -112,7 +119,18 @@ SELECT
             JOIN sized AS leaf ON leaf.oid = tree.relid
         ), 0)::bigint
     ELSE parent.size_bytes
-    END AS size_bytes
+    END AS size_bytes,
+    -- Only when every leaf has one: a partition never analyzed, or one this
+    -- does not measure (a foreign table), would make the sum an undercount.
+    CASE
+    WHEN parent.relkind = 'p' THEN (
+        SELECT CASE WHEN bool_and(leaf.row_estimate IS NOT NULL) THEN sum(leaf.row_estimate) END
+        FROM pg_catalog.pg_partition_tree(parent.oid) AS tree
+        LEFT JOIN sized AS leaf ON leaf.oid = tree.relid
+        WHERE tree.isleaf
+    )::bigint
+    ELSE parent.row_estimate
+    END AS row_estimate
 FROM sized AS parent
 ";
 
@@ -247,6 +265,41 @@ WHERE namespace.nspname = {schema}
     AND class.relname = {relation}
     AND table_constraint.contype = 'f'
 ORDER BY table_constraint.conname, key.key_position
+";
+
+// The same catalog read from the referenced side: who points at this relation.
+// `conparentid = 0` keeps a key declared on a partitioned table to the one row
+// it was declared as: from PG 12 the server clones it onto every partition, and
+// each clone would otherwise be listed as a relation of its own.
+const REFERENCES_SQL: &str = "
+SELECT
+    namespace.nspname AS source_schema,
+    class.relname AS source_table,
+    source_attribute.attname AS column_name,
+    referenced_attribute.attname AS referenced_column,
+    table_constraint.conname AS constraint_name
+FROM pg_catalog.pg_constraint AS table_constraint
+JOIN pg_catalog.pg_class AS class
+    ON class.oid = table_constraint.conrelid
+JOIN pg_catalog.pg_namespace AS namespace
+    ON namespace.oid = class.relnamespace
+JOIN pg_catalog.pg_class AS referenced_class
+    ON referenced_class.oid = table_constraint.confrelid
+JOIN pg_catalog.pg_namespace AS referenced_namespace
+    ON referenced_namespace.oid = referenced_class.relnamespace
+CROSS JOIN LATERAL unnest(table_constraint.conkey, table_constraint.confkey)
+    WITH ORDINALITY AS key(source_attnum, referenced_attnum, key_position)
+JOIN pg_catalog.pg_attribute AS source_attribute
+    ON source_attribute.attrelid = table_constraint.conrelid
+    AND source_attribute.attnum = key.source_attnum
+JOIN pg_catalog.pg_attribute AS referenced_attribute
+    ON referenced_attribute.attrelid = table_constraint.confrelid
+    AND referenced_attribute.attnum = key.referenced_attnum
+WHERE referenced_namespace.nspname = {schema}
+    AND referenced_class.relname = {relation}
+    AND table_constraint.contype = 'f'
+    AND table_constraint.conparentid = 0
+ORDER BY namespace.nspname, class.relname, table_constraint.conname, key.key_position
 ";
 
 // Keyed by oid rather than by name: two schemas can hold a table of the same
@@ -597,6 +650,14 @@ impl Connection {
     pub fn sizes(&self) -> Result<Sizes, DbError> {
         let side = Self::connect(&self.server, self.tunnel.clone())?;
         assemble_sizes(side.internal_query(SIZES_SQL)?)
+    }
+
+    pub fn references(&self, schema: &str, relation: &str) -> Result<Vec<Reference>, DbError> {
+        assemble_references(&self.internal_query(&structure_sql(
+            REFERENCES_SQL,
+            schema,
+            relation,
+        ))?)
     }
 
     pub fn structure(&self, schema: &str, relation: &str) -> Result<Structure, DbError> {
@@ -1831,6 +1892,59 @@ mod tests {
 
     #[test]
     #[ignore = "requires a local Postgres server configured through PG*"]
+    fn live_a_relation_lists_the_single_column_keys_that_point_at_it() {
+        let connection = Connection::open(&live_config()).expect("connection should open");
+        let references = connection
+            .references("public", "accounts")
+            .expect("references should load");
+
+        assert!(references.contains(&Reference {
+            schema: "public".into(),
+            table: "orders".into(),
+            column: "account_id".into(),
+            referenced_column: "id".into(),
+        }));
+        assert!(
+            references
+                .iter()
+                .all(|reference| reference.referenced_column != "number"),
+            "a composite key names no single column: {references:?}"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires a local Postgres server configured through PG*"]
+    fn live_a_key_on_a_partitioned_table_is_listed_once_not_per_partition() {
+        let connection = Connection::open(&live_config()).expect("connection should open");
+        connection
+            .query(
+                "DROP TABLE IF EXISTS dbdelve_test_referencing; \
+                 CREATE TABLE dbdelve_test_referencing \
+                     (account_id bigint REFERENCES accounts (id)) \
+                     PARTITION BY RANGE (account_id); \
+                 CREATE TABLE dbdelve_test_referencing_p1 \
+                     PARTITION OF dbdelve_test_referencing FOR VALUES FROM (0) TO (500); \
+                 CREATE TABLE dbdelve_test_referencing_p2 \
+                     PARTITION OF dbdelve_test_referencing FOR VALUES FROM (500) TO (1000)",
+            )
+            .expect("the fixture tables should be created");
+
+        let references = connection.references("public", "accounts");
+        connection
+            .query("DROP TABLE dbdelve_test_referencing")
+            .expect("the fixture tables should be cleaned up");
+        let tables: Vec<String> = references
+            .expect("references should load")
+            .into_iter()
+            .map(|reference| reference.table)
+            .filter(|table| table.starts_with("dbdelve_test_referencing"))
+            .collect();
+
+        assert_eq!(tables, ["dbdelve_test_referencing"]);
+    }
+
+    #[test]
+    #[ignore = "requires a local Postgres server configured through PG*"]
     fn live_a_composite_primary_key_reports_every_column_it_is_made_of() {
         let connection = Connection::open(&live_config()).expect("connection should open");
         connection
@@ -2005,16 +2119,28 @@ mod tests {
             sizes["public"].contains_key("dbdelve_test_partitioned"),
             "a partitioned table's size must be reported"
         );
-        let partition_total = sizes["public"]["dbdelve_test_partitioned_p1"]
-            + sizes["public"]["dbdelve_test_partitioned_p2"];
+        let of = |name: &str| sizes["public"][name];
+        let partition_total = of("dbdelve_test_partitioned_p1").size.unwrap()
+            + of("dbdelve_test_partitioned_p2").size.unwrap();
         assert_eq!(
-            sizes["public"]["dbdelve_test_partitioned"], partition_total,
+            of("dbdelve_test_partitioned").size,
+            Some(partition_total),
             "a partitioned table's size is the sum of its partitions"
+        );
+        assert_eq!(
+            of("dbdelve_test_partitioned").rows,
+            Some(16),
+            "an analyzed partitioned table's estimate is the sum of its partitions'"
         );
 
         assert!(
-            sizes["public"]["dbdelve_test_unanalyzed"] > 0,
+            of("dbdelve_test_unanalyzed").size.unwrap_or(0) > 0,
             "a never-analyzed table with rows must not report 0 bytes"
+        );
+        assert_eq!(
+            of("dbdelve_test_unanalyzed").rows,
+            None,
+            "a never-analyzed table has no estimate, not one of -1"
         );
 
         connection
