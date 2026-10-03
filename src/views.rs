@@ -1201,7 +1201,7 @@ fn render_results(
                 results.read(cx).horizontal_scroll_handle.clone(),
                 cx,
             );
-            let data = div()
+            div()
                 .id("results")
                 .smooth_scroll(&rows_scroll)
                 .size_full()
@@ -1223,36 +1223,7 @@ fn render_results(
                 .on_action(cx.listener(Workspace::follow_foreign_key))
                 .on_action(cx.listener(Workspace::open_reference))
                 .on_action(cx.listener(Workspace::show_references))
-                .child(DataTable::new(results).bordered(false).stripe(false));
-            let body = div().flex_1().flex().min_h_0();
-            // The new-row form takes the panel's place while it is open,
-            // folded or not.
-            let panel = match form {
-                Some(form) => Some((render_new_row_panel(form, scope, cx), false)),
-                None => render_row_inspector(results, folded, row_panel, scope, cx)
-                    .map(|panel| (panel, folded)),
-            };
-            match panel {
-                None => body.child(data),
-                // Folded, the panel keeps a strip of the edge rather than
-                // vanishing: a selected row with nowhere to bring its
-                // values back from is a panel the user has lost.
-                Some((strip, true)) => body.child(data).child(strip),
-                Some((panel, false)) => body.child(
-                    h_resizable("row-inspector-split")
-                        .with_state(split)
-                        .child(resizable_panel().child(data))
-                        .child(
-                            resizable_panel()
-                                .size(px(layout::INSPECTOR_WIDTH))
-                                .size_range(
-                                    px(layout::INSPECTOR_MIN_WIDTH)
-                                        ..px(layout::INSPECTOR_MAX_WIDTH),
-                                )
-                                .child(panel),
-                        ),
-                ),
-            }
+                .child(DataTable::new(results).bordered(false).stripe(false))
         })
         .into_any_element();
 
@@ -1283,6 +1254,38 @@ fn render_results(
                 .into_any_element(),
             None => grid,
         },
+    };
+
+    // The new-row form, or the selected row's inspector, takes a slice beside
+    // whatever is occupying the main area -- the grid, a message or a loading
+    // overlay -- rather than just the grid, so New row stays usable on an
+    // empty table and Delete's refusal is visible after a failed preview.
+    let panel = match form {
+        Some(form) => Some((render_new_row_panel(form, scope, cx), false)),
+        None => {
+            render_row_inspector(results, folded, row_panel, scope, cx).map(|panel| (panel, folded))
+        }
+    };
+    let body = div().size_full().flex().min_h_0();
+    let content = match panel {
+        None => body.child(content),
+        // Folded, the panel keeps a strip of the edge rather than
+        // vanishing: a selected row with nowhere to bring its
+        // values back from is a panel the user has lost.
+        Some((strip, true)) => body.child(content).child(strip),
+        Some((panel, false)) => body.child(
+            h_resizable("row-inspector-split")
+                .with_state(split)
+                .child(resizable_panel().child(content))
+                .child(
+                    resizable_panel()
+                        .size(px(layout::INSPECTOR_WIDTH))
+                        .size_range(
+                            px(layout::INSPECTOR_MIN_WIDTH)..px(layout::INSPECTOR_MAX_WIDTH),
+                        )
+                        .child(panel),
+                ),
+        ),
     };
 
     div()
