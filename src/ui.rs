@@ -475,7 +475,12 @@ pub(crate) fn compact_count(rows: usize) -> String {
 /// `1234567` → `1,234,567`. Row counts are read at a glance, and groups are
 /// what keeps six digits legible.
 pub(crate) fn group_thousands(value: u64) -> String {
-    let digits = value.to_string();
+    group_digits(&value.to_string())
+}
+
+/// A run of ASCII digits in threes. Taken as text so a `NUMERIC` wider than
+/// any integer type still groups.
+pub(crate) fn group_digits(digits: &str) -> String {
     let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
     for (index, digit) in digits.chars().enumerate() {
         if index > 0 && (digits.len() - index).is_multiple_of(3) {

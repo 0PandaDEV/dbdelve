@@ -1204,7 +1204,7 @@ fn step_target(
 }
 
 /// A plain number with its integer digits in threes, `1723858791` as
-/// `1'723'858'791`. Display only: `display` is what the cell paints and the
+/// `1,723,858,791`, as the status bar groups its counts. Display only: `display` is what the cell paints and the
 /// copy, the inspector and every statement read the value as fetched. Anything
 /// that is not a bare decimal -- an exponent, a currency sign -- is left alone.
 fn grouped_digits(value: &str) -> String {
@@ -1220,14 +1220,7 @@ fn grouped_digits(value: &str) -> String {
     if !digits(whole) || fraction.is_some_and(|fraction| !digits(fraction)) || whole.len() <= 3 {
         return value.to_string();
     }
-    let mut grouped = String::with_capacity(value.len() + whole.len() / 3);
-    grouped.push_str(sign);
-    for (index, digit) in whole.chars().enumerate() {
-        if index > 0 && (whole.len() - index).is_multiple_of(3) {
-            grouped.push('\'');
-        }
-        grouped.push(digit);
-    }
+    let mut grouped = format!("{sign}{}", crate::ui::group_digits(whole));
     if let Some(fraction) = fraction {
         grouped.push('.');
         grouped.push_str(fraction);
@@ -2158,9 +2151,9 @@ mod tests {
     #[test]
     fn digits_are_grouped_in_threes_and_only_when_the_value_is_a_plain_number() {
         for (value, shown) in [
-            ("1723858791", "1'723'858'791"),
-            ("-1234.5678", "-1'234.5678"),
-            ("+1000", "+1'000"),
+            ("1723858791", "1,723,858,791"),
+            ("-1234.5678", "-1,234.5678"),
+            ("+1000", "+1,000"),
             ("999", "999"),
             ("12", "12"),
             ("1e10", "1e10"),
@@ -2770,7 +2763,7 @@ mod tests {
         assert!(grid.set_pending(0, 2, value("7654321")));
 
         let pending = grid.pending_at(0, 2).unwrap();
-        assert_eq!(pending.shown.as_deref(), Some("7'654'321"));
+        assert_eq!(pending.shown.as_deref(), Some("7,654,321"));
         assert_eq!(pending.value, value("7654321"));
         assert_eq!(grid.pending_updates()[0].sets[0].1, value("7654321"));
     }
