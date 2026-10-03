@@ -1174,6 +1174,7 @@ fn render_results(
         .flex()
         .flex_col()
         .min_h_0()
+        .min_w_0()
         // The loading overlay below covers this same strip's spinner while
         // there are no rows yet; past that, a refresh says so up here and
         // keeps the rows it is replacing on screen underneath.
@@ -1201,10 +1202,15 @@ fn render_results(
                 results.read(cx).horizontal_scroll_handle.clone(),
                 cx,
             );
+            // `flex_1` rather than full height: under the "Refreshing…" strip a
+            // full-height grid overruns the pane by the strip's height and
+            // takes its last row and scrollbar with it.
             div()
                 .id("results")
                 .smooth_scroll(&rows_scroll)
-                .size_full()
+                .flex_1()
+                .w_full()
+                .min_h_0()
                 .min_w_0()
                 .font_family(grid)
                 // The grid's own delegate has no key hook and the
@@ -1237,6 +1243,7 @@ fn render_results(
                 .relative()
                 .size_full()
                 .min_h_0()
+                .min_w_0()
                 .child(grid)
                 .child(
                     div()
