@@ -1253,7 +1253,19 @@ fn render_results(
                 .size_full()
                 .min_h_0()
                 .child(grid)
-                .child(div().absolute().size_full().child(overlay))
+                .child(
+                    div()
+                        .absolute()
+                        .size_full()
+                        // Without this a header click reaches the grid
+                        // mounted underneath -- empty or stale, since this is
+                        // exactly the state a run has not replaced it yet.
+                        // The overlay's own Cancel button still works: this
+                        // only stops a click from reaching past the overlay,
+                        // never from landing on it.
+                        .occlude()
+                        .child(overlay),
+                )
                 .into_any_element(),
             None => grid,
         },
