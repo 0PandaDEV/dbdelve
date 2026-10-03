@@ -1246,8 +1246,13 @@ fn render_results(
                 .min_w_0()
                 .child(grid)
                 .child(
+                    // Pinned to the corner: a `div` is block layout, which puts
+                    // an absolute child with no insets where it would have
+                    // flowed -- below the full-height grid, out of sight.
                     div()
                         .absolute()
+                        .top_0()
+                        .left_0()
                         .size_full()
                         // Without this a header click reaches the grid
                         // mounted underneath -- empty or stale, since this is
