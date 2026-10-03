@@ -94,6 +94,11 @@ pub(crate) struct Workspace {
     /// The window's width the last time the sidebar was put right, which is how
     /// a window resize is told from a drag of the handle.
     pub(crate) sidebar_container: std::cell::Cell<gpui::Pixels>,
+    /// The sidebar's actual width the last time `settle_sidebar` looked, which
+    /// may be less than `sidebar_width` when the container is too narrow to
+    /// hold it. Comparing against this rather than against `sidebar_width`
+    /// itself is what tells a real drag from that squeeze settling back out.
+    pub(crate) sidebar_last_size: std::cell::Cell<gpui::Pixels>,
     /// The list a reference arrow opens, and which lookup it is waiting on.
     pub(crate) reference_popup: Option<ReferencePopup>,
     pub(crate) reference_checks: u64,
@@ -155,6 +160,7 @@ impl Workspace {
             tab_strip: crate::tab_drag::TabStrip::default(),
             sidebar_width: std::cell::Cell::new(px(layout::SIDEBAR_DEFAULT_WIDTH)),
             sidebar_container: std::cell::Cell::new(px(0.)),
+            sidebar_last_size: std::cell::Cell::new(px(layout::SIDEBAR_DEFAULT_WIDTH)),
             reference_popup: None,
             reference_checks: 0,
             row_panel: views::RowPanel {
@@ -495,6 +501,40 @@ impl Workspace {
     }
 }
 
+/// What `settle_sidebar` should do with the split this frame, decided from
+/// numbers alone so the decision is testable without a window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SidebarSettle {
+    /// The container changed size: put the sidebar back at its remembered
+    /// width, clamped to whatever room the content panel's minimum leaves.
+    Resize,
+    /// The container didn't move, so nothing but a drag could have changed
+    /// the handle: adopt the new width as the one to remember.
+    Adopt,
+    /// Nothing changed since the last time this settled.
+    Settled,
+}
+
+/// `last_size` is the sidebar's actual width the last time this ran, which
+/// can differ from `target` (the width to put it back at) when the container
+/// was too narrow to hold `target` in full -- that squeeze must resolve
+/// through `Resize`, never `Adopt`, or widening the window again could never
+/// recover the width the user actually asked for.
+fn sidebar_settle(
+    container: gpui::Pixels,
+    last_container: gpui::Pixels,
+    sizes_0: gpui::Pixels,
+    last_size: gpui::Pixels,
+) -> SidebarSettle {
+    if container != last_container {
+        SidebarSettle::Resize
+    } else if sizes_0 != last_size {
+        SidebarSettle::Adopt
+    } else {
+        SidebarSettle::Settled
+    }
+}
+
 impl Workspace {
     /// Puts the sidebar back at its width after a window resize, and takes the
     /// width a drag has left it at.
@@ -502,23 +542,29 @@ impl Workspace {
         if self.sidebar_hidden {
             return;
         }
-        let (target, last_container) = (self.sidebar_width.get(), self.sidebar_container.get());
+        let (target, last_container, last_size) = (
+            self.sidebar_width.get(),
+            self.sidebar_container.get(),
+            self.sidebar_last_size.get(),
+        );
         self.shell_split.update(cx, |state, cx| {
             let container = state.container_size();
             if container <= px(1.) || state.sizes().len() != 2 {
                 return;
             }
-            if container != last_container {
-                // The window changed size and the library rescaled every
-                // panel by its share: the sidebar goes back to its width.
-                self.sidebar_container.set(container);
-                if (state.sizes()[0] - target).abs() > px(0.5) {
-                    state.resize_panel(0, target, window, cx);
+            match sidebar_settle(container, last_container, state.sizes()[0], last_size) {
+                SidebarSettle::Resize => {
+                    self.sidebar_container.set(container);
+                    if (state.sizes()[0] - target).abs() > px(0.5) {
+                        state.resize_panel(0, target, window, cx);
+                    }
+                    self.sidebar_last_size.set(state.sizes()[0]);
                 }
-            } else {
-                // Nothing else moves the handle, so a width that is not
-                // the one held is the user's.
-                self.sidebar_width.set(state.sizes()[0]);
+                SidebarSettle::Adopt => {
+                    self.sidebar_width.set(state.sizes()[0]);
+                    self.sidebar_last_size.set(state.sizes()[0]);
+                }
+                SidebarSettle::Settled => {}
             }
         });
     }
@@ -1332,6 +1378,36 @@ pub(crate) fn opacity_from_percent_input(typed: &str, current: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_window_too_narrow_to_hold_the_sidebar_does_not_relabel_the_squeeze() {
+        // 400 wanted, container only leaves room for 350: Resize, not Adopt,
+        // even though the achieved size differs from what was asked for.
+        assert_eq!(
+            sidebar_settle(px(450.), px(1200.), px(350.), px(400.)),
+            SidebarSettle::Resize
+        );
+        // Settled at the squeezed width: another frame at the same container
+        // size must leave the remembered target alone.
+        assert_eq!(
+            sidebar_settle(px(450.), px(450.), px(350.), px(350.)),
+            SidebarSettle::Settled
+        );
+        // Widening back out is another container change, so the target gets
+        // another chance to apply in full.
+        assert_eq!(
+            sidebar_settle(px(1200.), px(450.), px(350.), px(350.)),
+            SidebarSettle::Resize
+        );
+    }
+
+    #[test]
+    fn a_drag_at_a_fixed_container_size_is_adopted() {
+        assert_eq!(
+            sidebar_settle(px(1200.), px(1200.), px(300.), px(400.)),
+            SidebarSettle::Adopt
+        );
+    }
 
     #[test]
     fn editor_zoom_stays_inside_its_readable_range() {
