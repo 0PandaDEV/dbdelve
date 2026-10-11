@@ -41,7 +41,8 @@ time.
 - **Make it yours.** A theme library with DBDelve's own Dark, Light and Black,
   the first two also in translucent glass, alongside favorites like Catppuccin,
   Tokyo Night, Gruvbox and Dracula, each in dark and light, and each of those
-  in glass.
+  in glass. Import themes from Zed or VS Code, or write your own; see
+  [docs/themes.md](docs/themes.md).
 - **Bring your connections with you.** Import every saved connection,
   passwords and SSH settings included, from DBeaver on macOS, Linux and
   Windows, or from TablePlus on macOS.
@@ -195,7 +196,6 @@ status bar links to [the latest release][releases] once there is a newer one.
 There is no telemetry. The only request DBDelve makes on its own is one to
 GitHub at startup to check for updates, which you can turn off in Settings.
 
-
 ## License
 
-MIT. See [NOTICES.md](NOTICES.md) for third-party font licenses.
+MIT. See [NOTICES.md](NOTICES.md) for third-party font and theme licenses.

@@ -89,23 +89,41 @@ impl Workspace {
         // Swapping straight to another list skips `close_palette`, and a
         // theme being previewed must not outlive the list that previews it.
         self.end_theme_preview(window, cx);
-        // The theme picker is the one list reachable before any connection
+        // The theme lists are the only ones reachable before any connection
         // exists, from the welcome surface or the connection form.
-        if showing == Some(mode) || (self.profile().is_none() && mode != PaletteMode::Theme) {
+        let picks_theme = matches!(mode, PaletteMode::Theme | PaletteMode::ImportTheme(_));
+        if showing == Some(mode) || (self.profile().is_none() && !picks_theme) {
             self.close_palette(window, cx);
             return;
         }
+        if let PaletteMode::ImportTheme(source) = mode
+            && !source.is_ready()
+        {
+            self.close_palette(window, cx);
+            self.open_import_list_once_found(source, window, cx);
+            return;
+        }
 
-        // The theme list opens on the theme in force, so the preview it starts
-        // with is no change at all.
+        // A theme list opens on the theme in force where it lists it, so the
+        // preview it starts with is no change at all.
+        if picks_theme {
+            self.theme_before_preview = Some(*theme(cx));
+        }
+        // On the picker rather than at startup, which most launches never
+        // need, and ahead of the import rows it lists.
+        if mode == PaletteMode::Theme {
+            theme::user::prewarm();
+        }
         let first = match mode {
-            PaletteMode::Theme => {
-                self.theme_before_preview = Some(*theme(cx));
-                Theme::all()
-                    .iter()
-                    .position(|candidate| candidate.name == theme(cx).name)
-                    .unwrap_or_default()
-            }
+            PaletteMode::Theme => Theme::all()
+                .iter()
+                .position(|candidate| candidate.name == theme(cx).name)
+                .unwrap_or_default(),
+            PaletteMode::ImportTheme(source) => source
+                .found()
+                .iter()
+                .position(|candidate| candidate.name == theme(cx).name)
+                .unwrap_or_default(),
             PaletteMode::Database => self
                 .profile()
                 .and_then(|profile| {
@@ -130,6 +148,42 @@ impl Workspace {
             .detach();
         self.palette = Some(list);
         cx.notify();
+    }
+
+    /// Waiting for a source's scan off the UI thread, with no list up meanwhile
+    /// and so no preview left on screen. The note saying so comes down from
+    /// wherever `note` put it, if nothing has said anything since.
+    fn open_import_list_once_found(
+        &mut self,
+        source: theme::user::Source,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let finding = format!("Finding {} themes…", source.name());
+        self.note(finding.clone(), cx);
+        let found = cx
+            .background_executor()
+            .spawn(on_own_thread(move || source.found()));
+        cx.spawn_in(window, async move |workspace, cx| {
+            found.await;
+            _ = workspace.update_in(cx, |workspace, window, cx| {
+                let notice = match workspace.profile_mut() {
+                    Some(profile) => &mut profile.session.notice,
+                    None => match &mut workspace.form {
+                        Some(form) => &mut form.error,
+                        None => &mut workspace.welcome_notice,
+                    },
+                };
+                if notice.as_deref() == Some(finding.as_str()) {
+                    *notice = None;
+                }
+                // Something else opened while the scan ran is left alone.
+                if workspace.palette.is_none() {
+                    workspace.open_palette(PaletteMode::ImportTheme(source), window, cx);
+                }
+            });
+        })
+        .detach();
     }
 
     /// The palette is dismissed before its command runs, always. A command can
@@ -324,6 +378,10 @@ impl Workspace {
             Command::SelectDatabase => self.select_database(&SelectDatabase, window, cx),
             Command::SetDatabase(name) => self.set_database(name, window, cx),
             Command::SetTheme(theme) => self.set_theme(*theme, window, cx),
+            Command::BrowseThemes(source) => {
+                self.open_palette(PaletteMode::ImportTheme(source), window, cx)
+            }
+            Command::ImportTheme(source, index) => self.import_theme(source, index, window, cx),
             Command::PickFont(slot) => self.open_palette(PaletteMode::Font(slot), window, cx),
             Command::SetFont(slot, family) => self.set_font(slot, family, cx),
             Command::ToggleSidebar => self.toggle_sidebar(&ToggleSidebar, window, cx),
