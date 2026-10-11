@@ -18,6 +18,25 @@ https://github.com/user-attachments/assets/ee555c10-4a18-4059-b451-bfadfc9f9ae0
 
 I wanted something which is performant, modern and consumes little ram. The existing DB clients are either filled with bloat (Electron and JVM) or paid. This is an alternative to them. No feature is ever going behind a paywall and with time we will have complete parity on features with those too. 
 
+## Benchmarks
+
+DBDelve 0.3.6 against DBeaver 25.3.1 on the same Postgres table, median of 5
+runs each (2026-10-11, M1 Pro, 32 GB):
+
+| | DBDelve | DBeaver |
+|---|---|---|
+| Launch | 1.1 s | 5.2 s |
+| Idle memory | 133 MB | 606 MB |
+| 1,000-row query | 0.21 s | 1.96 s |
+| 1M rows, time | 56 s | 208 s |
+| 1M rows, memory\* | 4.9 GB | 17 GB |
+
+\* Not a normal use case: this is the whole 1M-row table pulled into memory on
+purpose, with the row limit turned off, and that result is itself 4 GB of data.
+DBeaver needed its heap raised to 16 GB to finish it at all.
+
+How these were measured, and the full results, are in [BENCHMARKS.md](BENCHMARKS.md).
+
 ## Supported databases
 
 - **Postgres:** supported
