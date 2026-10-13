@@ -103,7 +103,9 @@ impl ConnectionForm {
             _ => None,
         };
         let file = match config {
-            Some(ConnectionConfig::Sqlite { path, .. }) => Some(path.as_str()),
+            Some(ConnectionConfig::Sqlite { path, .. } | ConnectionConfig::Turso { path, .. }) => {
+                Some(path.as_str())
+            }
             _ => None,
         };
         let mongo = match config {
@@ -331,17 +333,19 @@ impl ConnectionForm {
         }
 
         let statement_timeout = self.statement_timeout(cx)?;
+        let file = || match read(&self.path) {
+            path if path.is_empty() => Err("Database file is required.".to_string()),
+            path => Ok(path),
+        };
         let config = match self.engine {
-            Engine::Sqlite => {
-                let path = read(&self.path);
-                if path.is_empty() {
-                    return Err("Database file is required.".into());
-                }
-                ConnectionConfig::Sqlite {
-                    path,
-                    statement_timeout,
-                }
-            }
+            Engine::Sqlite => ConnectionConfig::Sqlite {
+                path: file()?,
+                statement_timeout,
+            },
+            Engine::Turso => ConnectionConfig::Turso {
+                path: file()?,
+                statement_timeout,
+            },
             Engine::Postgres => ConnectionConfig::Postgres(self.server(cx)?),
             Engine::MySql => ConnectionConfig::MySql(self.server(cx)?),
             Engine::MariaDb => ConnectionConfig::MariaDb(self.server(cx)?),
@@ -546,7 +550,9 @@ pub(crate) fn default_profile_name(config: &ConnectionConfig) -> String {
             &server.database
         }
         .clone(),
-        ConnectionConfig::Sqlite { path, .. } => file_stem(path).to_string(),
+        ConnectionConfig::Sqlite { path, .. } | ConnectionConfig::Turso { path, .. } => {
+            file_stem(path).to_string()
+        }
         ConnectionConfig::Snowflake(account) => account.database.clone(),
     }
 }
