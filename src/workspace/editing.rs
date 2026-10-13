@@ -441,14 +441,9 @@ impl Workspace {
             return;
         };
         let tab = profile.session.active;
-        // On a queue the two differ. Into memory, what gets sorted is the
-        // result in front; into the server, the keys are spliced into the
-        // statement behind the tab's own slot, so they must name its columns.
-        let source = match client {
-            true => profile.session.active_results(),
-            false => profile.session.results(tab),
-        };
-        let Some(results) = source.cloned() else {
+        // Either way the result in front: `reorder_query` splices into the
+        // statement behind it.
+        let Some(results) = profile.session.active_results().cloned() else {
             return;
         };
         let (order, shown) = {
@@ -519,8 +514,8 @@ impl Workspace {
         let engine = self.engine();
         let Some(results) = self
             .profile()
-            .and_then(|profile| profile.session.active_query_tab())
-            .map(|tab| tab.results.clone())
+            .and_then(|profile| profile.session.active_results())
+            .cloned()
         else {
             return;
         };
@@ -551,9 +546,62 @@ impl Workspace {
         };
         let tab_id = tab.id;
         let editor = tab.editor.clone();
-        let Some(last_query) = tab.last_query.clone() else {
-            return false;
+        let (in_turn, mode) = (profile.in_turn(), profile.mode);
+        // A header click refuses this itself; the sorting chips come here
+        // without asking.
+        let running = profile.session.running(Tab::Query(tab_id));
+        // On a queue, the result the switcher shows. Only the last of them is
+        // the tab's slot, which `last_query` describes.
+        let queued = tab.queue.as_ref().and_then(|queue| {
+            let finished = queue.done.get(queue.showing)?;
+            (finished.grid != tab.results).then(|| (queue.showing, finished.sql.clone()))
+        });
+        // An earlier result reruns as a lane, which only a queue with nothing
+        // left to send can take: one still out, or parked on a failure,
+        // would land its own results around it.
+        let unfinished = tab
+            .queue
+            .as_ref()
+            .is_some_and(|queue| !queue.remaining.is_empty() || queue.awaiting || queue.at_once());
+        // A lane finds its result by where its statement starts, which a
+        // batch's further sets share with its first.
+        let unreachable = tab.queue.as_ref().is_some_and(|queue| {
+            queue
+                .done
+                .get(queue.showing)
+                .is_some_and(|finished| queue.lane(finished.start) != Some(queue.showing))
+        });
+        let (queued, last_query) = match queued {
+            Some((index, sql)) => (Some(index), sql),
+            None => match tab.last_query.clone() {
+                Some(sql) => (None, sql),
+                None => return false,
+            },
         };
+        if running {
+            self.note(
+                "A statement is still running on this tab. Sort once it finishes, or cancel it."
+                    .into(),
+                cx,
+            );
+            return false;
+        }
+        if queued.is_some() && unfinished {
+            self.note(
+                "Sort this result once the rest of the run has finished.".into(),
+                cx,
+            );
+            return false;
+        }
+        if queued.is_some() && unreachable {
+            self.note(
+                "These rows are one of several sets a batch returned, and cannot be sorted on \
+                 their own."
+                    .into(),
+                cx,
+            );
+            return false;
+        }
         // A sort re-runs the statement behind the grid, and one that writes
         // would write again.
         if !sql::rerunnable(engine, &last_query) {
@@ -571,7 +619,9 @@ impl Workspace {
         };
         // The grid's own statement, not whatever the cursor is on: that may be
         // another statement entirely, and one that never ran.
-        let Some(range) = Buffer::for_engine(engine, &text).find(&text, cursor, &last_query) else {
+        let Some(range) =
+            Buffer::for_engine(engine, &text).find(engine, &text, cursor, &last_query)
+        else {
             self.note(
                 "The statement behind these rows is no longer in the editor.".into(),
                 cx,
@@ -598,12 +648,37 @@ impl Workspace {
             );
             return false;
         };
+        // An earlier result reruns on a connection of its own, as the queue's
+        // reads did when they ran at once.
+        if queued.is_some() {
+            let refusal = match in_turn {
+                Some(_) => Some(
+                    "Only the last result can be sorted by the server while this connection \
+                     has a transaction open or changed session settings. Use Client sorting \
+                     for this one.",
+                ),
+                None if !session::runs_at_once(engine, mode, &[&sorted]) => Some(
+                    "Only the last result can be sorted by the server unless its statement \
+                     is a plain read. Use Client sorting for this one.",
+                ),
+                None => None,
+            };
+            if let Some(refusal) = refusal {
+                self.note(refusal.into(), cx);
+                return false;
+            }
+        }
 
         let mut replaced = text.clone();
         replaced.replace_range(range, &sorted);
         editor.update(cx, |editor, cx| editor.set_value(replaced, window, cx));
-        self.execute_sql(sorted, Tab::Query(tab_id), cx);
-        true
+        match queued {
+            Some(index) => self.rerun_queued(Tab::Query(tab_id), index, sorted, cx),
+            None => {
+                self.execute_sql(sorted, Tab::Query(tab_id), cx);
+                true
+            }
+        }
     }
 
     /// `Enter` on the active cell opens an input on it. Everything after this
